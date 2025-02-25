@@ -27,6 +27,7 @@ module Data.Array.Accelerate.Pretty.Partitioned ({- instance PrettyOp (Cluster o
 
 import Data.Array.Accelerate.Pretty.Exp hiding (Val(..), prj)
 import qualified Data.Array.Accelerate.Pretty.Exp as Pretty
+import Data.Array.Accelerate.Pretty.Type
 import Data.Array.Accelerate.Pretty.Operation
 import Data.Array.Accelerate.AST.Environment (Env)
 import qualified Data.Array.Accelerate.AST.Environment as Env
@@ -46,15 +47,18 @@ import Data.Array.Accelerate.AST.Idx (Idx (..))
 import Data.Bifunctor (second)
 import Data.Array.Accelerate.AST.Var (varsType)
 
-instance PrettyOp op => PrettyOp (Clustered op) where
+instance (PrettyOp op, SetOpIndices op) => PrettyOp (Clustered op) where
   prettyOp :: PrettyOp op => Clustered op t -> Adoc
   prettyOp (Clustered c _) = prettyOp c
   prettyOpWithArgs env (Clustered c _) = prettyOpWithArgs env c
 
-instance PrettyOp op => PrettyOp (Cluster op) where
+instance (PrettyOp op, SetOpIndices op) => PrettyOp (Cluster op) where
   prettyOp _ = "cluster"
 
   prettyOpWithArgs env cluster args
+    {- = prettyFlatCluster env flat
+    where
+      flat = toFlatCluster cluster args-}
     | isSingle cluster = body
     | otherwise = annotate Execute "execute" <+> "{" <> line
       <> indent 2 body <> line <> "}"
@@ -207,18 +211,13 @@ prettyFuseList _ [] = ""
 prettyFuseList name docs = (hang 2 $ group $ vsep $ [name, tupled docs]) <> line
 
 prettyFlatCluster :: PrettyOp op => Val env -> FlatCluster op env -> Adoc
-prettyFlatCluster env (FlatCluster _ idxLhs sizes directions fusedR fusedLHS ops) =
+prettyFlatCluster env (FlatCluster _ idxLhs sizes directions localR localLHS ops) =
   annotate Execute "execute" <+> "{" <> line
-    <> indent 2 (forIndices <> vsep body) <> line <> "}"
+    <> indent 2 (forIndices <> localBuffers <> vsep ops') <> line <> "}"
   where
     (forIndices, idxEnv, _) = prettyIdxLHS env Pretty.Empty 0 idxLhs sizes directions
-    (env', count) = prettyFusedLHS env 0 fusedLHS
-    body
-      | count == 0 = ops'
-      | count < 10 = (let_ <+> hsep (punctuate comma
-          [ "%" <> viaShow i | i <- [0 .. count - 1] ]
-        )) : ops'
-      | otherwise = (let_ <+> "%0 .. %" <> viaShow count) : ops'
+    (env', _) = pushLocalBuffers env 0 localLHS
+    (localBuffers, _) = prettyLocalLHS 0 localLHS localR
     ops' = prettyFlatOps False env' idxEnv ops
 
 prettyIdxLHS :: Val env0 -> Val env -> Int -> ELeftHandSide sh env env' -> GroundVars env0 sh -> TupR LoopDirection sh -> (Adoc, Val env', Int)
@@ -239,13 +238,28 @@ prettyIdxLHS env0 env fresh (LeftHandSidePair lhs1 lhs2) (TupRpair sz1 sz2) (Tup
   = (doc1 <> doc2, env2, fresh2)
 prettyIdxLHS _ _ _ _ _ _ = internalError "Tuple mismatch"
 
-prettyFusedLHS :: Val env -> Int -> GLeftHandSide t env env' -> (Val env', Int)
-prettyFusedLHS env fresh (LeftHandSideWildcard _) = (env, fresh)
-prettyFusedLHS env fresh (LeftHandSideSingle _) =
+pushLocalBuffers :: Val env -> Int -> GLeftHandSide t env env' -> (Val env', Int)
+pushLocalBuffers env fresh (LeftHandSideWildcard _) = (env, fresh)
+pushLocalBuffers env fresh (LeftHandSideSingle _) =
   (env `Pretty.Push` ("%" <> viaShow fresh), fresh + 1)
-prettyFusedLHS env fresh (LeftHandSidePair lhs1 lhs2)
-  | (env', fresh') <- prettyFusedLHS env fresh lhs1
-  = prettyFusedLHS env' fresh' lhs2
+pushLocalBuffers env fresh (LeftHandSidePair lhs1 lhs2)
+  | (env', fresh') <- pushLocalBuffers env fresh lhs1
+  = pushLocalBuffers env' fresh' lhs2
+
+prettyLocalLHS :: Int -> GLeftHandSide t env env' -> TupR LocalBufferR t -> (Adoc, Int)
+prettyLocalLHS fresh (LeftHandSideWildcard _) _ = (mempty, fresh)
+prettyLocalLHS fresh (LeftHandSideSingle _) (TupRsingle (LocalBufferR tp depth)) =
+  ( let_ <> " %" <> viaShow fresh <> ": [" <> prettyScalarType tp <> "] " <> comment <> hardline
+  , fresh + 1)
+  where
+    comment
+      | depth == 0 = "-- outside for loops"
+      | otherwise = "-- in for i" <> viaShow (depth - 1)
+prettyLocalLHS fresh (LeftHandSidePair lhs1 lhs2) (TupRpair r1 r2)
+  | (d1, fresh1) <- prettyLocalLHS fresh lhs1 r1
+  , (d2, fresh2) <- prettyLocalLHS fresh1 lhs2 r2
+  = (d1 <> d2, fresh2)
+prettyLocalLHS _ _ _ = internalError "Tuple mismatch"
 
 prettyFlatOps :: PrettyOp op => Bool -> Val env -> Val idxEnv -> FlatOps op env idxEnv -> [Adoc]
 prettyFlatOps single env idxEnv = \case

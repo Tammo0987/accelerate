@@ -48,6 +48,7 @@ module Data.Array.Accelerate.Array.Buffer (
   -- * Utilities for type classes
   SingleArrayDict(..), singleArrayDict,
   ScalarArrayDict(..), scalarArrayDict,
+  scalarArrayDataR,
 
   -- * TemplateHaskell
   liftBuffers, liftBuffer,
@@ -205,6 +206,10 @@ singleArrayDict = single
     floating TypeFloat  = SingleArrayDict
     floating TypeDouble = SingleArrayDict
 
+scalarArrayDataR :: ScalarType t -> SingleType (ScalarArrayDataR t)
+scalarArrayDataR (VectorScalarType (VectorType _ t)) = t
+scalarArrayDataR (SingleScalarType t)
+  | SingleArrayDict <- singleArrayDict t = t
 
 -- Array operations
 -- ----------------

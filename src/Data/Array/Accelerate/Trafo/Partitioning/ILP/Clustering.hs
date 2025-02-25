@@ -359,6 +359,7 @@ matchFunType (Alam lhs1 f1) (Alam lhs2 f2)
   , Just Refl <- matchFunType f1 f2
   = Just Refl
 matchFunType (Abody b1) (Abody b2) = matchGroundsR (groundsR b1) (groundsR b2)
+matchFunType _ _ = Nothing
 
 tryBuildAcond :: HasCallStack => ExpVar env PrimBool -> PreOpenAcc op env t1 -> PreOpenAcc op env t2 -> PreOpenAcc op env t1
 tryBuildAcond cond true false

@@ -405,6 +405,7 @@ library
         Data.Array.Accelerate.AST.Schedule.Sequential
         Data.Array.Accelerate.AST.Schedule.Uniform
         Data.Array.Accelerate.AST.Var
+        Data.Array.Accelerate.Analysis.Exp
         Data.Array.Accelerate.Analysis.Hash
         Data.Array.Accelerate.Analysis.Hash.Exp
         Data.Array.Accelerate.Analysis.Hash.Operation

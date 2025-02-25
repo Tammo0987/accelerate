@@ -8,6 +8,7 @@
 {-# LANGUAGE TypeApplications     #-}
 {-# LANGUAGE TypeFamilies         #-}
 {-# LANGUAGE TypeOperators        #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE CPP #-}
 -- |
 -- Module      : Data.Array.Accelerate.Trafo.Desugar
@@ -171,10 +172,9 @@ class NFData' op => DesugarAcc (op :: Type -> Type) where
                 -> OperationAcc op env ()
   mkSlice sliceIx slix = mkBackpermute (ArgFun $ restrict sliceIx slix)
 
-  mkPermute     :: Arg env (Fun' (e -> e -> e))
+  mkPermute     :: Maybe (Arg env (Fun' (e -> e -> e))) -- If no combination function, we use const without locking
                 -> Arg env (Mut sh' e)
-                -> Arg env (Fun' (sh -> PrimMaybe sh'))
-                -> Arg env (In sh e)
+                -> Arg env (In sh (PrimMaybe (sh', e)))
                 -> OperationAcc op env ()
 
   mkStencil     :: StencilR sh e stencil
@@ -428,37 +428,79 @@ desugarOpenAcc env = travA
       -- the corresponding mkXX function.
       --
 
-      Named.Permute c def f src
+      Named.Permute c (def :: Named.OpenAcc aenv (Array sh' e)) src
+        | resultIsUnique def
+        , ArrayR shr' tp <- Named.arrayR def
+        , ArrayR shr tsht  <- Named.arrayR src
+        , DeclareVars lhsSh' kSh' valueSh' <- declareVars $ shapeType shr'
+        , DeclareVars lhsDef kDef valueDef <- declareVars $ buffersR tp
+        , DeclareVars lhsSh  kSh  valueSh  <- declareVars $ shapeType shr
+        , DeclareVarsPrimMaybe lhsSrc kSrc valueSrc <- fixprimmaybepermute @_ @sh' @e $ declareVars $ buffersR tsht ->
+          case tsht of
+            (tag `TupRpair` (TupRunit `TupRpair` ((TupRunit `TupRpair` sht) `TupRpair` a))) ->
+              let
+                srcR   = tag `TupRpair` (TupRunit `TupRpair` (sht `TupRpair` a))
+                lhs'   = LeftHandSidePair (mapLeftHandSide GroundRscalar lhsSh') lhsDef
+                lhs    = LeftHandSidePair (mapLeftHandSide GroundRscalar lhsSh)  lhsSrc
+                sh'    = mapVars GroundRscalar $ valueSh' (kSrc .> kSh .> kDef)
+                sh     = mapVars GroundRscalar $ valueSh kSrc
+                env'   = weakenBEnv (kSrc .> kSh .> kDef .> kSh') env
+                argMut = ArgArray Mut (ArrayR shr' tp) sh' (valueDef $ kSrc .> kSh)
+                argSrc = ArgArray In  (ArrayR shr  srcR) sh  (valueSrc weakenId)
+                argC   = ArgFun . desugarFun env' <$> c
+              in
+                aletUnique lhs' (travA def)
+                  $ alet lhs    (desugarOpenAcc (weakenBEnv (kDef .> kSh') env) src)
+                  $ alet (LeftHandSideWildcard TupRunit) (mkPermute argC argMut argSrc)
+                  $ Return (sh' `TupRpair` valueDef (kSrc .> kSh))
+            _ -> error "impossible tupr"
+
+      Named.Permute c (def :: Named.OpenAcc aenv (Array sh' e)) src
         | ArrayR shr' tp <- Named.arrayR def
-        , ArrayR shr  _  <- Named.arrayR src
+        , ArrayR shr tsht  <- Named.arrayR src
         , DeclareVars lhsSh' kSh' valueSh' <- declareVars $ shapeType shr'
         , DeclareVars lhsDef kDef valueDef <- declareVars $ buffersR tp
         -- Clone defaults array, to make sure that it is unique. The clone may be removed in a later pass.
         , DeclareVars lhsOut kOut valueOut <- declareVars $ buffersR tp
         , DeclareVars lhsSh  kSh  valueSh  <- declareVars $ shapeType shr
-        , DeclareVars lhsSrc kSrc valueSrc <- declareVars $ buffersR tp ->
-          let
-            lhs'   = LeftHandSidePair (mapLeftHandSide GroundRscalar lhsSh') lhsDef
-            lhs    = LeftHandSidePair (mapLeftHandSide GroundRscalar lhsSh)  lhsSrc
-            sh'    = mapVars GroundRscalar $ valueSh' (kSrc .> kSh .> kOut .> kDef)
-            sh     = mapVars GroundRscalar $ valueSh kSrc
-            env'   = weakenBEnv (kSrc .> kSh .> kOut .> kDef .> kSh') env
-            valOut = valueOut $ kSrc .> kSh
-            argDef = ArgArray In  (ArrayR shr' tp) sh' (valueDef $ kSrc .> kSh .> kOut)
-            argOut = ArgArray Out (ArrayR shr' tp) sh' valOut
-            argMut = ArgArray Mut (ArrayR shr' tp) sh' valOut
-            argSrc = ArgArray In  (ArrayR shr  tp) sh  (valueSrc weakenId)
-            dsF    = boundsCheckF' shr' sh' (desugarFun env' f)
-            argC   = ArgFun $ desugarFun env' c
-            argF   = ArgFun dsF
-          in
-            alet lhs' (travA def)
-              $ aletUnique lhsOut (desugarAlloc (ArrayR shr' tp) (valueSh' kDef))
-              $ alet lhs    (desugarOpenAcc (weakenBEnv (kOut .> kDef .> kSh') env) src)
-              $ alet (LeftHandSideWildcard TupRunit) (mkCopy argDef argOut)
-              $ alet (LeftHandSideWildcard TupRunit) (mkPermute argC argMut argF argSrc)
-              $ Return (sh' `TupRpair` valOut)
+        , DeclareVarsPrimMaybe lhsSrc kSrc valueSrc <- fixprimmaybepermute @_ @sh' @e $ declareVars $ buffersR tsht ->
+          case tsht of
+            (tag `TupRpair` (TupRunit `TupRpair` ((TupRunit `TupRpair` sht) `TupRpair` a))) ->
+              let
+                srcR   = tag `TupRpair` (TupRunit `TupRpair` (sht `TupRpair` a))
+                lhs'   = LeftHandSidePair (mapLeftHandSide GroundRscalar lhsSh') lhsDef
+                lhs    = LeftHandSidePair (mapLeftHandSide GroundRscalar lhsSh)  lhsSrc
+                sh'    = mapVars GroundRscalar $ valueSh' (kSrc .> kSh .> kOut .> kDef)
+                sh     = mapVars GroundRscalar $ valueSh kSrc
+                env'   = weakenBEnv (kSrc .> kSh .> kOut .> kDef .> kSh') env
+                valOut = valueOut $ kSrc .> kSh
+                argDef = ArgArray In  (ArrayR shr' tp) sh' (valueDef $ kSrc .> kSh .> kOut)
+                argOut = ArgArray Out (ArrayR shr' tp) sh' valOut
+                argMut = ArgArray Mut (ArrayR shr' tp) sh' valOut
+                argSrc = ArgArray In  (ArrayR shr  srcR) sh  (valueSrc weakenId)
+                argC   = ArgFun . desugarFun env' <$> c
+              in
+                alet lhs' (travA def)
+                  $ aletUnique lhsOut (desugarAlloc (ArrayR shr' tp) (valueSh' kDef))
+                  $ alet lhs    (desugarOpenAcc (weakenBEnv (kOut .> kDef .> kSh') env) src)
+                  $ alet (LeftHandSideWildcard TupRunit) (mkCopy argDef argOut)
+                  $ alet (LeftHandSideWildcard TupRunit) (mkPermute argC argMut argSrc)
+                  $ Return (sh' `TupRpair` valOut)
+            _ -> error "impossible tupr"
 
+      Named.Generate (ArrayR shr tp) sh f
+        -- generate sh (\_ -> undef) is a pattern commonly used for a permute
+        -- if the permute writes to all indices. We optimize for this pattern here.
+        -- In this case, we only need to allocate the result; we don't need to
+        -- execute a kernel.
+        | Lam _ (Body body) <- f
+        , isUndef body
+        , DeclareVars lhsSh kSh valueSh <- declareVars $ shapeType shr
+        , DeclareVars lhsBf kBf valueBf <- declareVars $ buffersR tp ->
+          alet (mapLeftHandSide GroundRscalar lhsSh) (Compute $ travE sh)
+            $ aletUnique lhsBf (desugarAlloc (ArrayR shr tp) (valueSh weakenId))
+            $ Return
+              (mapVars GroundRscalar (valueSh kBf) `TupRpair` valueBf weakenId)
       Named.Generate (ArrayR ShapeRz tp) _ (Lam (LeftHandSideWildcard _) (Body expr))
         | desugarPreferNoScalar @op ->
           travA $ Named.OpenAcc $ Named.Unit tp expr
@@ -876,6 +918,43 @@ desugarOpenAcc env = travA
               $ alet (LeftHandSideWildcard TupRunit) (mkStencil2 sr1 sr2 argF b1' argIn1 b2' argIn2 argOut)
               $ Return (sh `TupRpair` valueOut weakenId)
       Named.Atrace _ _ _ -> error "implement me"
+
+resultIsUnique :: Named.OpenAcc aenv a -> Bool
+resultIsUnique (Named.OpenAcc acc) = case acc of
+  Named.Unit{} -> True
+  Named.Generate{} -> True
+  Named.Replicate{} -> True
+  Named.Slice{} -> True
+  Named.Map{} -> True
+  Named.ZipWith{} -> True
+  Named.Fold{} -> True
+  Named.FoldSeg{} -> True
+  Named.Scan{} -> True
+  Named.Permute{} -> True
+  Named.Backpermute{} -> True
+  Named.Stencil{} -> True
+  Named.Stencil2{} -> True
+  _ -> False
+
+isUndef :: Named.OpenExp aenv env a -> Bool
+isUndef (Let _ _ e) = isUndef e
+isUndef (Undef _) = True
+isUndef Nil = True
+isUndef (Pair a b) = isUndef a && isUndef b
+isUndef _ = False
+
+fixprimmaybepermute :: forall s sh a aenv. DeclareVars s (Buffers (PrimMaybe (((),sh),a))) aenv 
+                    -> PrimMaybeDeclareVars s sh a aenv
+fixprimmaybepermute (DeclareVars lhs w k) =
+  DeclareVarsPrimMaybe lhs w $ \w' -> case k w' of
+      tag `TupRpair` (TupRunit `TupRpair` ((TupRunit `TupRpair` sh) `TupRpair` a)) -> tag `TupRpair` (TupRunit `TupRpair` (sh `TupRpair` a))
+      _ -> error "impossible tupr"
+
+data PrimMaybeDeclareVars s sh a aenv where
+  DeclareVarsPrimMaybe  :: LeftHandSide s (Buffers (PrimMaybe (((),sh),a))) env env'
+                        -> (env :> env')
+                        -> (forall env''. env' :> env'' -> Vars s env'' (Buffers (PrimMaybe (sh,a))))
+                        -> PrimMaybeDeclareVars s sh a env
 
 desugarAlloc :: forall benv op sh a. ArrayR (Array sh a) -> ExpVars benv sh -> OperationAcc op benv (Buffers a)
 desugarAlloc (ArrayR _   TupRunit        ) _  = Return TupRunit

@@ -44,7 +44,7 @@ import Data.Array.Accelerate.AST.Operation hiding (OperationAcc, OperationAfun)
 
 import Prelude hiding ( take )
 import Data.Bifunctor
-import Data.Maybe (fromMaybe)
+import Data.Maybe (isJust, fromMaybe)
 import Data.Array.Accelerate.Trafo.Desugar (ArrayDescriptor(..))
 import Data.Array.Accelerate.Trafo.Operation.Simplify (SimplifyOperation(..))
 import Data.Array.Accelerate.Representation.Array (Array, Buffer, Buffers, ArrayR (..))
@@ -741,8 +741,8 @@ data FlatCluster op env where
     -> ELeftHandSide sh () idxEnv
     -> GroundVars env sh
     -> TupR LoopDirection sh
-    -> TypeR t
-    -> GLeftHandSide (Buffers t) env env'
+    -> TupR LocalBufferR local
+    -> GLeftHandSide local env env'
     -> FlatOps op env' idxEnv
     -> FlatCluster op env
 
@@ -755,6 +755,12 @@ data LoopDirection t where
   LoopAscending :: LoopDirection Int
   -- from n - 1 to 0
   LoopDescending :: LoopDirection Int
+
+-- The representation of a buffer that is either fused away (only used within
+-- a cluster) or not used at all.
+data LocalBufferR b where
+  LocalBufferR
+    :: ScalarType t -> LoopDepth -> LocalBufferR (Buffer t)
 
 data FlatOps op env idxEnv where
   FlatOpsNil :: FlatOps op env idxEnv
@@ -839,7 +845,7 @@ toFlatCluster cluster args
   | ToFlatCluster tp ops <- toFlatCluster' cluster
   , DeclareVars lhs k values <- declareVars $ buffersR tp
   , values' <- values weakenId
-  = flatOpsSetIndices tp lhs $ ops (mapArgs (weaken k) args) values'
+  = flatOpsSetIndices tp lhs values' $ ops (mapArgs (weaken k) args) values'
 
 toFlatCluster' :: forall op f. Cluster op f -> ToFlatCluster op f
 toFlatCluster' (Fused fusion l r)
@@ -1007,9 +1013,10 @@ flatOpsSetIndices
      SetOpIndices op
   => TypeR t
   -> GLeftHandSide (Buffers t) env env'
+  -> GroundVars env' (Buffers t)
   -> [FlatOp op env' ()]
   -> FlatCluster op env
-flatOpsSetIndices fusedR fusedLHS ops = go ShapeRz
+flatOpsSetIndices fusedR fusedLHS fusedVars ops = go ShapeRz
   where
     go :: ShapeR sh -> FlatCluster op env
     go shr
@@ -1032,7 +1039,7 @@ flatOpsSetIndices fusedR fusedLHS ops = go ShapeRz
               | otherwise -> internalError "Expected Int variable"
           )
           $ value k)
-        fusedR
+        (localBuffersR ops'' fusedR fusedVars)
         fusedLHS
         $ bnd ops''
       | otherwise
@@ -1044,6 +1051,15 @@ flatOpsSetIndices fusedR fusedLHS ops = go ShapeRz
       = idx
       | otherwise
       = internalError "All scalar types in shapeType should be Int"
+
+    localBuffersR :: forall e idxEnv. FlatOps op env' idxEnv -> TypeR e -> GroundVars env' (Buffers e) -> TupR LocalBufferR (Buffers e)
+    localBuffersR _ TupRunit _ = TupRunit
+    localBuffersR ops'' (TupRsingle tp) (TupRsingle var)
+      | Refl <- reprIsSingle @ScalarType @e @Buffer tp
+      = TupRsingle $ LocalBufferR tp $ fromMaybe 0 $ findBufferDepth ops'' $ varIdx var 
+    localBuffersR ops'' (TupRpair t1 t2) (TupRpair v1 v2)
+      = localBuffersR ops'' t1 v1 `TupRpair` localBuffersR ops'' t2 v2
+    localBuffersR _ _ _ = internalError "Tuple mismatch"
 
 data FlatOpsSetIndices op env idxEnv where
   FlatOpsSetIndices
@@ -1218,12 +1234,12 @@ findIterationSize (FlatOpsOp (FlatOp _ args idxArgs) ops) idx
       | otherwise = Nothing
     findInVars _ _ = internalError "Tuple mismatch"
 
-expectSame :: Maybe (Idx env a) -> Maybe (Idx env a) -> Maybe (Idx env a)
-expectSame Nothing m = m
-expectSame m Nothing = m
-expectSame (Just a) (Just b)
-  | a == b = Just a
-  | otherwise = internalError "Mismatch in iteration size: the iteration sizes of different operations in a cluster are different"
+    expectSame :: Maybe (Idx env a) -> Maybe (Idx env a) -> Maybe (Idx env a)
+    expectSame Nothing m = m
+    expectSame m Nothing = m
+    expectSame (Just a) (Just b)
+      | a == b = Just a
+      | otherwise = internalError "Mismatch in iteration size: the iteration sizes of different operations in a cluster are different"
 
 (!?) :: [a] -> Int -> Maybe a
 [] !? _ = Nothing
@@ -1231,6 +1247,37 @@ expectSame (Just a) (Just b)
 (_ : xs) !? i
   | i < 0 = Nothing
   | otherwise = xs !? (i - 1)
+
+findBufferDepth
+  :: forall op env idxEnv e.
+     FlatOps op env idxEnv
+  -> Idx env (Buffer e)
+  -> Maybe LoopDepth
+findBufferDepth FlatOpsNil _ = Nothing
+findBufferDepth (FlatOpsBind _ _ _ ops) buffer = findBufferDepth ops buffer
+findBufferDepth (FlatOpsOp (FlatOp _ args idxArgs) ops) buffer
+  = findInArgs args idxArgs `expectSame` findBufferDepth ops buffer
+  where
+    findInArgs :: Args env f -> IdxArgs idxEnv f -> Maybe LoopDepth
+    findInArgs (a :>: as) (i :>: is) = findInArg a i `expectSame` findInArgs as is
+    findInArgs ArgsNil ArgsNil = Nothing
+
+    findInArg :: Arg env t -> IdxArg idxEnv t -> Maybe LoopDepth
+    findInArg (ArgArray _ _ _ buffers) (IdxArgIdx d _)
+      | idxElem buffers = Just d
+    findInArg _ _ = Nothing
+
+    idxElem :: GroundVars env b -> Bool
+    idxElem TupRunit = False
+    idxElem (TupRsingle var) = isJust $ matchIdx buffer $ varIdx var
+    idxElem (TupRpair v1 v2) = idxElem v1 || idxElem v2
+
+    expectSame :: Maybe LoopDepth -> Maybe LoopDepth -> Maybe LoopDepth
+    expectSame Nothing m = m
+    expectSame m Nothing = m
+    expectSame (Just a) (Just b)
+      | a == b = Just a
+      | otherwise = internalError "Mismatch in loop depth: the loop depth of different operations on the same (fused away) buffer in a cluster are different"
 
 getOpsLoopDirections :: forall op env idxEnv. SetOpIndices op => FlatOps op env idxEnv -> PartialEnv LoopDirection idxEnv
 getOpsLoopDirections flatOps = partialEnvFromList join $ map (\(idx, dir) -> EnvBinding idx dir) $ go flatOps
@@ -1251,3 +1298,12 @@ getOpsLoopDirections flatOps = partialEnvFromList join $ map (\(idx, dir) -> Env
     go (FlatOpsOp (FlatOp op args idxArgs) ops)
       = getOpLoopDirections op args idxArgs ++ go ops
     go FlatOpsNil = []
+
+-- Returns the number of outermost dimensions (loops)
+-- that have order LoopAny
+flatClusterIndependentLoopDepth :: FlatCluster op env -> LoopDepth
+flatClusterIndependentLoopDepth (FlatCluster _ _ _ dirs _ _ _)
+  = length $ takeWhile isAny $ flattenTupR dirs
+  where
+    isAny (Exists LoopAny) = True
+    isAny _ = False
