@@ -240,6 +240,7 @@ simplify' uniquenesses = \case
         InfoAlias ix -> Acond (cond{varIdx = ix}) (true' env) (false' env)
         InfoNone     -> Acond cond                (true' env) (false' env)
       )
+
   Awhile us cond step initial ->
     let
       (setC, cond') = simplifyFun' cond

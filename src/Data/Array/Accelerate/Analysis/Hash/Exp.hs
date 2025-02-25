@@ -174,6 +174,7 @@ encodeOpenExp exp =
     ShapeSize _ sh              -> intHost $(hashQ "ShapeSize")   <> travE sh
     Foreign _ _ f e             -> intHost $(hashQ "Foreign")     <> encodeOpenFun f <> travE e
     Coerce _ tp e               -> intHost $(hashQ "Coerce")      <> encodeScalarType tp <> travE e
+    Assert e1 e2                -> intHost $(hashQ "Assert")      <> travE e1 <> travE e2
 
 encodeExpVar :: ExpVar env t -> Builder
 encodeExpVar (Var tp ix) = encodeScalarType tp <> encodeIdx ix

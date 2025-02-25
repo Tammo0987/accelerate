@@ -285,7 +285,9 @@ getLabelsExp (PrimApp _ poe') env           = first (\NotArr -> NotArr) $ getLab
 getLabelsExp (ShapeSize _ poe') env         = first (\NotArr -> NotArr) $ getLabelsExp poe' env
 getLabelsExp (Undef _) _                    = (NotArr, mempty)
 getLabelsExp Coerce {} _                    = (NotArr, mempty)
-
+getLabelsExp (Assert poe' poe2) env         = let (NotArr, a) = getLabelsExp poe' env
+                                                  (NotArr, b) = getLabelsExp poe2 env
+                                              in  (NotArr, a <> b)
 getLabelsFun :: OpenFun x env y -> LabelEnv env -> ALabels (Fun' y)
 getLabelsFun (Body expr) lenv = first body $ getLabelsExp expr lenv
 getLabelsFun (Lam _ fun) lenv = first lam  $ getLabelsFun fun  lenv

@@ -61,6 +61,7 @@ import Data.Maybe                                                   ( isJust )
 import Data.Monoid
 import Data.Semigroup
 import Prelude                                                      hiding ( exp, seq )
+import Data.HashMap.Internal.Array (shrink)
 
 data VarsRange env =
   VarsRange !(Exists (Idx env))     -- rightmost variable
@@ -306,6 +307,7 @@ shrinkExp = Stats.substitution "shrinkE" . first getAny . shrinkE
       ShapeSize shr sh          -> ShapeSize shr <$> shrinkE sh
       Foreign repr ff f e       -> Foreign repr ff <$> shrinkF f <*> shrinkE e
       Coerce t1 t2 e            -> Coerce t1 t2 <$> shrinkE e
+      Assert e1 e2              -> Assert <$> shrinkE e1 <*> shrinkE e2 
 
     shrinkF :: HasCallStack => PreOpenFun arr env t -> (Any, PreOpenFun arr env t)
     shrinkF = first Any . shrinkFun
@@ -376,6 +378,7 @@ usesOfExp range = countE
       ShapeSize _ sh            -> countE sh
       Foreign _ _ _ e           -> countE e
       Coerce _ _ e              -> countE e
+      Assert e1 e2              -> countE e1 <> countE e2
 
 usesOfFun :: VarsRange env -> PreOpenFun arr env f -> Count
 usesOfFun range (Lam lhs f) = usesOfFun (weakenVarsRange lhs range) f
@@ -407,6 +410,7 @@ arrayInstrsInExp = (`travE` [])
       ShapeSize _ sh             -> travE sh acc
       Foreign _ _ _ e            -> travE e acc
       Coerce _ _ e               -> travE e acc
+      Assert e1 e2               -> travE e1 $ travE e2 acc
 
     travME :: Maybe (PreOpenExp arr env e) -> [Exists arr] -> [Exists arr]
     travME Nothing  acc = acc
