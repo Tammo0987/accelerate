@@ -56,8 +56,8 @@ instance (MakesILP op, MIP.IsSolver s IO) => ILPSolver (MIP s) op where
         <*> cons n constr
         <*> pure [] 
         <*> pure [] 
-        <*> vartypes -- If any variables are not given a type, they won't get fixed by `solveCondensedSoluton` (and I'm also not sure whether Integer is the default).
-        <*> bounds bnds 
+        <*> (tupleup <$> vartypes -- If any variables are not given a type, they won't get fixed by `solveCondensedSoluton` (and I'm also not sure whether Integer is the default).
+                     <*> bounds bnds) 
       problem = runReader readerProblem names
 
       -- varsOf :: [MIP.Constraint Scientific] -> [MIP.Var]
@@ -131,3 +131,7 @@ makeSolution _ _ = Nothing
 sequence' :: (Maybe a, b) -> Maybe (a, b)
 sequence' (Nothing, _) = Nothing
 sequence' (Just x, y) = Just (x, y)
+
+-- assume that both maps have exactly the same keys
+tupleup :: Ord k => M.Map k a -> M.Map k b -> M.Map k (a,b)
+tupleup as bs = M.mapWithKey (\k a -> (a, bs M.!k)) as
