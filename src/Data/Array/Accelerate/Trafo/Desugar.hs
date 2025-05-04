@@ -44,7 +44,6 @@ import Data.Array.Accelerate.Type
 import Data.Array.Accelerate.Error
 import Data.Kind
 import Data.Maybe (isJust)
-import Data.Array.Accelerate.Trafo.Partitioning.ILP.Graph (MyLHS(LHSWildcard))
 
 type a $ b = a b
 infixr 0 $
@@ -70,9 +69,6 @@ data Boundary env t where
   -- Apply the given function to outlying coordinates
   Function  :: Fun env (sh -> e)
             -> Boundary env (Array sh e)
-
-enableBoundsChecks :: Bool
-enableBoundsChecks = True
 
 class NFData' op => DesugarAcc (op :: Type -> Type) where
   mkMap         :: Arg env (Fun' (s -> t))
@@ -438,8 +434,8 @@ desugarOpenAcc env = travA
         , DeclareVars lhsDef kDef valueDef <- declareVars $ buffersR tp
         , DeclareVars lhsSh  kSh  valueSh  <- declareVars $ shapeType shr
         , DeclareVarsPrimMaybe lhsSrc kSrc valueSrc <- fixprimmaybepermute @_ @sh' @e $ declareVars $ buffersR tsht
-        , DeclareVars lhsOut kOut valueOut <- declareVars $ buffersR sht 
-        , DeclareVars lhsFun _ valueFun <- declareVars $ shapeType shr' ->
+        , DeclareVars lhsOut kOut valueOut <- declareVars $ buffersR (tag `TupRpair` sht)
+        , DeclareVars lhsFun _ valueFun <- declareVars (tag `TupRpair` shapeType shr') ->
           let
             srcR   = tag `TupRpair` (TupRunit `TupRpair` (sht `TupRpair` a))
             lhs'   = LeftHandSidePair (mapLeftHandSide GroundRscalar lhsSh') lhsDef
@@ -450,13 +446,13 @@ desugarOpenAcc env = travA
             argMut = ArgArray Mut (ArrayR shr' tp) sh' (valueDef $ kOut .> kSrc .> kSh)
             argSrc = ArgArray In  (ArrayR shr  srcR) sh  (setPermuteIdx (valueSrc kOut) (valueOut weakenId))
             argC   = ArgFun . desugarFun env' <$> c
-            argIn  = ArgArray In  (ArrayR shr sht) sh (getPermuteIdx $ valueSrc kOut)
-            argOut = ArgArray Out (ArrayR shr sht) sh (valueOut weakenId)
-            argF   = ArgFun $ boundsCheckF shr' sh' $ Lam lhsFun (Body $ expVars $ valueFun weakenId)
+            argIn  = ArgArray In  (ArrayR shr (tag `TupRpair` sht)) sh (getPermuteIdx $ valueSrc kOut)
+            argOut = ArgArray Out (ArrayR shr (tag `TupRpair` sht)) sh (valueOut weakenId)
+            argF   = ArgFun $ boundsCheckFMaybe shr' sh' $ Lam lhsFun (Body $ expVars $ valueFun weakenId)
           in
             aletUnique lhs' (travA def)
               $ alet lhs    (desugarOpenAcc (weakenBEnv (kDef .> kSh') env) src)
-              $ aletUnique lhsOut (desugarAlloc (ArrayR shr sht) (valueSh kSrc))
+              $ aletUnique lhsOut (desugarAlloc (ArrayR shr (tag `TupRpair` sht)) (valueSh kSrc))
               $ alet (LeftHandSideWildcard TupRunit) (mkMap argF argIn argOut)
               $ alet (LeftHandSideWildcard TupRunit) (mkPermute argC argMut argSrc)
               $ Return (sh' `TupRpair` valueDef (kOut .> kSrc .> kSh))
@@ -470,9 +466,9 @@ desugarOpenAcc env = travA
         -- Clone defaults array, to make sure that it is unique. The clone may be removed in a later pass.
         , DeclareVars lhsOut kOut valueOut <- declareVars $ buffersR tp
         , DeclareVars lhsSh  kSh  valueSh  <- declareVars $ shapeType shr
-        , DeclareVarsPrimMaybe lhsSrc kSrc valueSrc <- fixprimmaybepermute @_ @sh' @e $ declareVars $ buffersR tsht 
-        , DeclareVars lhsOut' kOut' valueOut' <- declareVars $ buffersR sht 
-        , DeclareVars lhsFun _ valueFun <- declareVars $ shapeType shr' ->
+        , DeclareVarsPrimMaybe lhsSrc kSrc valueSrc <- fixprimmaybepermute @_ @sh' @e $ declareVars $ buffersR tsht
+        , DeclareVars lhsOut' kOut' valueOut' <- declareVars $ buffersR (tag `TupRpair` sht)
+        , DeclareVars lhsFun _ valueFun <- declareVars (tag `TupRpair` shapeType shr') ->
             let
               srcR   = tag `TupRpair` (TupRunit `TupRpair` (sht `TupRpair` a))
               lhs'   = LeftHandSidePair (mapLeftHandSide GroundRscalar lhsSh') lhsDef
@@ -487,20 +483,20 @@ desugarOpenAcc env = travA
               argMut = ArgArray Mut (ArrayR shr' tp) sh'2 valOut
               argSrc = ArgArray In  (ArrayR shr  srcR) sh (setPermuteIdx (valueSrc kOut') (valueOut' weakenId))
               argC   = ArgFun . desugarFun env' <$> c
-              argIn  = ArgArray In  (ArrayR shr sht) sh (getPermuteIdx $ valueSrc kOut')
-              argOut' = ArgArray Out (ArrayR shr sht) sh (valueOut' weakenId)
-              argF   = ArgFun $ boundsCheckF shr' sh'2 $ Lam lhsFun (Body $ expVars $ valueFun weakenId)
-            in --lhsSh' lhsDef lhsOut lhsSh lhsSrc lhsOut'
+              argIn  = ArgArray In  (ArrayR shr (tag `TupRpair` sht)) sh (getPermuteIdx $ valueSrc kOut')
+              argOut' = ArgArray Out (ArrayR shr (tag `TupRpair` sht)) sh (valueOut' weakenId)
+              argF   = ArgFun $ boundsCheckFMaybe shr' sh'2 $ Lam lhsFun (Body $ expVars $ valueFun weakenId)
+            in
               alet lhs' (travA def)
                 $ aletUnique lhsOut (desugarAlloc (ArrayR shr' tp) (valueSh' kDef))
                 $ alet lhs    (desugarOpenAcc (weakenBEnv (kOut .> kDef .> kSh') env) src)
                 $ alet (LeftHandSideWildcard TupRunit) (mkCopy argDef argOut)
-                $ aletUnique lhsOut' (desugarAlloc (ArrayR shr sht) (valueSh kSrc))
+                $ aletUnique lhsOut' (desugarAlloc (ArrayR shr (tag `TupRpair` sht)) (valueSh kSrc))
                 $ alet (LeftHandSideWildcard TupRunit) (mkMap argF argIn argOut')
                 $ alet (LeftHandSideWildcard TupRunit) (mkPermute argC argMut argSrc)
                 $ Return (sh'2 `TupRpair` valOut)
 
-      Named.Permute _ _ _ -> error "impossible tupr"
+      Named.Permute {} -> error "impossible tupr"
 
       Named.Generate (ArrayR shr tp) sh f
         -- generate sh (\_ -> undef) is a pattern commonly used for a permute
@@ -776,14 +772,12 @@ desugarOpenAcc env = travA
                   -- Buffer of integral type i
                   $ LeftHandSideSingle $ GroundRbuffer itp
             kSeg = weakenSucc $ weakenSucc weakenId
-
             sh  = mapVars GroundRscalar $ valueSh (kSeg .> kOut .> kSh' .> kIn)
             sh' = mapVars GroundRscalar $ valueSh kIn
             shInBC = assertNotEmpty shr sh'
             shIn'' = case def of
               Just _  -> paramsIn (shapeType shr) sh'
               Nothing -> shInBC
-
             k = kSeg .> kOut .> kSh' .> kIn .> kSh
             argF   = ArgFun $ desugarFun (weakenBEnv k env) f
             argDef = fmap (ArgExp . desugarExp (weakenBEnv k env)) def
@@ -803,16 +797,19 @@ desugarOpenAcc env = travA
         | ArrayR shr tp <- Named.arrayR a
         , DeclareVars lhsSh  kSh  valueSh  <- declareVars $ shapeType shr
         , DeclareVars lhsIn  kIn  valueIn  <- declareVars $ buffersR tp
+        , DeclareVars lhsSh' kSh' valueSh' <- declareVars $ shapeType shr
         , DeclareVars lhsOut kOut valueOut <- declareVars $ buffersR tp ->
           let
-            sh   = mapVars GroundRscalar $ valueSh (kOut .> kIn)
-            k = kOut .> kIn .> kSh
+            sh   = mapVars GroundRscalar $ valueSh' kOut
+            sh'  = mapVars GroundRscalar $ valueSh kIn
+            k = kOut .> kSh' .> kIn .> kSh
             argF = ArgFun $ desugarFun (weakenBEnv k env) f
-            argIn  = ArgArray In (ArrayR shr tp) sh (valueIn kOut)
+            argIn  = ArgArray In (ArrayR shr tp) sh (valueIn $ kOut .> kSh')
             argOut = ArgArray Out (ArrayR shr tp) sh (valueOut weakenId)
           in
-            alet (LeftHandSidePair (mapLeftHandSide GroundRscalar lhsSh) lhsIn) (travA a)
-              $ aletUnique lhsOut (desugarAlloc (ArrayR shr tp) $ valueSh kIn)
+            alet (LeftHandSidePair (mapLeftHandSide GroundRscalar lhsSh) lhsIn) (travA a) -- kSh -- kIn
+              $ alet (mapLeftHandSide GroundRscalar lhsSh') (Compute (assertNotEmpty shr sh')) -- kSh'
+              $ aletUnique lhsOut (desugarAlloc (ArrayR shr tp) $ valueSh' weakenId) -- kOut
               $ alet (LeftHandSideWildcard TupRunit) (mkScan dir argF Nothing argIn argOut)
               $ Return (sh `TupRpair` valueOut weakenId)
 
@@ -1614,8 +1611,8 @@ removeScalarsInTermInv' _ _ _ = internalError "Tuple mismatch"
 -- Bounds Checking --
 ---------------------
 
---https://github.com/diku-dk/CFAL-bench
 #if 1
+
 addBCAssertion :: ShapeR sh -> TupR (Var GroundR benv) sh -> PreOpenExp (ArrayInstr benv) env sh -> PreOpenExp (ArrayInstr benv) env sh
 addBCAssertion shr sh (Let l r e) =  Let l r $ addBCAssertion shr sh e
 addBCAssertion shr sh (Pair t1 t2)
@@ -1637,6 +1634,16 @@ addBCAssertionLinear shr sh e
     in
       Let lhs e (Assert (inBoundsPredLinear shr sh var) var)
 
+addBCAssertionMaybe :: ShapeR sh -> TupR (Var GroundR benv) sh -> PreOpenExp (ArrayInstr benv) env (TAG,sh) -> PreOpenExp (ArrayInstr benv) env (TAG,sh)
+addBCAssertionMaybe shr sh (Let l r e) =  Let l r $ addBCAssertionMaybe shr sh e
+addBCAssertionMaybe shr sh (tag `Pair` val) = 
+  Assert (
+    mkBinary (PrimBOr integralType)
+    (mkBinary (PrimEq singleType) tag (Const scalarTypeWord8 0))
+    (inBoundsPred shr sh val)
+    ) (tag `Pair` val)
+addBCAssertionMaybe _ _ _ = error "Unexpected case in bounds checking"
+
 assertNotEmpty :: ShapeR sh -> GroundVars benv sh -> OpenExp env benv sh
 assertNotEmpty shr sh = Assert (notEmptyPred shr sh) (paramsIn (shapeType shr) sh)
 
@@ -1655,6 +1662,10 @@ boundsCheckF _ _ _ = error "Error building bounds checks"
 boundsCheckF' :: ShapeR sh -> GroundVars env sh -> Fun env (sh' -> PrimMaybe sh)-> Fun env (sh' -> PrimMaybe sh)
 boundsCheckF' shr sh (Lam lhs (Body (Pair tag (Let l r (Pair unit e))))) = Lam lhs $ Body $ Pair tag $ Let l r $ Pair unit (addBCAssertion shr sh e)
 boundsCheckF' _ _ _ = error "Error building bounds checks"
+
+boundsCheckFMaybe :: ShapeR sh -> GroundVars env sh -> Fun env ((TAG,sh') -> (TAG,sh)) -> Fun env ((TAG,sh') -> (TAG,sh))
+boundsCheckFMaybe shr sh (Lam lhs (Body e)) = Lam lhs $ Body $ addBCAssertionMaybe shr sh e
+boundsCheckFMaybe _ _ _ = error "Error building bounds checks"
 
 inBoundsPredLinear :: ShapeR sh -> GroundVars benv sh -> OpenExp env benv Int -> OpenExp env benv PrimBool
 inBoundsPredLinear shr sh expr =
@@ -1680,14 +1691,28 @@ inBoundsPred (ShapeRsnoc shr') (TupRpair t1 (TupRsingle t2)) (Pair slix' ix) =
   ) $ inBoundsPred shr' t1 slix'
 inBoundsPred _ _ _ = error "Error building bounds checks"
 
-getPermuteIdx :: GroundVars benv (tag,((),(sh,a))) -> GroundVars benv sh
-getPermuteIdx (_ `TupRpair` (TupRunit `TupRpair` (sht `TupRpair` _))) = sht
+#else
+addBCAssertion :: ShapeR sh -> TupR (Var GroundR benv) sh -> PreOpenExp (ArrayInstr benv) env sh -> PreOpenExp (ArrayInstr benv) env sh
+addBCAssertion _ _ e = e
+addBCAssertionLinear :: ShapeR sh -> TupR (Var GroundR benv) sh -> PreOpenExp (ArrayInstr benv) env Int -> PreOpenExp (ArrayInstr benv) env Int
+addBCAssertionLinear _ _ e = e
+addBCAssertionMaybe :: ShapeR sh -> TupR (Var GroundR benv) sh -> PreOpenExp (ArrayInstr benv) env (TAG,sh) -> PreOpenExp (ArrayInstr benv) env (TAG,sh)
+addBCAssertionMaybe _ _ e = e
+assertNotEmpty :: ShapeR sh -> GroundVars benv sh -> OpenExp env benv sh
+assertNotEmpty shr sh = paramsIn (shapeType shr) sh
+boundsCheckF :: ShapeR sh -> GroundVars env sh -> Fun env (sh' -> sh) -> Fun env (sh' -> sh)
+boundsCheckF _ _ f = f
+boundsCheckF' :: ShapeR sh -> GroundVars env sh -> Fun env (sh' -> PrimMaybe sh)-> Fun env (sh' -> PrimMaybe sh)
+boundsCheckF' _ _ f = f
+boundsCheckFMaybe :: ShapeR sh -> GroundVars env sh -> Fun env ((TAG,sh') -> (TAG,sh)) -> Fun env ((TAG,sh') -> (TAG,sh))
+boundsCheckFMaybe _ _ f = f
+#endif
+
+getPermuteIdx :: GroundVars benv (tag,((),(sh,a))) -> GroundVars benv (tag,sh)
+getPermuteIdx (tag `TupRpair` (TupRunit `TupRpair` (sht `TupRpair` _))) = tag `TupRpair` sht
 getPermuteIdx _ = error "Bad permute index format"
 
-setPermuteIdx :: GroundVars benv (tag((),(sh,a))) -> GroundVars benv sh -> GroundVars benv (tag((),(sh,a)))
-setPermuteIdx  (tag `TupRpair` (TupRunit `TupRpair` (___ `TupRpair` a))) sht =
-               (tag `TupRpair` (TupRunit `TupRpair` (sht `TupRpair` a)))
+setPermuteIdx :: GroundVars benv (tag,((),(sh,a))) -> GroundVars benv (tag,sh) -> GroundVars benv (tag,((),(sh,a)))
+setPermuteIdx  (_ `TupRpair` (TupRunit `TupRpair` (___ `TupRpair` a))) (tag `TupRpair` sht) =
+                tag `TupRpair` (TupRunit `TupRpair` (sht `TupRpair` a))
 setPermuteIdx _ _ = error "Bad permute index format"
-#else
-
-#endif

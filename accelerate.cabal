@@ -316,6 +316,11 @@ flag bounds-checks
   default:              True
   description:          Enable bounds checking
 
+flag exp-bounds-checks
+  manual:               True
+  default:              False
+  description:          Enable bounds checking at expression level
+
 flag unsafe-checks
   manual:               True
   default:              False
@@ -675,6 +680,10 @@ library
   if flag(bounds-checks)
     cpp-options:
         -DACCELERATE_BOUNDS_CHECKS
+
+  if flag(exp-bounds-checks)
+    cpp-options:
+        -DACCELERATE_EXPRESSION_BOUNDS_CHECKS
 
   if flag(unsafe-checks)
     cpp-options:
