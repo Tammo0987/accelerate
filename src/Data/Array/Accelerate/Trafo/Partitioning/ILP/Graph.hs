@@ -51,6 +51,11 @@ import Data.Kind (Type)
 import Unsafe.Coerce (unsafeCoerce)
 import Data.Coerce (coerce)
 import Debug.Trace
+import Data.Typeable
+import Data.Maybe
+import Data.Array.Accelerate.Analysis.Match
+import Data.Array.Accelerate.Representation.Type (TupR(TupRunit, TupRsingle))
+import Data.Array.Accelerate.Representation.Elt
 
 --------------------------------------------------------------------------------
 -- Fusion Graph
@@ -62,6 +67,7 @@ type StrictEdge    = (Label Comp, Label Comp)
 type DataflowEdge  = (Label Comp, Label Buff, Label Comp)
 type FusibleEdge   = DataflowEdge
 type InfusibleEdge = DataflowEdge
+type InplacePath   = (ReadEdge, WriteEdge)
 
 -- | Program graph.
 --
@@ -110,16 +116,17 @@ data FusionGraph = FusionGraph   -- TODO: Use hashmaps and hashsets in productio
   ,       _writeEdges :: Set WriteEdge     -- ^ Edges that represent writes.
   ,      _strictEdges :: Set StrictEdge    -- ^ Edges that enforce strict ordering.
   ,    _dataflowEdges :: Set DataflowEdge  -- ^ Edges that represent data-flow.
+  ,     _inplacePaths :: Set InplacePath   -- ^ Summary paths between buffers for in-place updates.
   }
 
 instance Semigroup FusionGraph where
   (<>) :: FusionGraph -> FusionGraph -> FusionGraph
-  (<>) (FusionGraph b1 c1 r1 w1 s1 d1) (FusionGraph b2 c2 r2 w2 s2 d2)
-    = FusionGraph (b1 <> b2) (c1 <> c2) (r1 <> r2) (w1 <> w2) (s1 <> s2) (d1 <> d2)
+  (<>) (FusionGraph b1 c1 r1 w1 s1 d1 i1) (FusionGraph b2 c2 r2 w2 s2 d2 i2)
+    = FusionGraph (b1 <> b2) (c1 <> c2) (r1 <> r2) (w1 <> w2) (s1 <> s2) (d1 <> d2) (i1 <> i2)
 
 instance Monoid FusionGraph where
   mempty :: FusionGraph
-  mempty = FusionGraph mempty mempty mempty mempty mempty mempty
+  mempty = FusionGraph mempty mempty mempty mempty mempty mempty mempty
 
 -- | Class for types that contain a fusion graph.
 --
@@ -146,6 +153,9 @@ class HasFusionGraph g where
   writeEdges :: Lens' g (Set WriteEdge)
   writeEdges = fusionGraph.writeEdges
 
+  inplacePaths :: Lens' g (Set InplacePath)
+  inplacePaths = fusionGraph.inplacePaths
+
 -- | Base instance of 'HasFusionGraph' for 'FusionGraph'.
 --
 -- This instance cannot make use of lenses defined in 'HasFusionGraph' because
@@ -171,6 +181,9 @@ instance HasFusionGraph FusionGraph where
 
   writeEdges :: Lens' FusionGraph (Set WriteEdge)
   writeEdges f s = f (_writeEdges s) <&> \es -> s{_writeEdges = es}
+
+  inplacePaths :: Lens' FusionGraph (Set InplacePath)
+  inplacePaths f s = f (_inplacePaths s) <&> \ps -> s{_inplacePaths = ps}
 
 -- | Insert a buffer node into the graph.
 insertBuffer :: HasFusionGraph g => Label Buff -> g -> g
@@ -280,7 +293,7 @@ instance Monoid (FusionILP op) where
 -- | Class for accessing the fusion ILP field of a data structure.
 --
 -- We make this because there are at least two data structures that contain a
--- fusion ILP: 'FullGraphState' and the result of graph construction. This is
+-- fusion ILP: 'FusionGraphState' and the result of graph construction. This is
 -- similar to what microlens-th would generate when using @makeFields@.
 class HasFusionILP s op | s -> op where
   fusionILP :: Lens' s (FusionILP op)
@@ -656,7 +669,7 @@ attachBackendLabels sol = M.mapWithKey \cases
 -- This method makes defining the control flow easier since we do not need to
 -- worry about merging the graphs in the return values as in the old approach.
 --
--- The environment is not passed as an argument to 'mkFullGraph'' since it may
+-- The environment is not passed as an argument to 'mkFusionGraph' since it may
 -- be modified by certain computations. Specifically, when a buffer is marked as
 -- mutable, a copy of the buffer is created and the original buffer is replaced
 -- by the copy in the environment.
@@ -671,7 +684,7 @@ attachBackendLabels sol = M.mapWithKey \cases
 -- reason. An if-then-else could return different buffers of the same type
 -- depending on which branch is taken.
 --
-data FullGraphState op env = FullGraphState
+data FusionGraphState op env = FusionGraphState
   { _fusionILP  :: FusionILP op    -- ^ The ILP information.
   , _buffersEnv :: BuffersEnv env  -- ^ The label environment.
   , _readersEnv :: ReadersEnv      -- ^ Mapping from buffers to consumers.
@@ -684,51 +697,51 @@ data FullGraphState op env = FullGraphState
 type ReadersEnv = Map (Label Buff) (Labels Comp)
 type WritersEnv = Map (Label Buff) (Labels Comp)
 
-initialFullGraphState :: FullGraphState op ()
-initialFullGraphState = FullGraphState mempty EnvNil mempty mempty mempty (Label 0 Nothing) 0
+initialFusionGraphState :: FusionGraphState op ()
+initialFusionGraphState = FusionGraphState mempty EnvNil mempty mempty mempty (Label 0 Nothing) 0
 
-instance Show (FullGraphState op env) where
-  show :: FullGraphState op env -> String
-  show s = "FullGraphState { readersEnv=" ++ show (s^.readersEnv) ++
+instance Show (FusionGraphState op env) where
+  show :: FusionGraphState op env -> String
+  show s = "FusionGraphState { readersEnv=" ++ show (s^.readersEnv) ++
             ", writersEnv=" ++ show (s^.writersEnv) ++
             " }"
 
-instance HasFusionILP (FullGraphState op env) op where
-  fusionILP :: Lens' (FullGraphState op env) (FusionILP op)
+instance HasFusionILP (FusionGraphState op env) op where
+  fusionILP :: Lens' (FusionGraphState op env) (FusionILP op)
   fusionILP f s = f (_fusionILP s) <&> \ilp -> s{_fusionILP = ilp}
 
 class HasBuffersEnv s t env env' | s -> env, t -> env' where
   buffersEnv :: Lens s t (BuffersEnv env) (BuffersEnv env')
 
-instance HasBuffersEnv (FullGraphState op env) (FullGraphState op env') env env' where
-  buffersEnv :: Lens (FullGraphState op env) (FullGraphState op env') (BuffersEnv env) (BuffersEnv env')
+instance HasBuffersEnv (FusionGraphState op env) (FusionGraphState op env') env env' where
+  buffersEnv :: Lens (FusionGraphState op env) (FusionGraphState op env') (BuffersEnv env) (BuffersEnv env')
   buffersEnv f s = f (_buffersEnv s) <&> \env -> s{_buffersEnv = env}
 
 class HasReadersEnv s where
   readersEnv :: Lens' s ReadersEnv
 
-instance HasReadersEnv (FullGraphState op env) where
-  readersEnv :: Lens' (FullGraphState op env) ReadersEnv
+instance HasReadersEnv (FusionGraphState op env) where
+  readersEnv :: Lens' (FusionGraphState op env) ReadersEnv
   readersEnv f s = f (_readersEnv s) <&> \env -> s{_readersEnv = env}
 
 class HasWritersEnv s where
   writersEnv :: Lens' s WritersEnv
 
-instance HasWritersEnv (FullGraphState op env) where
-  writersEnv :: Lens' (FullGraphState op env) WritersEnv
+instance HasWritersEnv (FusionGraphState op env) where
+  writersEnv :: Lens' (FusionGraphState op env) WritersEnv
   writersEnv f s = f (_writersEnv s) <&> \env -> s{_writersEnv = env}
 
 class HasSymbols s op | s -> op where
   symbols :: Lens' s (Symbols op)
 
-instance HasSymbols (FullGraphState op env) op where
-  symbols :: Lens' (FullGraphState op env) (Symbols op)
+instance HasSymbols (FusionGraphState op env) op where
+  symbols :: Lens' (FusionGraphState op env) (Symbols op)
   symbols f s = f (_symbols s) <&> \sym -> s{_symbols = sym}
 
-currComp :: Lens' (FullGraphState op env) (Label Comp)
+currComp :: Lens' (FusionGraphState op env) (Label Comp)
 currComp f s = f (_currComp s) <&> \c -> s{_currComp = c}
 
-currEnvL :: Lens' (FullGraphState op env) EnvLabel
+currEnvL :: Lens' (FusionGraphState op env) EnvLabel
 currEnvL f s = f (_currEnvL s) <&> \l -> s{_currEnvL = l}
 
 -- | Lens for creating the backend graph state.
@@ -740,7 +753,7 @@ currEnvL f s = f (_currEnvL s) <&> \l -> s{_currEnvL = l}
 --
 -- The fusion ILP is the only value that the backend may modify, so its the only
 -- value that is retrieved from the backend graph state afterwards.
-backendGraphState :: ReadersEnv -> WritersEnv -> Lens' (FullGraphState op env) (BackendGraphState op env)
+backendGraphState :: ReadersEnv -> WritersEnv -> Lens' (FusionGraphState op env) (BackendGraphState op env)
 backendGraphState renv wenv f s = f (BackendGraphState (s^.fusionILP) (s^.buffersEnv) renv wenv)
   <&> \b -> s & fusionILP .~ b^.fusionILP
 
@@ -780,17 +793,17 @@ allocator = symbol . coerce
 -- | Lens for working under the scope of a computation.
 --
 -- It first sets the parent of the current label to the supplied computation
--- label. Then it applies the function to the 'FullGraphState' with the now
+-- label. Then it applies the function to the 'FusionGraphState' with the now
 -- parented label. Finally, it sets the parent of the current label back to the
 -- original parent.
-scope :: Label Comp -> Lens' (FullGraphState op env) (FullGraphState op env)
+scope :: Label Comp -> Lens' (FusionGraphState op env) (FusionGraphState op env)
 scope c = with (currComp.parent) (Just c)
 
-local :: BuffersEnv env' -> Lens' (FullGraphState op env) (FullGraphState op env')
+local :: BuffersEnv env' -> Lens' (FusionGraphState op env) (FusionGraphState op env')
 local env' f s = (buffersEnv .~ s^.buffersEnv) <$> f (s & buffersEnv .~ env')
 
 -- | Fresh computation label.
-freshComp :: State (FullGraphState op env) (Label Comp)
+freshComp :: State (FusionGraphState op env) (Label Comp)
 freshComp = do
   comp <- zoom currComp freshL'
   fusionILP %= insertComputation comp
@@ -802,7 +815,7 @@ freshComp = do
 -- by the computation that allocates it. This is possible because they have the
 -- same label just, just different types. We still need to add the read edge to
 -- the graph though.
-freshBuff :: State (FullGraphState op env) (Label Buff, Label Comp)
+freshBuff :: State (FusionGraphState op env) (Label Buff, Label Comp)
 freshBuff = do
   c <- freshComp
   let b = coerce c
@@ -811,7 +824,7 @@ freshBuff = do
   return (b, c)
 
 -- | Read from a buffer and be fusisble with its writers.
-(--->) :: HasCallStack => Labels Buff -> Label Comp -> State (FullGraphState op env) ()
+(--->) :: HasCallStack => Labels Buff -> Label Comp -> State (FusionGraphState op env) ()
 (--->) bs c = for_ bs \b -> do
   ws <- use $ writers b
   fusionILP %= c `reads` b
@@ -819,7 +832,7 @@ freshBuff = do
   readers b %= S.insert c
 
 -- | Read from a buffer and be infusible with its writers.
-(===>) :: HasCallStack => Labels Buff -> Label Comp -> State (FullGraphState op env) ()
+(===>) :: HasCallStack => Labels Buff -> Label Comp -> State (FusionGraphState op env) ()
 (===>) bs c = for_ bs \b -> do
   ws <- use $ writers b
   fusionILP %= c `reads` b
@@ -833,7 +846,7 @@ freshBuff = do
 -- 2. All writers run before the computation.
 -- 3. We become the sole writer of the buffer.
 -- 4. We clear the readers of the buffer.
-(<===) :: HasCallStack => Labels Buff -> Label Comp -> State (FullGraphState op env) ()
+(<===) :: HasCallStack => Labels Buff -> Label Comp -> State (FusionGraphState op env) ()
 (<===) bs c = for_ bs \b -> do
   rs <- use $ readers b
   ws <- use $ writers b
@@ -850,7 +863,7 @@ freshBuff = do
 -- 2. All writers are infusible with this computation.
 -- 3. We become the sole writer of the buffer.
 -- 4. We clear the readers of the buffer.
-(<==>) :: HasCallStack => Labels Buff -> Label Comp -> State (FullGraphState op env) ()
+(<==>) :: HasCallStack => Labels Buff -> Label Comp -> State (FusionGraphState op env) ()
 (<==>) bs c = for_ bs \b -> do
   rs <- use $ readers b
   ws <- use $ writers b
@@ -865,7 +878,7 @@ freshBuff = do
 --
 -- This is a special case of mutation where the buffer is not actually changed.
 -- Because of this, we now don't need to enforce rules 1 and 4 from '(<==>)'.
-(<-->) :: HasCallStack => Labels Buff -> Label Comp -> State (FullGraphState op env) ()
+(<-->) :: HasCallStack => Labels Buff -> Label Comp -> State (FusionGraphState op env) ()
 (<-->) bs c = for_ bs \b -> do
   ws <- use $ writers b
   fusionILP %= c `reads` b
@@ -881,7 +894,7 @@ freshBuff = do
 -- This operation is similar to '(<-->)', except the resulting infusible edges
 -- are inverted and no read edges are created.
 -- One could also interpret this as writing nothing to the buffer.
-(>>==) :: HasCallStack => Label Comp -> Labels Buff -> State (FullGraphState op env) ()
+(>>==) :: HasCallStack => Label Comp -> Labels Buff -> State (FusionGraphState op env) ()
 (>>==) c bs = for_ bs \b -> do
   ws <- use $ writers b
   fusionILP %= c `writes` b
@@ -894,31 +907,33 @@ freshBuff = do
 -- Full Graph construction
 --------------------------------------------------------------------------------
 
+type FullGraph op = (FusionILP op, Symbols op)
+
 -- The 2 instances below can be used to clean up the code in ILP.hs a bit.
-instance HasFusionILP (FusionILP op, Symbols op) op where
-  fusionILP :: Lens'  (FusionILP op, Symbols op) (FusionILP op)
+instance HasFusionILP (FullGraph op) op where
+  fusionILP :: Lens'  (FullGraph op) (FusionILP op)
   fusionILP f (ilp, sym) = f ilp <&> (,sym)
 
-instance HasSymbols (FusionILP op, Symbols op) op where
-  symbols :: Lens' (FusionILP op, Symbols op) (Symbols op)
+instance HasSymbols (FullGraph op) op where
+  symbols :: Lens' (FullGraph op) (Symbols op)
   symbols f (ilp, sym) = f sym <&> (ilp,)
 
 -- | Construct the full fusion graph for a program.
-mkFullGraph :: MakesILP op => PreOpenAcc op () a -> (FusionILP op, Symbols op)
+mkFullGraph :: MakesILP op => PreOpenAcc op () a -> FullGraph op
 mkFullGraph acc = (s^.fusionILP & constraints <>~ manifestRes, s^.symbols)
   where
-    (res, s) = runState (mkFullGraph' acc) initialFullGraphState
+    (res, s) = runState (mkFusionGraph acc) initialFusionGraphState
     manifestRes = foldMap (foldMap (\b -> manifest b .==. int 0)) res
 
 -- | Construct the full fusion graph for a function.
-mkFullGraphF :: MakesILP op => PreOpenAfun op () a -> (FusionILP op, Symbols op)
+mkFullGraphF :: MakesILP op => PreOpenAfun op () a -> FullGraph op
 mkFullGraphF acc = (s^.fusionILP, s^.symbols)
   where
-    (_, s) = runState (mkFullGraphF' acc) initialFullGraphState
+    (_, s) = runState (mkFusionGraphF acc) initialFusionGraphState
 
-mkFullGraph' :: forall op env t. MakesILP op
-             => FullGraphMaker PreOpenAcc op env t (BuffersTup t)
-mkFullGraph' (Exec op args) = do
+mkFusionGraph :: forall op env t. MakesILP op
+              => FusionGraphMaker PreOpenAcc op env t (BuffersTup t)
+mkFusionGraph (Exec op args) = do
   lenv <- use buffersEnv
   renv <- use readersEnv
   wenv <- use writersEnv
@@ -935,25 +950,25 @@ mkFullGraph' (Exec op args) = do
   symbol c ?= SExe lenv labelledArgs op
   return TupFunit
 
-mkFullGraph' (Alet LeftHandSideUnit _ bnd scp)
-  = mkFullGraph' bnd >> mkFullGraph' scp
+mkFusionGraph (Alet LeftHandSideUnit _ bnd scp)
+  = mkFusionGraph bnd >> mkFusionGraph scp
 
 -- In this definition I assume that whatever the right-hand side returns is
 -- produced by a single computation, which is currently true because all
 -- instructions attach themselves to the buffer.
-mkFullGraph' (Alet lhs u bnd scp) = do
+mkFusionGraph (Alet lhs u bnd scp) = do
   c       <- freshComp
   lenv    <- use buffersEnv
-  bndRes  <- mkFullGraph' bnd
+  bndRes  <- mkFusionGraph bnd
   bndResW <- traverse (use . allWriters) bndRes
   fold bndRes <--> c
   lenv' <- zoom currEnvL (weakenEnv lhs bndRes lenv)
   symbol c ?= SLet (bindLHS lhs lenv') (fromSingletonSet $ fold bndResW) u
-  res <- zoom (local lenv') (mkFullGraph' scp)
+  res <- zoom (local lenv') (mkFusionGraph scp)
   c >>== fold res
   return res
 
-mkFullGraph' (Return vars) = do
+mkFusionGraph (Return vars) = do
   lenv <- use buffersEnv
   c    <- freshComp
   let (_, bs) = getVarsFromEnv vars lenv
@@ -961,33 +976,33 @@ mkFullGraph' (Return vars) = do
   symbol c ?= SRet lenv vars
   return bs
 
-mkFullGraph' (Compute expr) = do
+mkFusionGraph (Compute expr) = do
   lenv   <- use buffersEnv
   (b, c) <- freshBuff
   getExpDeps expr lenv ===> c
   symbol c ?= SCmp lenv expr
   return $ tupFlike (expType expr) (S.singleton b)
 
-mkFullGraph' (Alloc shr e sh) = do
+mkFusionGraph (Alloc shr e sh) = do
   lenv   <- use buffersEnv
   (b, c) <- freshBuff
   getVarsDeps sh lenv ===> c
   symbol c ?= SAlc lenv shr e sh
   return $ TupFsingle (S.singleton b)
 
-mkFullGraph' (Unit v) = do
+mkFusionGraph (Unit v) = do
   lenv   <- use buffersEnv
   (b, c) <- freshBuff
   getVarDeps v lenv ===> c
   symbol c ?= SUnt lenv v
   return $ TupFsingle (S.singleton b)
 
-mkFullGraph' (Use sctype n buff) = do
+mkFusionGraph (Use sctype n buff) = do
   (b, c) <- freshBuff
   symbol c ?= SUse sctype n buff
   return $ TupFsingle (S.singleton b)
 
-mkFullGraph' (Acond cond tacc facc) = do
+mkFusionGraph (Acond cond tacc facc) = do
   lenv    <- use buffersEnv
   c_cond  <- freshComp
   zoom (scope c_cond) do
@@ -995,15 +1010,15 @@ mkFullGraph' (Acond cond tacc facc) = do
     c_false <- freshComp
     getVarDeps cond lenv ===> c_cond
     symbol c_cond ?= SITE lenv cond c_true c_false
-    (t_res, t_renv, t_wenv) <- block c_true  mkFullGraph' tacc
-    (f_res, f_renv, f_wenv) <- block c_false mkFullGraph' facc
+    (t_res, t_renv, t_wenv) <- block c_true  mkFusionGraph tacc
+    (f_res, f_renv, f_wenv) <- block c_false mkFusionGraph facc
     readersEnv .= M.unionWith S.union t_renv f_renv
     writersEnv .= M.unionWith S.union t_wenv f_wenv
     let res = t_res <> f_res
     fold res <--> c_cond
     return res
 
-mkFullGraph' (Awhile u cond body init) = do
+mkFusionGraph (Awhile us cond body init) = do
   lenv    <- use buffersEnv
   c_while <- freshComp
   zoom (scope c_while) do
@@ -1011,9 +1026,9 @@ mkFullGraph' (Awhile u cond body init) = do
     c_body  <- freshComp
     let (_, init_res) = getVarsFromEnv init lenv
     fold init_res ===> c_while
-    symbol c_while ?= SWhl lenv c_cond c_body init u
-    (_                       , cond_renv, cond_wenv) <- block c_cond mkFullGraphF' cond
-    (unsafeCoerce -> body_res, body_renv, body_wenv) <- block c_body mkFullGraphF' body
+    symbol c_while ?= SWhl lenv c_cond c_body init us
+    (_                       , cond_renv, cond_wenv) <- block c_cond mkFusionGraphF cond
+    (unsafeCoerce -> body_res, body_renv, body_wenv) <- block c_body mkFusionGraphF body
     readersEnv .= M.unionWith S.union cond_renv body_renv
     writersEnv .= M.unionWith S.union cond_wenv body_wenv
     let res = init_res <> body_res
@@ -1022,22 +1037,22 @@ mkFullGraph' (Awhile u cond body init) = do
 
 
 
-mkFullGraphF' :: forall op env t. MakesILP op
-              => FullGraphMaker PreOpenAfun op env t (BuffersTup (Result t))
-mkFullGraphF' (Abody acc) = do
+mkFusionGraphF :: forall op env t. MakesILP op
+               => FusionGraphMaker PreOpenAfun op env t (BuffersTup (Result t))
+mkFusionGraphF (Abody acc) = do
   c <- freshComp
   zoom (scope c) do
-    res <- mkFullGraph' acc
+    res <- mkFusionGraph acc
     fold res <--> c
     symbol c ?= SBod res
     fusionILP.constraints %= (<> foldMap ((.==. int 0) . manifest) (fold res))
     return (unsafeCoerce res)
 
-mkFullGraphF' (Alam lhs f) = do
+mkFusionGraphF (Alam lhs f) = do
   lenv <- use buffersEnv
   (S.singleton -> b, c) <- freshBuff
   lenv'<- zoom currEnvL (weakenEnv lhs (tupFlike (lhsToTupR lhs) b) lenv)
-  res  <- zoom (local lenv') (mkFullGraphF' f)
+  res  <- zoom (local lenv') (mkFusionGraphF f)
   resW <- traverse (use . allWriters) res
   symbol c ?= SFun (bindLHS lhs lenv') (fromSingletonSet $ fold resW)
   c >>== fold res
@@ -1046,8 +1061,8 @@ mkFullGraphF' (Alam lhs f) = do
 
 
 -- | Helper for if-then-else and while loop blocks.
-block :: HasCallStack => Label Comp -> FullGraphMaker f op env t (BuffersTup r)
-      -> FullGraphMaker f op env t (BuffersTup r, ReadersEnv, WritersEnv)
+block :: HasCallStack => Label Comp -> FusionGraphMaker f op env t (BuffersTup r)
+      -> FusionGraphMaker f op env t (BuffersTup r, ReadersEnv, WritersEnv)
 block c f x = zoom (scope c . protected writersEnv . protected readersEnv) do
   res <- f x
   symbol c ?= SBlk
@@ -1056,7 +1071,7 @@ block c f x = zoom (scope c . protected writersEnv . protected readersEnv) do
   return (res, renv, wenv)
 
 -- | Type of functions that take an AST and produce a graph.
-type FullGraphMaker f op env t r = f op env t -> State (FullGraphState op env) r
+type FusionGraphMaker f op env t r = f op env t -> State (FusionGraphState op env) r
 
 -- | Type-level function to get the result type of a function.
 --
@@ -1094,6 +1109,83 @@ in a separate pass before fusion. Doing it like that won't have any of the
 aforementioned problems since the buffer will be a proper part of the graph
 and the environment before some operation is executed.
 -}
+
+
+
+--------------------------------------------------------------------------------
+-- In-place update detection
+--------------------------------------------------------------------------------
+
+mkInplacePaths :: forall op. MakesILP op => FullGraph op -> FullGraph op
+mkInplacePaths g = g&fusionILP.inplacePaths .~ validPaths
+  where
+    -- All valid in-place update paths in the graph.
+    validPaths :: Set InplacePath
+    validPaths = S.filter validInplaceUpdate $ foldMap go initialPaths
+
+    -- Recursively extends the in-place path by looking at the next computation
+    -- and its outputs.
+    go :: InplacePath -> Set InplacePath
+    go (r, w) = extendedPaths <> foldMap go extendedPaths
+      where
+        -- All paths that can be formed by extending the current path.
+        extendedPaths :: Set InplacePath
+        extendedPaths = case M.lookup w nextMap of
+          Nothing -> S.empty
+          Just cs -> flip foldMap cs \c -> case M.lookup c outputMap of
+              Nothing -> S.empty
+              Just bs -> S.map ((r,).(c,)) bs
+
+    -- The initial, length-1 paths that are formed from computations and all
+    -- their inputs and outputs.
+    initialPaths :: Set InplacePath
+    initialPaths = flip foldMap (g^.fusionILP.readEdges) \r@(_,c) -> case M.lookup c outputMap of
+        Nothing -> S.empty
+        Just bs -> S.map ((r,).(c,)) bs
+
+    -- Checks if the in-place update path is a valid one.
+    -- An in-place update path is valid if:
+    -- 1. We have sole ownership of both buffers. (Alloc, Unit)
+    -- 2. The buffers are of the same shape.
+    -- 3. The elements in the buffers are of the same size.
+    validInplaceUpdate :: InplacePath -> Bool
+    validInplaceUpdate ((b1, _), (_, b2)) = case (getAlloc b1, getAlloc b2) of
+        (SAlc env1 shr1 e1 sh1, SAlc env2 shr2 e2 sh2)
+          | Just Refl <- matchShapeR shr1 shr2
+          , (_, shVars1) <- getVarsFromEnv sh1 env1
+          , (_, shVars2) <- getVarsFromEnv sh2 env2
+          -> shVars1 == shVars2 && bytes e1 == bytes e2
+        (SUnt _ v1, SUnt _ v2)
+          -> bytes (varType v1) == bytes (varType v2)
+        _ -> False
+      where
+        getAlloc :: Label Buff -> Symbol op
+        getAlloc b = case g^.allocator b of
+          Just x@SAlc{} -> x
+          Just x@SUnt{} -> x
+          Just x@SUse{} -> x
+          Just x@SFun{} -> x
+          Just _  -> error "getAlloc: not an array allocator"
+          Nothing -> error "getAlloc: no allocator found"
+
+        bytes :: ScalarType e -> Int
+        bytes = bytesElt . TupRsingle
+
+    -- For efficient lookup of outputs of computations.
+    outputMap :: Map (Label Comp) (Labels Buff)
+    outputMap = M.fromListWith S.union $ map (_2 %~ S.singleton) $ S.toList $ g^.fusionILP.writeEdges
+
+    -- For efficient lookup of which computation the data flows into.
+    -- We only consider computations that can fuse with the previous computation
+    -- because we can only perform an in-place update if the computations fuse.
+    nextMap :: Map WriteEdge (Labels Comp)
+    nextMap = M.fromListWith S.union $ map (tripleToPair . (_3 %~ S.singleton)) $ S.toList $ g^.fusionILP.fusibleEdges
+
+
+
+--------------------------------------------------------------------------------
+-- Reconstruction
+--------------------------------------------------------------------------------
 
 -- | Makes a ReindexPartial, which allows us to transform indices in @env@ into indices in @env'@.
 -- We cannot guarantee the index is present in env', so we use the partiality of ReindexPartial by
@@ -1146,7 +1238,7 @@ fromSingletonSet (S.toList -> [x]) = x
 fromSingletonSet _ = error "fromSingletonSet: Set is not singleton."
 
 -- | Print out information about the given buffer.
-traceBuff :: Label Buff -> State (FullGraphState op env) ()
+traceBuff :: Label Buff -> State (FusionGraphState op env) ()
 traceBuff b = do
   c_alloc   <- use $ allocator b
   c_readers <- use $ readers b
@@ -1157,20 +1249,24 @@ traceBuff b = do
   traceM $ "    Writers:      " ++ show c_writers
 
 -- | Print out information about the given computation.
-traceComp :: Label Comp -> State (FullGraphState op env) ()
+traceComp :: Label Comp -> State (FusionGraphState op env) ()
 traceComp c = do
   c_symb   <- use $ symbol c
   traceM $ "  Computation " ++ show c ++ ":"
   traceM $ "    Symbol:       " ++ show c_symb
 
 -- | Print out information about the current environment.
-traceEnv' :: BuffersEnv env' -> State (FullGraphState op env) ()
+traceEnv' :: BuffersEnv env' -> State (FusionGraphState op env) ()
 traceEnv' env = do
   traceM "  Environment: "
   forLEnv_ env \bs -> traceM $ "    " ++ show bs
 
-traceEnv :: State (FullGraphState op env) ()
+traceEnv :: State (FusionGraphState op env) ()
 traceEnv = use buffersEnv >>= traceEnv'
+
+-- | Converts a triple (a, b, c) into ((a, b), c)
+tripleToPair :: (a, b, c) -> ((a, b), c)
+tripleToPair (x, y, z) = ((x, y), z)
 
 
 

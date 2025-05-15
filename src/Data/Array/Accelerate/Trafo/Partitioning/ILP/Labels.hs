@@ -22,6 +22,7 @@ either be a computation or a buffer.
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE TypeOperators #-}
 module Data.Array.Accelerate.Trafo.Partitioning.ILP.Labels where
 
 import Data.Array.Accelerate.AST.Operation
@@ -44,13 +45,14 @@ import qualified Data.Functor.Const as C
 import Data.Coerce
 import Control.Monad.State.Strict
 import Data.Foldable
-import Data.Typeable
 import Data.Array.Accelerate.Type (ScalarType)
 import Data.Array.Accelerate.Representation.Array
 import Data.Bifunctor (Bifunctor(..))
 import Data.Maybe (fromJust, fromMaybe)
 import Data.List
 import Debug.Trace
+import Data.Typeable
+import Data.Array.Accelerate.Analysis.Match
 
 
 
@@ -153,65 +155,66 @@ type Labels t = Set (Label t)
 -- Constant-valued Tuple Representation
 --------------------------------------------------------------------------------
 
--- | Flipped, constant 'TupR'.
-newtype TupF t a = TupF { unTupF :: TupR (C.Const a) t }
-pattern TupFunit :: TupF () a
-pattern TupFunit = TupF TupRunit
-pattern TupFsingle :: a -> TupF t a
-pattern TupFsingle a = TupF (TupRsingle (C.Const a))
-pattern TupFpair :: TupF s a -> TupF t a -> TupF (s, t) a
-pattern TupFpair l r <- TupF (TupRpair (TupF -> l) (TupF -> r)) where
-  TupFpair (unTupF -> l) (unTupF -> r) = TupF (TupRpair l r)
-{-# COMPLETE TupFunit, TupFsingle, TupFpair #-}
+-- | Constant valued 'TupR' with flipped type arguments.
+data TupF t a where
+  TupFunit   :: TupF () a
+  TupFsingle :: a -> TupF t a
+  TupFpair   :: TupF s a -> TupF t a -> TupF (s, t) a
 
-instance Show a => Show (TupF t a) where
-  show :: Show a => TupF t a -> String
-  show (TupF tup) = show tup
+-- | Convert a 'TupR' of 'Const' values to a 'TupF'.
+toTupF :: TupR (C.Const a) t -> TupF t a
+toTupF TupRunit       = TupFunit
+toTupF (TupRsingle a) = TupFsingle (C.getConst a)
+toTupF (TupRpair l r) = TupFpair (toTupF l) (toTupF r)
 
-instance Functor (TupF t) where
-  fmap :: forall a b. (a -> b) -> TupF t a -> TupF t b
-  fmap f = TupF . go . unTupF
-    where
-      go :: TupR (C.Const a) s -> TupR (C.Const b) s
-      go TupRunit       = TupRunit
-      go (TupRsingle a) = TupRsingle (coerce f a)
-      go (TupRpair l r) = TupRpair (go l) (go r)
-
-
-instance Foldable (TupF t) where
-  foldMap :: forall m a. Monoid m => (a -> m) -> TupF t a -> m
-  foldMap f = go . unTupF
-    where
-      go :: TupR (C.Const a) s -> m
-      go TupRunit       = mempty
-      go (TupRsingle a) = f (coerce a)
-      go (TupRpair l r) = go l <> go r
-
-instance Traversable (TupF t) where
-  traverse :: forall f a b. Applicative f => (a -> f b) -> TupF t a -> f (TupF t b)
-  traverse f = (TupF <$>) . go . unTupF
-    where
-      go :: TupR (C.Const a) s -> f (TupR (C.Const b) s)
-      go TupRunit       = pure TupRunit
-      go (TupRsingle a) = TupRsingle . coerce <$> f (coerce a)
-      go (TupRpair l r) = TupRpair <$> go l <*> go r
-
-instance Semigroup a => Semigroup (TupF t a) where
-  (<>) :: TupF t a -> TupF t a -> TupF t a
-  (<>) (TupF t1) (TupF t2) = TupF (go t1 t2)
-    where
-      go :: TupR (C.Const a) s -> TupR (C.Const a) s -> TupR (C.Const a) s
-      go TupRunit         TupRunit         = TupRunit
-      go (TupRsingle a)   (TupRsingle b)   = TupRsingle (coerce (a <> b))
-      go (TupRpair l1 r1) (TupRpair l2 r2) = TupRpair (go l1 l2) (go r1 r2)
-      go _ _ = error "TupR_: Inaccessible left-hand side"
-
+-- | Convert a 'TupF' of 'Const' values to a 'TupR'.
+fromTupF :: TupF t a -> TupR (C.Const a) t
+fromTupF TupFunit       = TupRunit
+fromTupF (TupFsingle a) = TupRsingle (C.Const a)
+fromTupF (TupFpair l r) = TupRpair (fromTupF l) (fromTupF r)
 
 -- | Create a 'TupF' containing a single value in the same shape as a 'TupR'.
 tupFlike :: TupR s t -> b -> TupF t b
 tupFlike TupRunit       _ = TupFunit
 tupFlike (TupRsingle _) b = TupFsingle b
 tupFlike (TupRpair l r) b = TupFpair (tupFlike l b) (tupFlike r b)
+
+instance Show a => Show (TupF t a) where
+  show :: Show a => TupF t a -> String
+  show = show . fromTupF
+
+instance Eq a => Eq (TupF t a) where
+  (==) :: Eq a => TupF t a -> TupF t a -> Bool
+  (==) TupFunit       TupFunit           = True
+  (==) (TupFsingle a) (TupFsingle b)     = a == b
+  (==) (TupFpair l1 r1) (TupFpair l2 r2) = l1 == l2 && r1 == r2
+  (==) _ _ = False
+
+instance Functor (TupF t) where
+  fmap :: (a -> b) -> TupF t a -> TupF t b
+  fmap _ TupFunit       = TupFunit
+  fmap f (TupFsingle a) = TupFsingle (f a)
+  fmap f (TupFpair l r) = TupFpair (fmap f l) (fmap f r)
+
+
+instance Foldable (TupF t) where
+ foldMap :: Monoid m => (a -> m) -> TupF t a -> m
+ foldMap _ TupFunit       = mempty
+ foldMap f (TupFsingle a) = f (coerce a)
+ foldMap f (TupFpair l r) = foldMap f l <> foldMap f r
+
+instance Traversable (TupF t) where
+  traverse :: Applicative f => (a -> f b) -> TupF t a -> f (TupF t b)
+  traverse _ TupFunit       = pure TupFunit
+  traverse f (TupFsingle a) = TupFsingle <$> f a
+  traverse f (TupFpair l r) = TupFpair <$> traverse f l <*> traverse f r
+
+instance Semigroup a => Semigroup (TupF t a) where
+  (<>) :: TupF t a -> TupF t a -> TupF t a
+  (<>) TupFunit         TupFunit         = TupFunit
+  (<>) (TupFsingle a)   (TupFsingle b)   = TupFsingle (a <> b)
+  (<>) (TupFpair l1 r1) (TupFpair l2 r2) = TupFpair (l1 <> l2) (r1 <> r2)
+  (<>) _ _ = error "(<>) [TupF]: Inaccessible left-hand side"
 
 -- | Tuple of 'Labels' of type 'Buff'.
 type BuffersTup t = TupF t (Labels Buff)
@@ -359,16 +362,16 @@ can therefore not be fused.
 
 -- | A label to be stored with an argument, indicating whether an argument is an
 --   array or not, and if so, which buffers it is associated with as a 'TupF'.
-data ArgIsArray t where
+data IsArray t where
   -- | The argument is an array.
   Arr :: EnvLabelTup e  -- ^ The array (as structure-of-arrays).
-      -> ArgIsArray (m sh e)
+      -> IsArray (m sh e)
   -- | The argument is a scalar 'Var'', 'Exp'' or 'Fun''.
-  NotArr :: ArgIsArray (t e)
+  NotArr :: IsArray (t e)
 
-deriving instance Show (ArgIsArray t)
+deriving instance Show (IsArray t)
 
--- | An 'ArgIsArray', all dependencies of the argument, and all shape
+-- | An 'IsArray', all dependencies of the argument, and all shape
 --   dependencies of the argument.
 --
 -- The first set of buffers contains all dependencies of the argument.
@@ -376,7 +379,7 @@ deriving instance Show (ArgIsArray t)
 -- the shape of the argument.
 -- This means that the second set of buffers is a subset of the first set of
 -- buffers.
-type ArgLabels t = (ArgIsArray t, Labels Buff, Labels Buff)
+type ArgLabels t = (IsArray t, Labels Buff, Labels Buff)
 
 -- | The argument to a function paired with 'ArgLabels'
 data LabelledArg env t = L (Arg env t) (ArgLabels t)
@@ -402,7 +405,7 @@ getArgLabels (ArgArray _ (ArrayR _ tp) sh arr) env
   = (unbuffers tp arr_es, arr_bs <> sh_bs, sh_bs)
 
 -- | Get the values associated with 'Vars' from 'BuffersEnv'.
-getVarsFromEnv :: Vars a env b -> BuffersEnv env -> (ArgIsArray (m sh b), BuffersTup b)
+getVarsFromEnv :: Vars a env b -> BuffersEnv env -> (IsArray (m sh b), BuffersTup b)
 getVarsFromEnv TupRunit         _   = (Arr TupFunit, TupFunit)
 getVarsFromEnv (TupRsingle var) env = getVarFromEnv var env
 getVarsFromEnv (TupRpair l r)   env | (Arr l', bs1) <- getVarsFromEnv l env
@@ -411,7 +414,7 @@ getVarsFromEnv (TupRpair l r)   env | (Arr l', bs1) <- getVarsFromEnv l env
 getVarsFromEnv _ _ = error "getVarsFromEnv: Inaccessible left-hand side."
 
 -- | Get the value associated with a 'Var' from 'BuffersEnv'.
-getVarFromEnv :: Var a env b -> BuffersEnv env -> (ArgIsArray (m sh b), BuffersTup b)
+getVarFromEnv :: Var a env b -> BuffersEnv env -> (IsArray (m sh b), BuffersTup b)
 getVarFromEnv (varIdx -> idx) = first (Arr . TupFsingle) . lookupIdxInEnv idx
 
 -- | Get the value associated with an 'Idx' from 'BuffersEnv'.
@@ -464,8 +467,8 @@ getFunDeps :: OpenFun x env y -> BuffersEnv env -> Labels Buff
 getFunDeps (Body  poe) env = getExpDeps poe env
 getFunDeps (Lam _ fun) env = getFunDeps fun env
 
--- | Remove the 'Buffers' type from 'ArgIsArray'.
-unbuffers :: forall m sh e. TypeR e -> ArgIsArray (m sh (Buffers e)) -> ArgIsArray (m sh e)
+-- | Remove the 'Buffers' type from 'IsArray'.
+unbuffers :: forall m sh e. TypeR e -> IsArray (m sh (Buffers e)) -> IsArray (m sh e)
 unbuffers TupRunit _ = Arr TupFunit
 unbuffers (TupRsingle t) (Arr (TupFsingle e))
   | Refl <- reprIsSingle @ScalarType @e @Buffer t

@@ -109,7 +109,7 @@ type ReadDirM = M.Map ReadEdge Int
 
 topSort :: Bool -> FusionGraph -> Labels Comp -> ReadDirM -> [ClusterL]
 topSort _ _ (S.toList -> [l]) _ = [ExecL [l]]  -- If the cluster is empty.
-topSort singletons (FusionGraph _ _ _ _ strictEdges dataflowEdges) cluster readDirM =
+topSort singletons (FusionGraph _ _ _ _ strictEdges dataflowEdges _) cluster readDirM =
   if singletons then concatMap (map (ExecL . pure)) topsorteds else map ExecL topsorteds
   where
     buildGraph
