@@ -1150,6 +1150,9 @@ combineInplacePaths g = g&fusionILP.inplacePaths %~ stepsPaths 1000
                     | otherwise = ps <> stepsPaths (n-1) (foldMap stepPath ps)
 
     -- Extend the path by 1 step.
+    -- This is done by looking at which computations can fuse with the end of
+    -- the path, then finding any paths that start with the newly constructed
+    -- read.
     stepPath :: InplacePath -> Set InplacePath
     stepPath (r, w@(_, b)) = case M.lookup w nextComps of
       Nothing -> S.empty
