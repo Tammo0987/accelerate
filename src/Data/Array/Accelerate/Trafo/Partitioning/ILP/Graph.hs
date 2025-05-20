@@ -493,6 +493,7 @@ labelLabelledArgs _ _ ArgsNil = ArgsNil
 --------------------------------------------------------------------------------
 
 data Var (op :: Type -> Type)
+  -- Variables used by fusion:
   = Pi (Label Comp)
     -- ^ Used for acyclic ordering of clusters.
     -- Pi (Label x y) = z means that computation number x (possibly a subcomputation of y, see Label) is fused into cluster z (y ~ Just i -> z is a subcluster of the cluster of i)
@@ -507,14 +508,14 @@ data Var (op :: Type -> Type)
     -- ^ \-3 can't fuse with anything, -2 for 'left to right', -1 for 'right to left', n for 'unknown', see computation n (currently only backpermute).
   | WriteDir (Label Comp) (Label Buff)
     -- ^ See 'ReadDir'.
-  | InDir (Label Comp)
+  | InDir (Label Comp)  -- Legacy
     -- ^ For backwards compatibility, see 'ReadDir''. For this variable to have any meaning the backend has to call 'useInDir' (or 'useInOutDir').
-  | OutDir (Label Comp)
+  | OutDir (Label Comp)  -- Legacy
     -- ^ For backwards compatibility, see 'WriteDir''. For this variable to have any meaning the backend has to call 'useOutDir' (or 'useInOutDir').
-  | InFoldSize (Label Comp)
+  | InFoldSize (Label Comp)  -- Legacy? Probably needs per-edge equivalent
     -- ^ Keeps track of the fold that's one dimension larger than this operation, and is fused in the same cluster.
     -- This prevents something like @zipWith f (fold g xs) (fold g ys)@ from illegally fusing
-  | OutFoldSize (Label Comp)
+  | OutFoldSize (Label Comp)  -- Legacy? Probably needs per-edge equivalent
     -- ^ Keeps track of the fold that's one dimension larger than this operation, and is fused in the same cluster.
     -- This prevents something like @zipWith f (fold g xs) (fold g ys)@ from illegally fusing
   | Other String
@@ -524,6 +525,15 @@ data Var (op :: Type -> Type)
   | BackendSpecific (BackendVar op)
     -- ^ Vars needed to express backend-specific fusion rules.
     -- This is what allows backends to specify how each of the operations can fuse.
+
+  -- Variables introduced for in-place updates:
+  | InPlace (Label Buff) (Label Buff)
+    -- ^ 0 means in-place, 1 means not in-place. The first label is an input of a cluster, the second label is an output of a cluster.
+    -- TODO: Might need to include some additional information to mark the cluster/computation affected by substitution.
+  | PiMax (Label Buff)
+    -- ^ The cluster number of the largest reader of the buffer, since in-place updates are only allowed on the final consumer of an array/buffer.
+  | WriteDirPiMax (Label Buff)
+    -- ^ The write
 
 deriving instance Eq   (BackendVar op) => Eq   (Var op)
 deriving instance Ord  (BackendVar op) => Ord  (Var op)
@@ -919,17 +929,23 @@ instance HasSymbols (FullGraph op) op where
   symbols f (ilp, sym) = f sym <&> (ilp,)
 
 -- | Construct the full fusion graph for a program.
-mkFullGraph :: MakesILP op => PreOpenAcc op () a -> FullGraph op
-mkFullGraph acc = (s^.fusionILP & constraints <>~ manifestRes, s^.symbols)
-  where
-    (res, s) = runState (mkFusionGraph acc) initialFusionGraphState
-    manifestRes = foldMap (foldMap (\b -> manifest b .==. int 0)) res
+mkFullGraph :: MakesILP op => PreOpenAcc op () t -> FullGraph op
+mkFullGraph acc = mkInplacePaths $ manifestBuffers (fold res) (s^.fusionILP, s^.symbols)
+  where (res, s) = runState (mkFusionGraph acc) initialFusionGraphState
 
 -- | Construct the full fusion graph for a function.
 mkFullGraphF :: MakesILP op => PreOpenAfun op () a -> FullGraph op
-mkFullGraphF acc = (s^.fusionILP, s^.symbols)
-  where
-    (_, s) = runState (mkFusionGraphF acc) initialFusionGraphState
+mkFullGraphF acc = mkInplacePaths (s^.fusionILP, s^.symbols)
+  where (_, s) = runState (mkFusionGraphF acc) initialFusionGraphState
+
+-- | Make the supplied buffers manifest.
+manifestBuffers :: HasFusionILP g op => Set (Label Buff) -> g -> g
+manifestBuffers bs = fusionILP.constraints <>~ foldMap (\b -> manifest b .==. int 0) bs
+
+
+--------------------------------------------------------------------------------
+-- FusionGraph construction
+--------------------------------------------------------------------------------
 
 mkFusionGraph :: forall op env t. MakesILP op
               => FusionGraphMaker PreOpenAcc op env t (BuffersTup t)
@@ -1113,7 +1129,7 @@ and the environment before some operation is executed.
 
 
 --------------------------------------------------------------------------------
--- In-place update detection
+-- In-place update path construction
 --------------------------------------------------------------------------------
 
 mkInplacePaths :: forall op. MakesILP op => FullGraph op -> FullGraph op
