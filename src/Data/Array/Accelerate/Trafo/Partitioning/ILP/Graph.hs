@@ -56,6 +56,7 @@ import Data.Maybe
 import Data.Array.Accelerate.Analysis.Match
 import Data.Array.Accelerate.Representation.Type (TupR(TupRunit, TupRsingle))
 import Data.Array.Accelerate.Representation.Elt
+import Data.List (unfoldr)
 
 --------------------------------------------------------------------------------
 -- Fusion Graph
@@ -1129,9 +1130,47 @@ and the environment before some operation is executed.
 
 
 --------------------------------------------------------------------------------
--- In-place update path construction
+-- In-place update path extension
 --------------------------------------------------------------------------------
 
+-- | Combines the in-place update paths of length 1 (i.e. across computations)
+--   to in-place update paths of arbitrary length.
+combineInplacePaths :: FullGraph op -> FullGraph op
+combineInplacePaths g = g&fusionILP.inplacePaths %~ stepsPaths 1000
+  where
+    -- Keep extending the path until no more extensions are possible or the
+    -- iteration limit reaches 0.
+    -- The iteration limit is only there to prevent infinite loops, although I
+    -- don't think this can happen.
+    -- We could make this iteration limit an argument to the function and a
+    -- global setting for the compiler later on.
+    stepsPaths :: Int -> Set InplacePath -> Set InplacePath
+    stepsPaths 0 ps = internalWarning "combineInplacePaths: iteration limit reached" False ps
+    stepsPaths n ps | S.null ps = ps
+                    | otherwise = ps <> stepsPaths (n-1) (foldMap stepPath ps)
+
+    -- Extend the path by 1 step.
+    stepPath :: InplacePath -> Set InplacePath
+    stepPath (r, w@(_, b)) = case M.lookup w nextComps of
+      Nothing -> S.empty
+      Just cs -> flip foldMap cs \c -> case M.lookup (b, c) nextPaths of
+        Nothing -> S.empty
+        Just ws -> S.map (r,) ws
+
+    -- For efficient lookup of extensions for paths.
+    -- This maps read edges to the write edges that can be updated in-place with
+    -- the read edge.
+    nextPaths :: Map ReadEdge (Set WriteEdge)
+    nextPaths = M.fromListWith S.union $ map (_2 %~ S.singleton) $ S.toList $ g^.fusionILP.inplacePaths
+
+    -- For efficient lookup of which computation the data flows into.
+    -- We only consider computations that can fuse with the previous computation
+    -- because we can only perform an in-place update if the computations fuse.
+    nextComps :: Map WriteEdge (Labels Comp)
+    nextComps = M.fromListWith S.union $ map (tripleToLeftRec . (_3 %~ S.singleton)) $ S.toList $ g^.fusionILP.fusibleEdges
+
+
+-- | Naive approach: find in-place updates from scratch.
 mkInplacePaths :: forall op. MakesILP op => FullGraph op -> FullGraph op
 mkInplacePaths g = g&fusionILP.inplacePaths .~ validPaths
   where
@@ -1195,7 +1234,7 @@ mkInplacePaths g = g&fusionILP.inplacePaths .~ validPaths
     -- We only consider computations that can fuse with the previous computation
     -- because we can only perform an in-place update if the computations fuse.
     nextMap :: Map WriteEdge (Labels Comp)
-    nextMap = M.fromListWith S.union $ map (tripleToPair . (_3 %~ S.singleton)) $ S.toList $ g^.fusionILP.fusibleEdges
+    nextMap = M.fromListWith S.union $ map (tripleToLeftRec . (_3 %~ S.singleton)) $ S.toList $ g^.fusionILP.fusibleEdges
 
 
 
@@ -1281,8 +1320,8 @@ traceEnv :: State (FusionGraphState op env) ()
 traceEnv = use buffersEnv >>= traceEnv'
 
 -- | Converts a triple (a, b, c) into ((a, b), c)
-tripleToPair :: (a, b, c) -> ((a, b), c)
-tripleToPair (x, y, z) = ((x, y), z)
+tripleToLeftRec :: (a, b, c) -> ((a, b), c)
+tripleToLeftRec (x, y, z) = ((x, y), z)
 
 
 
