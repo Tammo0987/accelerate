@@ -384,6 +384,12 @@ deriving instance Show (IsArray t)
 type ArgLabels t = (IsArray t, Labels Buff, Labels Buff)
 
 -- | The argument to a function paired with 'ArgLabels'
+--
+-- This should probably just copy the structure of 'Arg' but changing that now
+-- takes a lot of work... Maybe make a version of each data-type that has a slot
+-- for additional information? I.e. @data Arg' a env t where ...; type Arg = Arg' ()@?
+-- It's common for compilers to add void-pointers in their structures to allow
+-- for exactly this kind of extensibility.
 data LabelledArg env t = L (Arg env t) (ArgLabels t)
   deriving (Show)
 
@@ -404,7 +410,7 @@ getArgLabels (ArgFun fun)  env = (NotArr, getFunDeps  fun  env, mempty)
 getArgLabels (ArgArray _ (ArrayR _ tp) sh arr) env
   | (_     , fold ->  sh_bs) <- getVarsFromEnv sh  env
   , (arr_es, fold -> arr_bs) <- getVarsFromEnv arr env
-  = (unbuffers tp arr_es, arr_bs <> sh_bs, sh_bs)
+  = (unbuffers tp arr_es, arr_bs, sh_bs)
 
 -- | Get the values associated with 'Vars' from 'BuffersEnv'.
 getVarsFromEnv :: Vars a env b -> BuffersEnv env -> (IsArray (m sh b), BuffersTup b)
@@ -618,19 +624,19 @@ forLArgs_ largs f = traverseLArgs_ f largs
 -- | All arrays that the function reads from. This includes the shapes.
 inputArrays :: LabelledArgs env t -> Labels Buff
 inputArrays = foldMapLArgs \case
-  L (ArgArray In  _ _ _) (Arr _ _, deps,  _) -> deps
-  L (ArgArray Mut _ _ _) (Arr _ _, deps,  _) -> deps
-  L (ArgArray Out _ _ _) (Arr _ _,    _, sh) -> sh
+  L (ArgArray In  _ _ _) (Arr _ _, arr, sh) -> arr <> sh
+  L (ArgArray Mut _ _ _) (Arr _ _, arr, sh) -> arr <> sh
+  L (ArgArray Out _ _ _) (Arr _ _,   _, sh) -> sh
   _ -> mempty
 
 -- | All arrays that the function writes to. This does not include the shapes.
 outputArrays :: LabelledArgs env t -> Labels Buff
 outputArrays = foldMapLArgs \case
-  L (ArgArray Out _ _ _) (Arr _ _, deps, sh) -> deps S.\\ sh
-  L (ArgArray Mut _ _ _) (Arr _ _, deps, sh) -> deps S.\\ sh
+  L (ArgArray Out _ _ _) (Arr _ _, arr, _) -> arr
+  L (ArgArray Mut _ _ _) (Arr _ _, arr, _) -> arr
   _ -> mempty
 
--- | All arguments that are not arrays.
+-- | All arguments that are not arrays or their shapes.
 notArrays :: LabelledArgs env t -> Labels Buff
 notArrays = foldMapLArgs \case
   L _ (NotArr, bs, _) -> bs
