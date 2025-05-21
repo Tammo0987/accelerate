@@ -15,6 +15,7 @@
 {-# LANGUAGE TypeOperators     #-}
 {-# LANGUAGE UndecidableInstances #-}
 {-# OPTIONS_HADDOCK hide #-}
+{-# LANGUAGE InstanceSigs #-}
 -- |
 -- Module      : Data.Array.Accelerate.Representation.Type
 -- Copyright   : [2008..2020] The Accelerate Team
@@ -57,6 +58,14 @@ data TupR s a where
 
 deriving instance (forall a. Show (s a)) => Show (TupR s t)
 
+instance (forall a. Semigroup (s a)) => Semigroup (TupR s t) where
+  (<>) :: (forall a. Semigroup (s a)) => TupR s t -> TupR s t -> TupR s t
+  (<>) TupRunit TupRunit = TupRunit
+  (<>) (TupRsingle a) (TupRsingle b) = TupRsingle (a <> b)
+  (<>) (TupRpair a1 a2) (TupRpair b1 b2) = TupRpair (a1 <> b1) (a2 <> b2)
+  (<>) _ _ = internalError "Semigroup TupR: inaccessible lhs"
+
+
 formatTypeR :: Format r (TypeR a -> r)
 formatTypeR = later $ \case
   TupRunit     -> "()"
@@ -75,7 +84,7 @@ type TypeR = TupR ScalarType
 --   typeR = TupRunit
 
 -- instance IsScalar a => IsTypeR a where
---   typeR = TupRsingle scalarType 
+--   typeR = TupRsingle scalarType
 
 data TupleIdx s t where
   TupleIdxLeft  :: TupleIdx l t -> TupleIdx (l, r) t

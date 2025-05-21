@@ -54,7 +54,7 @@ import Debug.Trace
 import Data.Typeable
 import Data.Maybe
 import Data.Array.Accelerate.Analysis.Match
-import Data.Array.Accelerate.Representation.Type (TupR(TupRunit, TupRsingle))
+import Data.Array.Accelerate.Representation.Type (TupR(TupRunit, TupRsingle), mapTupR)
 import Data.Array.Accelerate.Representation.Elt
 import Data.List (unfoldr)
 
@@ -948,6 +948,7 @@ manifestBuffers bs = fusionILP.constraints <>~ foldMap (\b -> manifest b .==. in
 -- FusionGraph construction
 --------------------------------------------------------------------------------
 
+-- | Construct the fusion graph of a program.
 mkFusionGraph :: forall op env t. MakesILP op
               => FusionGraphMaker PreOpenAcc op env t (BuffersTup t)
 mkFusionGraph (Exec op args) = do
@@ -979,7 +980,7 @@ mkFusionGraph (Alet lhs u bnd scp) = do
   bndRes  <- mkFusionGraph bnd
   bndResW <- traverse (use . allWriters) bndRes
   fold bndRes <--> c
-  lenv' <- zoom currEnvL (weakenEnv lhs bndRes lenv)
+  lenv' <- zoom currEnvL (weakenEnv lhs bndRes u lenv)
   symbol c ?= SLet (bindLHS lhs lenv') (fromSingletonSet $ fold bndResW) u
   res <- zoom (local lenv') (mkFusionGraph scp)
   c >>== fold res
@@ -1035,7 +1036,7 @@ mkFusionGraph (Acond cond tacc facc) = do
     fold res <--> c_cond
     return res
 
-mkFusionGraph (Awhile us cond body init) = do
+mkFusionGraph (Awhile u cond body init) = do
   lenv    <- use buffersEnv
   c_while <- freshComp
   zoom (scope c_while) do
@@ -1043,9 +1044,9 @@ mkFusionGraph (Awhile us cond body init) = do
     c_body  <- freshComp
     let (_, init_res) = getVarsFromEnv init lenv
     fold init_res ===> c_while
-    symbol c_while ?= SWhl lenv c_cond c_body init us
-    (_                       , cond_renv, cond_wenv) <- block c_cond mkFusionGraphF cond
-    (unsafeCoerce -> body_res, body_renv, body_wenv) <- block c_body mkFusionGraphF body
+    symbol c_while ?= SWhl lenv c_cond c_body init u
+    (_       , cond_renv, cond_wenv) <- block c_cond (mkFusionGraphW u) cond
+    (body_res, body_renv, body_wenv) <- block c_body (mkFusionGraphW u) body
     readersEnv .= M.unionWith S.union cond_renv body_renv
     writersEnv .= M.unionWith S.union cond_wenv body_wenv
     let res = init_res <> body_res
@@ -1054,6 +1055,24 @@ mkFusionGraph (Awhile us cond body init) = do
 
 
 
+-- | Construct the fusion graph of a single-argument function.
+mkFusionGraphW :: forall op env s t. MakesILP op
+               => Uniquenesses s -> FusionGraphMaker PreOpenAfun op env (s -> t) (BuffersTup t)
+mkFusionGraphW _ (Abody _) = error "mkFusionGraphW: expected Alam"
+mkFusionGraphW u (Alam lhs f) = do
+  lenv <- use buffersEnv
+  (S.singleton -> b, c) <- freshBuff
+  let lhs' = lhsToTupR lhs
+  lenv'<- zoom currEnvL (weakenEnv lhs (tupFlike lhs' b) u lenv)
+  res  <- zoom (local lenv') (unresult <$> mkFusionGraphF f)
+  resW <- traverse (use . allWriters) res
+  symbol c ?= SFun (bindLHS lhs lenv') (fromSingletonSet $ fold resW)
+  c >>== fold res
+  return res
+
+
+
+-- | Construct the fusion graph of a function.
 mkFusionGraphF :: forall op env t. MakesILP op
                => FusionGraphMaker PreOpenAfun op env t (BuffersTup (Result t))
 mkFusionGraphF (Abody acc) = do
@@ -1063,12 +1082,14 @@ mkFusionGraphF (Abody acc) = do
     fold res <--> c
     symbol c ?= SBod res
     fusionILP.constraints %= (<> foldMap ((.==. int 0) . manifest) (fold res))
-    return (unsafeCoerce res)
+    return $ result res
 
 mkFusionGraphF (Alam lhs f) = do
   lenv <- use buffersEnv
   (S.singleton -> b, c) <- freshBuff
-  lenv'<- zoom currEnvL (weakenEnv lhs (tupFlike (lhsToTupR lhs) b) lenv)
+  let lhs' = lhsToTupR lhs
+  let u    = mapTupR (const Shared) lhs'  -- For now we assume variables to a function are shared. (safe)
+  lenv'<- zoom currEnvL (weakenEnv lhs (tupFlike lhs' b) u lenv)
   res  <- zoom (local lenv') (mkFusionGraphF f)
   resW <- traverse (use . allWriters) res
   symbol c ?= SFun (bindLHS lhs lenv') (fromSingletonSet $ fold resW)
@@ -1087,6 +1108,8 @@ block c f x = zoom (scope c . protected writersEnv . protected readersEnv) do
   wenv <- use writersEnv
   return (res, renv, wenv)
 
+
+
 -- | Type of functions that take an AST and produce a graph.
 type FusionGraphMaker f op env t r = f op env t -> State (FusionGraphState op env) r
 
@@ -1101,6 +1124,14 @@ type Result :: Type -> Type
 type family Result t where
   Result (_ -> t) = Result t
   Result t        = t
+
+result :: BuffersTup t -> BuffersTup (Result t)
+result = unsafeCoerce
+{-# INLINE result #-}
+
+unresult :: BuffersTup (Result t) -> BuffersTup t
+unresult = unsafeCoerce
+{-# INLINE unresult #-}
 
 {-
 I probably want to not duplicate a buffer that is used as both input
@@ -1252,9 +1283,9 @@ mkReindexPartial :: BuffersEnv env -> BuffersEnv env' -> ReindexPartial Maybe en
 mkReindexPartial env env' idx = go env'
   where
     -- The EnvLabel in the original environment
-    e = fst $ lookupIdxInEnv idx env
+    (e,_,_) = lookupIdxInEnv idx env
     go :: forall e a. BuffersEnv e -> Maybe (Idx e a)
-    go ((e',_) :>>: rest) -- e' is the ELabel in the new environment
+    go ((e',_,_) :>>: rest) -- e' is the ELabel in the new environment
       -- Here we have to convince GHC that the top element in the environment
       -- really does have the same type as the one we were searching for.
       -- Some literature does this stuff too: 'effect handlers in haskell, evidently'

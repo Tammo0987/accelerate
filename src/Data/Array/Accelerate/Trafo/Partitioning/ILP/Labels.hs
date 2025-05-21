@@ -53,6 +53,7 @@ import Data.List
 import Debug.Trace
 import Data.Typeable
 import Data.Array.Accelerate.Analysis.Match
+import Unsafe.Coerce (unsafeCoerce)
 
 
 
@@ -236,7 +237,7 @@ instance Show EnvLabel where
 -- | An 'EnvLabel' and all buffers associated with it.
 --
 -- 'EnvLabel' can probably be removed because its equivalent to @BufferTup t@.
-type EnvLabels t = (EnvLabel, BuffersTup t)
+type EnvLabels t = (EnvLabel, BuffersTup t, Uniquenesses t)
 
 -- | A 'TupF' of 'EnvLabel'.
 type EnvLabelTup t = TupF t EnvLabel
@@ -271,8 +272,8 @@ instance Show (BuffersEnv env) where
 instance Semigroup (BuffersEnv env) where
   (<>) :: BuffersEnv env -> BuffersEnv env -> BuffersEnv env
   (<>) EnvNil EnvNil = EnvNil
-  (<>) ((e1, bs1) :>>: env1) ((e2, bs2) :>>: env2)
-    | e1 == e2  = (e1, bs1 <> bs2) :>>: (env1 <> env2)
+  (<>) ((e1, bs1, us1) :>>: env1) ((e2, bs2, us2) :>>: env2)
+    | e1 == e2  = (e1, bs1 <> bs2, us1 <> us2) :>>: (env1 <> env2)
     | otherwise = error "mappend: Encountered diverging EnvLabels."
 
 -- | Constructs a new 'BuffersEnv' by prepending labels for each element in the
@@ -280,11 +281,11 @@ instance Semigroup (BuffersEnv env) where
 --
 -- The case where the left-hand side and the right-hand side are incompatible
 -- should neven happen, but in case it does just replicate the labels.
-weakenEnv :: LeftHandSide s v env env' -> BuffersTup v -> BuffersEnv env -> State EnvLabel (BuffersEnv env')
-weakenEnv LeftHandSideWildcard{} _                  = pure
-weakenEnv LeftHandSideSingle{}   bs                 = \lenv -> freshE' >>= \e -> return ((e, bs) :>>: lenv)
-weakenEnv (LeftHandSidePair l r) (TupFpair lbs rbs) = weakenEnv l lbs >=> weakenEnv r rbs
-weakenEnv (LeftHandSidePair _ _) _ = error "consLHS: Inaccesible left-hand side."
+weakenEnv :: LeftHandSide s v env env' -> BuffersTup v -> Uniquenesses v -> BuffersEnv env -> State EnvLabel (BuffersEnv env')
+weakenEnv LeftHandSideWildcard{} _ _ = pure
+weakenEnv LeftHandSideSingle{} bs us = \lenv -> freshE' >>= \e -> return ((e, bs, us) :>>: lenv)
+weakenEnv (LeftHandSidePair l r) (TupFpair lbs rbs) (TupRpair lus rus) = weakenEnv l lbs lus >=> weakenEnv r rbs rus
+weakenEnv (LeftHandSidePair _ _) _ _ = error "weakenEnv: inaccesible left-hand side"
 
 
 
@@ -365,6 +366,7 @@ can therefore not be fused.
 data IsArray t where
   -- | The argument is an array.
   Arr :: EnvLabelTup e  -- ^ The array (as structure-of-arrays).
+      -> Uniquenesses e -- ^ The uniqueness of the array.
       -> IsArray (m sh e)
   -- | The argument is a scalar 'Var'', 'Exp'' or 'Fun''.
   NotArr :: IsArray (t e)
@@ -406,22 +408,24 @@ getArgLabels (ArgArray _ (ArrayR _ tp) sh arr) env
 
 -- | Get the values associated with 'Vars' from 'BuffersEnv'.
 getVarsFromEnv :: Vars a env b -> BuffersEnv env -> (IsArray (m sh b), BuffersTup b)
-getVarsFromEnv TupRunit         _   = (Arr TupFunit, TupFunit)
+getVarsFromEnv TupRunit         _   = (Arr TupFunit TupRunit, TupFunit)
 getVarsFromEnv (TupRsingle var) env = getVarFromEnv var env
-getVarsFromEnv (TupRpair l r)   env | (Arr l', bs1) <- getVarsFromEnv l env
-                                    , (Arr r', bs2) <- getVarsFromEnv r env
-                                    = (Arr (TupFpair l' r'), TupFpair bs1 bs2)
+getVarsFromEnv (TupRpair l r)   env | (Arr l' lu, bs1) <- getVarsFromEnv l env
+                                    , (Arr r' ru, bs2) <- getVarsFromEnv r env
+                                    = (Arr (TupFpair l' r') (TupRpair lu ru), TupFpair bs1 bs2)
 getVarsFromEnv _ _ = error "getVarsFromEnv: Inaccessible left-hand side."
 
 -- | Get the value associated with a 'Var' from 'BuffersEnv'.
 getVarFromEnv :: Var a env b -> BuffersEnv env -> (IsArray (m sh b), BuffersTup b)
-getVarFromEnv (varIdx -> idx) = first (Arr . TupFsingle) . lookupIdxInEnv idx
+getVarFromEnv (varIdx -> idx) = go . lookupIdxInEnv idx
+  where
+    go :: (EnvLabel, BuffersTup b, Uniquenesses b) -> (IsArray (m sh b), BuffersTup b)
+    go (e, bs, us) = (Arr (TupFsingle e) us, bs)
 
 -- | Get the value associated with an 'Idx' from 'BuffersEnv'.
-lookupIdxInEnv :: Idx env a -> BuffersEnv env -> (EnvLabel, BuffersTup a)
+lookupIdxInEnv :: Idx env t -> BuffersEnv env -> EnvLabels t
 lookupIdxInEnv ZeroIdx       (bs :>>: _)   = bs
 lookupIdxInEnv (SuccIdx idx) (_  :>>: env) = lookupIdxInEnv idx env
-
 
 -- | Get the dependencies of a tuple of variables.
 getVarsDeps :: Vars s env t -> BuffersEnv env -> Labels Buff
@@ -469,15 +473,15 @@ getFunDeps (Lam _ fun) env = getFunDeps fun env
 
 -- | Remove the 'Buffers' type from 'IsArray'.
 unbuffers :: forall m sh e. TypeR e -> IsArray (m sh (Buffers e)) -> IsArray (m sh e)
-unbuffers TupRunit _ = Arr TupFunit
-unbuffers (TupRsingle t) (Arr (TupFsingle e))
+unbuffers TupRunit _ = Arr TupFunit TupRunit
+unbuffers (TupRsingle t) (Arr (TupFsingle e) (TupRsingle u))
   | Refl <- reprIsSingle @ScalarType @e @Buffer t
-  = Arr (TupFsingle e)
-unbuffers (TupRpair t1 t2) (Arr (TupFpair l r))
-  | Arr l' <- unbuffers t1 (Arr l)
-  , Arr r' <- unbuffers t2 (Arr r)
-  = Arr (TupFpair l' r')
-unbuffers _ (Arr _) = error "Tuple mismatch"
+  = Arr (TupFsingle e) (TupRsingle (unsafeCoerce u))
+unbuffers (TupRpair t1 t2) (Arr (TupFpair l r) (TupRpair lu ru))
+  | Arr l' lu' <- unbuffers t1 (Arr l lu)
+  , Arr r' ru' <- unbuffers t2 (Arr r ru)
+  = Arr (TupFpair l' r') (TupRpair lu' ru')
+unbuffers _ (Arr _ _) = error "Tuple mismatch"
 unbuffers _ _ = error "Not an array"
 
 
@@ -489,20 +493,20 @@ unbuffers _ _ = error "Not an array"
 -- | Map a function over the labels in the environment.
 mapLEnv :: (forall t. BuffersTup t -> BuffersTup t) -> BuffersEnv env -> BuffersEnv env
 mapLEnv _ EnvNil = EnvNil
-mapLEnv f ((e, bs) :>>: env) = (e, f bs) :>>: mapLEnv f env
+mapLEnv f ((e, bs, us) :>>: env) = (e, f bs, us) :>>: mapLEnv f env
 
 -- | Fold over the labels in the environment.
 foldMapLEnv :: Monoid m => (forall t. BuffersTup t -> m) -> BuffersEnv env -> m
 foldMapLEnv _ EnvNil = mempty
-foldMapLEnv f ((_, bs) :>>: env) = f bs <> foldMapLEnv f env
+foldMapLEnv f ((_, bs, us) :>>: env) = f bs <> foldMapLEnv f env
 
 -- | Map a monadic function over the labels in the environment.
 mapLEnvM :: Monad m => (forall t. BuffersTup t -> m (BuffersTup t)) -> BuffersEnv env -> m (BuffersEnv env)
 mapLEnvM _ EnvNil = return EnvNil
-mapLEnvM f ((e, bs) :>>: env) = do
+mapLEnvM f ((e, bs, us) :>>: env) = do
   bs'  <- f bs
   env' <- mapLEnvM f env
-  return ((e, bs') :>>: env')
+  return ((e, bs', us) :>>: env')
 
 -- | Flipped version of 'mapLEnvM'.
 forLEnvM :: Monad m => BuffersEnv env -> (forall t. BuffersTup t -> m (BuffersTup t)) -> m (BuffersEnv env)
@@ -512,7 +516,7 @@ forLEnvM env f = mapLEnvM f env
 -- | Map a monadic action over the labels in the environment and discard the result.
 mapLEnvM_ :: Monad m => (forall t. BuffersTup t -> m ()) -> BuffersEnv env -> m ()
 mapLEnvM_ _ EnvNil = return ()
-mapLEnvM_ f ((_, bs) :>>: env) = f bs >> mapLEnvM_ f env
+mapLEnvM_ f ((_, bs, _) :>>: env) = f bs >> mapLEnvM_ f env
 
 -- | Flipped version of 'mapLEnvM_'.
 forLEnvM_ :: Monad m => BuffersEnv env -> (forall t. BuffersTup t -> m ()) -> m ()
@@ -522,7 +526,7 @@ forLEnvM_ env f = mapLEnvM_ f env
 -- | Traverse over the labels in the environment.
 traverseLEnv :: Applicative f => (forall t. BuffersTup t -> f (BuffersTup t)) -> BuffersEnv env -> f (BuffersEnv env)
 traverseLEnv _ EnvNil = pure EnvNil
-traverseLEnv f ((e, bs) :>>: env) = ((:>>:) . (e,) <$> f bs) <*> traverseLEnv f env
+traverseLEnv f ((e, bs, us) :>>: env) = ((:>>:) . (e,,us) <$> f bs) <*> traverseLEnv f env
 
 -- | Flipped version of 'traverseLEnv'.
 forLEnv :: Applicative f => BuffersEnv env -> (forall t. BuffersTup t -> f (BuffersTup t)) -> f (BuffersEnv env)
@@ -532,7 +536,7 @@ forLEnv env f = traverseLEnv f env
 -- | Traverse over the labels in the environment and discard the result.
 traverseLEnv_ :: Applicative f => (forall t. BuffersTup t -> f ()) -> BuffersEnv env -> f ()
 traverseLEnv_ _ EnvNil = pure ()
-traverseLEnv_ f ((_, bs) :>>: env) = f bs *> traverseLEnv_ f env
+traverseLEnv_ f ((_, bs, _) :>>: env) = f bs *> traverseLEnv_ f env
 
 -- | Flipped version of 'traverseLEnv_'.
 forLEnv_ :: Applicative f => BuffersEnv env -> (forall t. BuffersTup t -> f ()) -> f ()
@@ -614,16 +618,16 @@ forLArgs_ largs f = traverseLArgs_ f largs
 -- | All arrays that the function reads from. This includes the shapes.
 inputArrays :: LabelledArgs env t -> Labels Buff
 inputArrays = foldMapLArgs \case
-  L (ArgArray In  _ _ _) (Arr _, deps,  _) -> deps
-  L (ArgArray Mut _ _ _) (Arr _, deps,  _) -> deps
-  L (ArgArray Out _ _ _) (Arr _,    _, sh) -> sh
+  L (ArgArray In  _ _ _) (Arr _ _, deps,  _) -> deps
+  L (ArgArray Mut _ _ _) (Arr _ _, deps,  _) -> deps
+  L (ArgArray Out _ _ _) (Arr _ _,    _, sh) -> sh
   _ -> mempty
 
 -- | All arrays that the function writes to. This does not include the shapes.
 outputArrays :: LabelledArgs env t -> Labels Buff
 outputArrays = foldMapLArgs \case
-  L (ArgArray Out _ _ _) (Arr _, deps, sh) -> deps S.\\ sh
-  L (ArgArray Mut _ _ _) (Arr _, deps, sh) -> deps S.\\ sh
+  L (ArgArray Out _ _ _) (Arr _ _, deps, sh) -> deps S.\\ sh
+  L (ArgArray Mut _ _ _) (Arr _ _, deps, sh) -> deps S.\\ sh
   _ -> mempty
 
 -- | All arguments that are not arrays.
