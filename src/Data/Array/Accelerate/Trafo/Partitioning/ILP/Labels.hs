@@ -389,10 +389,11 @@ getLabelUniqueArrDeps (NotArr _) = error "getLabelUniqueArrDeps: expected Arr bu
 
 -- | Given 'Uniquenesses', get the unique labels from 'BuffersTup'.
 uniqueLabels :: Uniquenesses e -> BuffersTup e -> Labels Buff
+uniqueLabels TupRunit TupFunit      = mempty
 uniqueLabels (TupRsingle Shared) _  = mempty
 uniqueLabels (TupRsingle Unique) bs = fold bs
 uniqueLabels (TupRpair ul ur) (TupFpair l r) = uniqueLabels ul l <> uniqueLabels ur r
-uniqueLabels _ _ = error "getLabelUniqueDeps: tuple mismatch"
+uniqueLabels u _ = error $ "getLabelUniqueDeps: tuple mismatch " ++ show u
 
 -- | Get the arrays of an 'ArgLabel'.
 getLabelArrays :: ArgLabel (m sh e) -> BuffersTup e

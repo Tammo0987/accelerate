@@ -931,12 +931,12 @@ instance HasSymbols (FullGraph op) op where
 
 -- | Construct the full fusion graph for a program.
 mkFullGraph :: MakesILP op => PreOpenAcc op () t -> FullGraph op
-mkFullGraph acc = mkInplacePaths $ manifestBuffers (fold res) (s^.fusionILP, s^.symbols)
+mkFullGraph acc = combineInplacePaths $ manifestBuffers (fold res) (s^.fusionILP, s^.symbols)
   where (res, s) = runState (mkFusionGraph acc) initialFusionGraphState
 
 -- | Construct the full fusion graph for a function.
 mkFullGraphF :: MakesILP op => PreOpenAfun op () a -> FullGraph op
-mkFullGraphF acc = mkInplacePaths (s^.fusionILP, s^.symbols)
+mkFullGraphF acc = combineInplacePaths (s^.fusionILP, s^.symbols)
   where (_, s) = runState (mkFusionGraphF acc) initialFusionGraphState
 
 -- | Make the supplied buffers manifest.
@@ -1164,6 +1164,19 @@ and the environment before some operation is executed.
 -- In-place update path extension
 --------------------------------------------------------------------------------
 
+-- | Creates unit-sized in-place update paths. Should be used by the backend to
+--   create in-place update paths where applicable. We do not need to check the
+--   type of the elements here, since these will be checked later. This ensures
+--   we can still create paths that would alter the type of the elements to an
+--   incompatible type and then back to a compatible type.
+mkUnitInplacePaths :: HasCallStack => Label Comp -> ArgLabel (In sh s) -> ArgLabel (Out sh t) -> Set InplacePath
+mkUnitInplacePaths c l1 l2
+  | getLabelShape l1 == getLabelShape l2  -- This condition should always hold if used correctly, but we check it anyway.
+  , bs1 <- getLabelUniqueArrDeps l1
+  , bs2 <- getLabelUniqueArrDeps l2
+  = foldMap (\b1 -> foldMap (\b2 -> S.singleton ((b1, c), (c, b2))) bs2) bs1
+mkUnitInplacePaths _ _ _ = S.empty
+
 -- | Combines the in-place update paths of length 1 (i.e. across computations)
 --   to in-place update paths of arbitrary length.
 combineInplacePaths :: FullGraph op -> FullGraph op
@@ -1367,10 +1380,12 @@ tripleToLeftRec (x, y, z) = ((x, y), z)
 toDOT :: FusionGraph -> Symbols op -> String
 toDOT g syms = "strict digraph {\n" ++
   concatMap (\c -> "  <" ++ show c ++ "> [shape=box, label=\"" ++ show (syms M.! c) ++ tail (show c) ++ "\"];\n") (g^.computationNodes) ++
-  -- concatMap (\b -> "  <" ++ show b ++ "> [shape=circle, label=\"" ++ show b ++ "\"];\n") (g^.bufferNodes) ++
-  -- concatMap (\(b,c) -> "  <" ++ show b ++ "> -> <" ++ show c ++ "> [];\n") (g^.readEdges) ++
-  -- concatMap (\(c,b) -> "  <" ++ show c ++ "> -> <" ++ show b ++ "> [];\n") (g^.writeEdges) ++
+  concatMap (\b -> "  <" ++ show b ++ "> [shape=circle, label=\"" ++ show b ++ "\"];\n") (g^.bufferNodes) ++
+  concatMap (\(b,c) -> "  <" ++ show b ++ "> -> <" ++ show c ++ "> [];\n") (g^.readEdges) ++
+  concatMap (\(c,b) -> "  <" ++ show c ++ "> -> <" ++ show b ++ "> [];\n") (g^.writeEdges) ++
+  concatMap (\((b1, _), (_, b2)) -> "  <" ++ show b1 ++ "> -> <" ++ show b2 ++ "> [color=gray, style=dotted];\n") (g^.inplacePaths) ++
   concatMap (\(c1,_,c2) -> "  <" ++ show c1 ++ "> -> <" ++ show c2 ++ "> [color=green];\n") (g^.fusibleEdges) ++
   concatMap (\(c1,_,c2) -> "  <" ++ show c1 ++ "> -> <" ++ show c2 ++ "> [color=red];\n") (g^.infusibleEdges) ++
   concatMap (\(c1,c2) -> "  <" ++ show c1 ++ "> -> <" ++ show c2 ++ "> [style=dashed, color=red];\n") (g^.orderEdges) ++
+
   "}\n"
