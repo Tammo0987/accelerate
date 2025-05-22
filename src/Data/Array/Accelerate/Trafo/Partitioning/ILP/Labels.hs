@@ -234,10 +234,13 @@ instance Show EnvLabel where
   show :: EnvLabel -> String
   show (EnvLabel i) = "E" ++ show i
 
--- | An 'EnvLabel' and all buffers associated with it.
---
--- 'EnvLabel' can probably be removed because its equivalent to @BufferTup t@.
-type EnvLabels t = (EnvLabel, BuffersTup t, Uniquenesses t)
+-- | A variable in the environment stores a tuple of buffers and their uniquenesses.
+--   They are uniquely identified by their 'EnvLabel'.
+type EnvVal t  = (EnvLabel, BuffersTup t, Uniquenesses t)
+
+-- | A collection of variables in the environment. The structure of the 'EnvLabelTup'
+--   can be used to extract individual 'EnvVal'.
+type EnvVals t = (EnvLabelTup t, BuffersTup t, Uniquenesses t)
 
 -- | A 'TupF' of 'EnvLabel'.
 type EnvLabelTup t = TupF t EnvLabel
@@ -259,7 +262,7 @@ data BuffersEnv env where
   -- | The empty environment.
   EnvNil :: BuffersEnv ()
   -- | The non-empty environment.
-  (:>>:) :: EnvLabels t     -- ^ See 'EnvLabels'.
+  (:>>:) :: EnvVal t        -- ^ See 'EnvVal'.
          -> BuffersEnv env  -- ^ The rest of the environment.
          -> BuffersEnv (env, t)
 
@@ -296,7 +299,7 @@ weakenEnv (LeftHandSidePair _ _) _ _ = error "weakenEnv: inaccesible left-hand s
 -- | A 'LeftHandSide' with the values bound at its leaves.
 data BoundLHS s v env env' where
   BoundLHSsingle
-    :: EnvLabels v
+    :: EnvVal v
     -> s v
     -> BoundLHS s v env (env, v)
 
@@ -363,25 +366,53 @@ can therefore not be fused.
 
 -- | A label to be stored with an argument, indicating whether an argument is an
 --   array or not, and if so, which buffers it is associated with as a 'TupF'.
-data IsArray t where
+data ArgLabel t where
   -- | The argument is an array.
-  Arr :: EnvLabelTup e  -- ^ The array (as structure-of-arrays).
-      -> Uniquenesses e -- ^ The uniqueness of the array.
-      -> IsArray (m sh e)
+  Arr     :: EnvVals e   -- ^ The array values.
+          -> EnvVals sh  -- ^ The shape values.
+          -> ArgLabel (m sh e)
   -- | The argument is a scalar 'Var'', 'Exp'' or 'Fun''.
-  NotArr :: IsArray (t e)
+  NotArr  :: Labels Buff -- ^ The dependencies of the argument.
+          -> ArgLabel (t e)
 
-deriving instance Show (IsArray t)
+deriving instance Show (ArgLabel t)
 
--- | An 'IsArray', all dependencies of the argument, and all shape
---   dependencies of the argument.
---
--- The first set of buffers contains all dependencies of the argument.
--- The second set of buffers contains only those dependencies that represent
--- the shape of the argument.
--- This means that the second set of buffers is a subset of the first set of
--- buffers.
-type ArgLabels t = (IsArray t, Labels Buff, Labels Buff)
+-- | Get the set of dependent buffers of an 'ArgLabel'.
+getLabelDeps :: ArgLabel t -> Labels Buff
+getLabelDeps (Arr (_, arr, _) (_, sh, _)) = fold arr <> fold sh
+getLabelDeps (NotArr deps) = deps
+
+-- | Get the set of unique array dependencies of an 'ArgLabel'.
+getLabelUniqueArrDeps :: ArgLabel t -> Labels Buff
+getLabelUniqueArrDeps (Arr (_, arr, u) _) = uniqueLabels u arr
+getLabelUniqueArrDeps (NotArr _) = error "getLabelUniqueArrDeps: expected Arr but got NotArr"
+
+-- | Given 'Uniquenesses', get the unique labels from 'BuffersTup'.
+uniqueLabels :: Uniquenesses e -> BuffersTup e -> Labels Buff
+uniqueLabels (TupRsingle Shared) _  = mempty
+uniqueLabels (TupRsingle Unique) bs = fold bs
+uniqueLabels (TupRpair ul ur) (TupFpair l r) = uniqueLabels ul l <> uniqueLabels ur r
+uniqueLabels _ _ = error "getLabelUniqueDeps: tuple mismatch"
+
+-- | Get the arrays of an 'ArgLabel'.
+getLabelArrays :: ArgLabel (m sh e) -> BuffersTup e
+getLabelArrays (Arr (_, arr, _) (_, _, _)) = arr
+getLabelArrays (NotArr _) = error "getLabelArrDeps: expected Arr but got NotArr"
+
+-- | Get the array dependencies of an 'ArgLabel'.
+getLabelArrDeps :: ArgLabel (m sh e) -> Labels Buff
+getLabelArrDeps = fold . getLabelArrays
+
+-- | Get the shapes of an 'ArgLabel'.
+getLabelShape :: ArgLabel (m sh e) -> BuffersTup sh
+getLabelShape (Arr (_, _, _) (_, sh, _)) = sh
+getLabelShape (NotArr _) = error "getLabelShapeDeps: expected Arr but got NotArr"
+
+-- | Get the shape dependencies of an 'ArgLabel'.
+getLabelShDeps :: ArgLabel (m sh e) -> Labels Buff
+getLabelShDeps = fold . getLabelShape
+
+
 
 -- | The argument to a function paired with 'ArgLabels'
 --
@@ -390,7 +421,7 @@ type ArgLabels t = (IsArray t, Labels Buff, Labels Buff)
 -- for additional information? I.e. @data Arg' a env t where ...; type Arg = Arg' ()@?
 -- It's common for compilers to add void-pointers in their structures to allow
 -- for exactly this kind of extensibility.
-data LabelledArg env t = L (Arg env t) (ArgLabels t)
+data LabelledArg env t = L (Arg env t) (ArgLabel t)
   deriving (Show)
 
 -- | Labelled arguments to be passed to a function.
@@ -403,43 +434,38 @@ labelArgs (arg :>: args) env =
   L arg (getArgLabels arg env) :>: labelArgs args env
 
 -- | Get the 'ArgLabels' associated with 'Arg' from 'BuffersEnv'.
-getArgLabels :: Arg env t -> BuffersEnv env -> ArgLabels t
-getArgLabels (ArgVar vars) env = (NotArr, getVarsDeps vars env, mempty)
-getArgLabels (ArgExp exp)  env = (NotArr, getExpDeps  exp  env, mempty)
-getArgLabels (ArgFun fun)  env = (NotArr, getFunDeps  fun  env, mempty)
+getArgLabels :: Arg env t -> BuffersEnv env -> ArgLabel t
+getArgLabels (ArgVar vars) env = NotArr $ getVarsDeps vars env
+getArgLabels (ArgExp exp)  env = NotArr $ getExpDeps  exp  env
+getArgLabels (ArgFun fun)  env = NotArr $ getFunDeps  fun  env
 getArgLabels (ArgArray _ (ArrayR _ tp) sh arr) env
-  | (_     , fold ->  sh_bs) <- getVarsFromEnv sh  env
-  , (arr_es, fold -> arr_bs) <- getVarsFromEnv arr env
-  = (unbuffers tp arr_es, arr_bs, sh_bs)
+  = Arr (unbuffers tp $ getVarsFromEnv arr env) (getVarsFromEnv sh env)
 
 -- | Get the values associated with 'Vars' from 'BuffersEnv'.
-getVarsFromEnv :: Vars a env b -> BuffersEnv env -> (IsArray (m sh b), BuffersTup b)
-getVarsFromEnv TupRunit         _   = (Arr TupFunit TupRunit, TupFunit)
-getVarsFromEnv (TupRsingle var) env = getVarFromEnv var env
-getVarsFromEnv (TupRpair l r)   env | (Arr l' lu, bs1) <- getVarsFromEnv l env
-                                    , (Arr r' ru, bs2) <- getVarsFromEnv r env
-                                    = (Arr (TupFpair l' r') (TupRpair lu ru), TupFpair bs1 bs2)
-getVarsFromEnv _ _ = error "getVarsFromEnv: Inaccessible left-hand side."
+getVarsFromEnv :: Vars a env b -> BuffersEnv env -> EnvVals b
+getVarsFromEnv TupRunit         _   = (TupFunit, TupFunit, TupRunit)
+getVarsFromEnv (TupRsingle var) env | (e, bs, u) <- getVarFromEnv var env
+                                    = (TupFsingle e, bs, u)
+getVarsFromEnv (TupRpair l r)   env | (el, bsl, ul) <- getVarsFromEnv l env
+                                    , (er, bsr, ur) <- getVarsFromEnv r env
+                                    = (TupFpair el er, TupFpair bsl bsr, TupRpair ul ur)
 
 -- | Get the value associated with a 'Var' from 'BuffersEnv'.
-getVarFromEnv :: Var a env b -> BuffersEnv env -> (IsArray (m sh b), BuffersTup b)
-getVarFromEnv (varIdx -> idx) = go . lookupIdxInEnv idx
-  where
-    go :: (EnvLabel, BuffersTup b, Uniquenesses b) -> (IsArray (m sh b), BuffersTup b)
-    go (e, bs, us) = (Arr (TupFsingle e) us, bs)
+getVarFromEnv :: Var a env b -> BuffersEnv env -> EnvVal b
+getVarFromEnv (varIdx -> idx) = lookupIdxInEnv idx
 
 -- | Get the value associated with an 'Idx' from 'BuffersEnv'.
-lookupIdxInEnv :: Idx env t -> BuffersEnv env -> EnvLabels t
+lookupIdxInEnv :: Idx env t -> BuffersEnv env -> EnvVal t
 lookupIdxInEnv ZeroIdx       (bs :>>: _)   = bs
 lookupIdxInEnv (SuccIdx idx) (_  :>>: env) = lookupIdxInEnv idx env
 
 -- | Get the dependencies of a tuple of variables.
 getVarsDeps :: Vars s env t -> BuffersEnv env -> Labels Buff
-getVarsDeps vars = fold . snd . getVarsFromEnv vars
+getVarsDeps vars = fold . (^._2) . getVarsFromEnv vars
 
 -- | Get the dependencies of a tuple of variables.
 getVarDeps :: Var s env t -> BuffersEnv env -> Labels Buff
-getVarDeps var = fold . snd . getVarFromEnv var
+getVarDeps var = fold . (^._2) . getVarFromEnv var
 
 -- | Get the dependencies of an expression.
 getExpDeps :: OpenExp x env y -> BuffersEnv env -> Labels Buff
@@ -477,18 +503,17 @@ getFunDeps :: OpenFun x env y -> BuffersEnv env -> Labels Buff
 getFunDeps (Body  poe) env = getExpDeps poe env
 getFunDeps (Lam _ fun) env = getFunDeps fun env
 
--- | Remove the 'Buffers' type from 'IsArray'.
-unbuffers :: forall m sh e. TypeR e -> IsArray (m sh (Buffers e)) -> IsArray (m sh e)
-unbuffers TupRunit _ = Arr TupFunit TupRunit
-unbuffers (TupRsingle t) (Arr (TupFsingle e) (TupRsingle u))
+-- | Remove the 'Buffers' type from 'ArgLabel'.
+unbuffers :: forall e. TypeR e -> EnvVals (Distribute Buffer e) -> EnvVals e
+unbuffers TupRunit _ = (TupFunit, TupFunit, TupRunit)
+unbuffers (TupRsingle t) (TupFsingle e, TupFsingle bs, TupRsingle u)
   | Refl <- reprIsSingle @ScalarType @e @Buffer t
-  = Arr (TupFsingle e) (TupRsingle (unsafeCoerce u))
-unbuffers (TupRpair t1 t2) (Arr (TupFpair l r) (TupRpair lu ru))
-  | Arr l' lu' <- unbuffers t1 (Arr l lu)
-  , Arr r' ru' <- unbuffers t2 (Arr r ru)
-  = Arr (TupFpair l' r') (TupRpair lu' ru')
-unbuffers _ (Arr _ _) = error "Tuple mismatch"
-unbuffers _ _ = error "Not an array"
+  = (TupFsingle e, TupFsingle bs, TupRsingle $ unsafeCoerce u)  -- TODO: get rid of unsafeCoerce
+unbuffers (TupRpair t1 t2) (TupFpair el er, TupFpair bsl bsr, TupRpair ul ur)
+  | (el', bsl', ul') <- unbuffers t1 (el, bsl, ul)
+  , (er', bsr', ur') <- unbuffers t2 (er, bsr, ur)
+  = (TupFpair el' er', TupFpair bsl' bsr', TupRpair ul' ur')
+unbuffers _ _ = error "Tuple mismatch"
 
 
 
@@ -624,22 +649,22 @@ forLArgs_ largs f = traverseLArgs_ f largs
 -- | All arrays that the function reads from. This includes the shapes.
 inputArrays :: LabelledArgs env t -> Labels Buff
 inputArrays = foldMapLArgs \case
-  L (ArgArray In  _ _ _) (Arr _ _, arr, sh) -> arr <> sh
-  L (ArgArray Mut _ _ _) (Arr _ _, arr, sh) -> arr <> sh
-  L (ArgArray Out _ _ _) (Arr _ _,   _, sh) -> sh
+  L (ArgArray In  _ _ _) (Arr (_,arr,_) (_,sh,_)) -> fold arr <> fold sh
+  L (ArgArray Mut _ _ _) (Arr (_,arr,_) (_,sh,_)) -> fold arr <> fold sh
+  L (ArgArray Out _ _ _) (Arr  _        (_,sh,_)) -> fold sh
   _ -> mempty
 
 -- | All arrays that the function writes to. This does not include the shapes.
 outputArrays :: LabelledArgs env t -> Labels Buff
 outputArrays = foldMapLArgs \case
-  L (ArgArray Out _ _ _) (Arr _ _, arr, _) -> arr
-  L (ArgArray Mut _ _ _) (Arr _ _, arr, _) -> arr
+  L (ArgArray Out _ _ _) (Arr (_,arr,_) _) -> fold arr
+  L (ArgArray Mut _ _ _) (Arr (_,arr,_) _) -> fold arr
   _ -> mempty
 
--- | All arguments that are not arrays or their shapes.
+-- | All arguments that are not arrays or their shapes. ('Var'', 'Exp'', 'Fun'')
 notArrays :: LabelledArgs env t -> Labels Buff
 notArrays = foldMapLArgs \case
-  L _ (NotArr, bs, _) -> bs
+  L _ (NotArr deps) -> deps
   _ -> mempty
 
 

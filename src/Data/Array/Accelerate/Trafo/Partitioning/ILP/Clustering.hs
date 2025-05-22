@@ -60,6 +60,7 @@ import qualified Data.Array.Accelerate.Pretty.Exp as P
 
 import Lens.Micro
 import Debug.Trace
+import Data.Foldable (fold)
 
 -- "open research question"
 -- -- Each set of ints corresponds to a set of Constructions, which themselves contain a set of ints (the things they depend on).
@@ -314,7 +315,7 @@ data FoldType op env
 
 
 louttovar :: LabelledArgOp op env (Out sh e) -> LabelledArgOp op env (Var' sh)
-louttovar (LOp a (_,ls,sh) b) = LOp (outvar a) (NotArr, ls, sh) b -- unsafe marker: maybe this NotArr ends up a problem?
+louttovar (LOp a l b) = LOp (outvar a) (NotArr $ getLabelDeps l) b -- unsafe marker: maybe this NotArr ends up a problem?
 
 tryUpdateList :: (a -> Bool) -> (a -> a) -> [a] -> Maybe [a]
 tryUpdateList _ _ [] = Nothing
@@ -347,9 +348,9 @@ consCluster l lop op lcluster cluster k = singleton l lop op $ \c lop' ->
 
 fuseVertically :: LabelledArgOp op env (Out sh e) -> LabelledArgOp op env (In sh e) -> LabelledArgOp op env (Var' sh)
 fuseVertically
-  (LOp (ArgArray Out (ArrayR shr _) sh _) (_, bs, ss) b)
-  (LOp (ArgArray In _ _ _) (_, bs', ss') _)
-  = LOp (ArgVar $ groundToExpVar (shapeType shr) sh) (NotArr, bs<>bs', ss<>ss') b
+  (LOp (ArgArray Out (ArrayR shr _) sh _) (getLabelDeps -> bs)  b)
+  (LOp (ArgArray In  _              _  _) (getLabelDeps -> bs') _)
+  = LOp (ArgVar $ groundToExpVar (shapeType shr) sh) (NotArr $ bs <> bs') b
 
 instance NFData' op => NFData' (Clustered op) where
   rnf' :: NFData' op => Clustered op a -> ()

@@ -631,7 +631,7 @@ instance Show (Symbol op) where
 -- | Mapping from labels to symbols.
 type Symbols op = Map (Label Comp) (Symbol op)
 
-data LabelledArgOp  op env a = LOp (Arg env a) (ArgLabels a) (BackendArg op)
+data LabelledArgOp  op env a = LOp (Arg env a) (ArgLabel a) (BackendArg op)
 type LabelledArgsOp op env   = PreArgs (LabelledArgOp op env)
 
 instance Show (LabelledArgOp op env a) where
@@ -989,7 +989,7 @@ mkFusionGraph (Alet lhs u bnd scp) = do
 mkFusionGraph (Return vars) = do
   lenv <- use buffersEnv
   c    <- freshComp
-  let (_, bs) = getVarsFromEnv vars lenv
+  let (_, bs, _) = getVarsFromEnv vars lenv
   fold bs <--> c
   symbol c ?= SRet lenv vars
   return bs
@@ -1042,7 +1042,7 @@ mkFusionGraph (Awhile u cond body init) = do
   zoom (scope c_while) do
     c_cond  <- freshComp
     c_body  <- freshComp
-    let (_, init_res) = getVarsFromEnv init lenv
+    let (_, init_res, _) = getVarsFromEnv init lenv
     fold init_res ===> c_while
     symbol c_while ?= SWhl lenv c_cond c_body init u
     (_       , cond_renv, cond_wenv) <- block c_cond (mkFusionGraphW u) cond
@@ -1241,8 +1241,8 @@ mkInplacePaths g = g&fusionILP.inplacePaths .~ validPaths
     validInplaceUpdate ((b1, _), (_, b2)) = case (getAlloc b1, getAlloc b2) of
         (SAlc env1 shr1 e1 sh1, SAlc env2 shr2 e2 sh2)
           | Just Refl <- matchShapeR shr1 shr2
-          , (_, shVars1) <- getVarsFromEnv sh1 env1
-          , (_, shVars2) <- getVarsFromEnv sh2 env2
+          , (_, shVars1, _) <- getVarsFromEnv sh1 env1
+          , (_, shVars2, _) <- getVarsFromEnv sh2 env2
           -> shVars1 == shVars2 && bytes e1 == bytes e2
         (SUnt _ v1, SUnt _ v2)
           -> bytes (varType v1) == bytes (varType v2)
