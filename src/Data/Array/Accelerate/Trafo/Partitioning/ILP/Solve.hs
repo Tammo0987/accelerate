@@ -72,6 +72,9 @@ makeILP obj (FusionILP graph constraints bounds) = combine graphILP
     fusibleE, infusibleE :: S.Set DataflowEdge
     (fusibleE, infusibleE) = graph^.fusionEdges
 
+    inplaceP :: S.Set InplacePath
+    inplaceP = graph^.inplacePaths
+
     combine :: ILP op -> ILP op
     combine (ILP dir fun cons bnds _) =
       ILP dir fun (cons <> constraints) (bnds <> bounds) n
@@ -143,7 +146,7 @@ makeILP obj (FusionILP graph constraints bounds) = combine graphILP
     -- objective function that minimises the total number of array reads + writes
     numberOfArrayReadsWrites = numberOfReads .+. numberOfManifestArrays
 
-    -- objective function that minimises the number of clusters -- only works if the constraint below it is used!
+    -- objective function that minimises the number of clusters only works if the constraint below it is used!
     -- NOTE: this does not work remotely as well as you'd hope, because the ILP outputs clusters that get split afterwards.
     -- This includes independent array operations, which might not be safe to fuse and get no real benefit from fusing,
     -- but also includes independent alloc, compute, etc nodes which we don't even want to count in the first place!
@@ -185,10 +188,45 @@ makeILP obj (FusionILP graph constraints bounds) = combine graphILP
     piB = foldMap (\i -> lowerUpper 0 (Pi i) n) compN
 
     -- x_ij \in {0, 1}
-    fusedB = foldMap (\(i,_,j) -> binary $ Fused i j) dataflowE
+    fusedB = foldMap (binary . uncurry Fused) $ S.map (\(i,_,j) -> (i,j)) dataflowE
 
     -- m_i \in {0, 1}
     manifestB = foldMap (binary . Manifest) buffN
+
+
+    -- For in-place updates:
+
+    -- If an in-place update occurs the computations must be in the same cluster:
+    -- forall ((b1,c1),(c2,b2)) \in inplaceP . pi_c2 - pi_c1 <= n * inplace b1 b2
+    acrossClusterC = foldMap (\((b1,c1),(c2,b2)) -> (pi c2 .-. pi c1) .<=. timesN (inplace b1 b2)) inplaceP
+
+    -- Each buffer may only be used once for an in-place update:
+    -- forall a \in buffN . Sum (1 - inplace a b) <= 1
+    singleUpdateC = foldMap (.<=. int 1) $ foldr (\((a,_),(_,b)) -> M.insertWith (.+.) a (notB $ inplace a b)) M.empty inplaceP
+
+    -- The in-place update is done by cluster Pi_b1 == pi_c2.
+    -- forall ((b1,_),(c2,b2)) \in inplaceP . 0 <= Pi_b1 - pi_c2 <= n * inplace b1 b2
+    inplaceClusterC = foldMap (\((b1,_),(c2,b2)) -> between (int 0) (pimax b1 .-. pi c2) (timesN $ inplace b1 b2)) inplaceP
+
+    -- The in-place update is done by the sole, largest cluster reading the buffer:
+    -- forall ((b1,c1),(_,b2)) \in inplaceP . pi_c1 + inplace b1 b2 <= Pi_b1
+    finalClusterC = foldMap (\((b1,c1),(_,b2)) -> pi c1 .+. inplace b1 b2 .<=. pimax b1) inplaceP
+
+    inplaceCs = acrossClusterC <> singleUpdateC <> inplaceClusterC <> finalClusterC
+
+
+    -- 0 <= pimax_b <= n
+    pimaxB = foldMap (\b -> lowerUpper 0 (PiMax b) n) buffN
+
+    -- inplace_ij \in {0, 1}
+    inplaceB = foldMap (binary . uncurry InPlace) $ S.map (\((i,_),(_,j)) -> (i,j)) inplaceP
+
+    inplaceBs = pimaxB <> inplaceB
+
+
+
+
+
 
 
 

@@ -530,8 +530,8 @@ data Var (op :: Type -> Type)
     -- TODO: Might need to include some additional information to mark the cluster/computation affected by substitution.
   | PiMax (Label Buff)
     -- ^ The cluster number of the largest reader of the buffer, since in-place updates are only allowed on the final consumer of an array/buffer.
-  | WriteDirPiMax (Label Buff)
-    -- ^ The write
+  -- | WriteDirPiMax (Label Buff)
+  --   -- ^ The write direction of the largest reader of the buffer. This is used to check that all reads of the buffer are in the same direction as the write.
 
 deriving instance Eq   (BackendVar op) => Eq   (Var op)
 deriving instance Ord  (BackendVar op) => Ord  (Var op)
@@ -587,6 +587,13 @@ readDir buff = var . ReadDir buff
 -- | Safe constructor for 'WriteDir' variables.
 writeDir :: Label Comp -> Label Buff -> Expression op
 writeDir comp = var . WriteDir comp
+
+-- | Safe constructor for 'InPlace' variables.
+inplace :: Label Buff -> Label Buff -> Expression op
+inplace prod cons = var $ InPlace prod cons
+
+pimax :: Label Buff -> Expression op
+pimax = var . PiMax
 
 
 

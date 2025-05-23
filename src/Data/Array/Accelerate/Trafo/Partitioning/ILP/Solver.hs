@@ -67,7 +67,8 @@ deriving instance Show (Var op) => Show (Expression op)
 
 instance Semigroup (Expression op) where
   (<>) :: Expression op -> Expression op -> Expression op
-  (<>) = (:+)
+  (<>) a (b :+ c) = (a <> b) <> c
+  (<>) a b = a :+ b
 
 instance Monoid (Expression op) where
   mempty :: Expression op
@@ -83,7 +84,10 @@ deriving instance Show (Var op) => Show (Constraint op)
 
 instance Semigroup (Constraint op) where
   (<>) :: Constraint op -> Constraint op -> Constraint op
-  (<>) = (:&&)
+  (<>) TrueConstraint b = b
+  (<>) a TrueConstraint = a
+  (<>) a (b :&& c) = (a <> b) <> c
+  (<>) a b = a :&& b
 
 instance Monoid    (Constraint op) where
   mempty :: Constraint op
@@ -101,7 +105,10 @@ deriving instance Show (Var op) => Show (Bounds op)
 
 instance Semigroup (Bounds op) where
   (<>) :: Bounds op -> Bounds op -> Bounds op
-  (<>) = (:<>)
+  (<>) NoBounds b = b
+  (<>) a NoBounds = a
+  (<>) (a :<> b) c = a <> b <> c
+  (<>) a b = a :<> b
 
 instance Monoid    (Bounds op) where
   mempty :: Bounds op
@@ -110,7 +117,7 @@ instance Monoid    (Bounds op) where
 
 -- | Add two expressions.
 (.+.)  :: Expression op -> Expression op -> Expression op
-(.+.) = (:+)
+(.+.) = (<>)
 infixl 8 .+.
 
 -- | Subtract two expressions.
@@ -121,15 +128,15 @@ infixl 8 .-.
 -- | Multiply an expression by a constant.
 (.*.)  :: Int -> Expression op -> Expression op
 i .*. (Constant (Number f)) = Constant $ Number $ (*i) . f
-i .*. (e1 :+ e2) = (:+) (i .*. e1) (i .*. e2)
-i .*. (Number f :* v) = (:*) (Number ((*i) . f)) v
+i .*. (e1 :+ e2)            = (:+) (i .*. e1) (i .*. e2)
+i .*. (Number f :* v)       = (:*) (Number ((*i) . f)) v
 infixl 8 .*.
 
 -- | Multiply by @n@ (the total number of nodes).
 timesN :: Expression op -> Expression op
 timesN (Constant (Number f)) = Constant (Number (\n -> n * f n))
-timesN ((:+) e1 e2) = (:+) (timesN e1) (timesN e2)
-timesN ((:*) (Number f) v) = (:*) (Number (\n -> n * f n)) v
+timesN ((:+) e1 e2)          = (:+) (timesN e1) (timesN e2)
+timesN ((:*) (Number f) v)   = (:*) (Number (\n -> n * f n)) v
 
 -- | Use a 'Var' in an 'Expression'.
 var :: Var op -> Expression op
@@ -193,7 +200,7 @@ infixl 7 .<.
 between :: Expression op -> Expression op -> Expression op -> Constraint op
 between x y z = x .<=. y <> y .<=. z
 
--- | Not 'Expression'
+-- | Not 'Expression' (i.e. 1 - 'Expression').
 notB :: Expression op -> Expression op
 notB e = int 1 .-. e
 
