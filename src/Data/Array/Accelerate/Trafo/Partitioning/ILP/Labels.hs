@@ -54,6 +54,8 @@ import Debug.Trace
 import Data.Typeable
 import Data.Array.Accelerate.Analysis.Match
 import Unsafe.Coerce (unsafeCoerce)
+import Control.Applicative ((<|>))
+import Data.Array.Accelerate.Representation.Ground (groundRelt)
 
 
 

@@ -54,6 +54,8 @@ import Data.Foldable (Foldable (fold, foldr'), traverse_)
 import Data.Kind (Type)
 import Debug.Trace
 import Unsafe.Coerce (unsafeCoerce)
+import Control.Applicative ((<|>))
+import Data.Maybe (fromMaybe)
 
 --------------------------------------------------------------------------------
 -- Fusion Graph
@@ -951,12 +953,12 @@ instance HasSymbols (FullGraph op) op where
 
 -- | Construct the full fusion graph for a program.
 mkFullGraph :: MakesILP op => PreOpenAcc op () t -> FullGraph op
-mkFullGraph acc = combineInplacePaths $ manifestBuffers (fold res) (s^.fusionILP, s^.symbols)
+mkFullGraph acc = finalizeInplacePaths $ manifestBuffers (fold res) (s^.fusionILP, s^.symbols)
   where (res, s) = runState (mkFusionGraph acc) initialFusionGraphState
 
 -- | Construct the full fusion graph for a function.
 mkFullGraphF :: MakesILP op => PreOpenAfun op () a -> FullGraph op
-mkFullGraphF acc = combineInplacePaths (s^.fusionILP, s^.symbols)
+mkFullGraphF acc = finalizeInplacePaths (s^.fusionILP, s^.symbols)
   where (_, s) = runState (mkFusionGraphF acc) initialFusionGraphState
 
 -- | Make the supplied buffers manifest.
@@ -1236,6 +1238,35 @@ combineInplacePaths g = g&fusionILP.inplacePaths %~ stepsPaths 1000
     nextComps :: Map WriteEdge (Labels Comp)
     nextComps = M.fromListWith S.union $ map (tripleToLeftRec . (_3 %~ S.singleton)) $ S.toList $ g^.fusionILP.fusibleEdges
 
+-- | Filters the in-place update paths to only include those that are valid.
+filterInplacePaths :: forall op. FullGraph op -> FullGraph op
+filterInplacePaths g = g & fusionILP.inplacePaths %~ S.filter sameElementSize
+  where
+    -- Checks if two in-place updates have the same element size.
+    sameElementSize :: InplacePath -> Bool
+    sameElementSize ((b1, _), (_, b2))
+      | Just SFun{} <- g^.allocator b1 = False
+      | Just SFun{} <- g^.allocator b2 = False
+      | otherwise = getElementSize b1 == getElementSize b2
+
+    -- Gets the element size of a buffer.
+    getElementSize :: Label Buff -> Int
+    getElementSize b = case g^.allocator b of
+      Just (SAlc _ _ e _) -> bytes e
+      Just (SUnt _ v)     -> bytes $ varType v
+      Just (SUse e _ _)   -> bytes e
+      Just (SFun _ _)   -> error "getElementSize: don't know how to handle yet"
+      Just _  -> error "getElementSize: not an array allocator"
+      Nothing -> error "getElementSize: no allocator found"
+
+    -- The number of bytes used by a scalar type.
+    bytes :: ScalarType e -> Int
+    bytes = bytesElt . TupRsingle
+
+-- | Finalizes the in-place update paths by combining them and filtering them.
+finalizeInplacePaths :: FullGraph op -> FullGraph op
+finalizeInplacePaths = filterInplacePaths . combineInplacePaths
+
 
 -- | Naive approach: find in-place updates from scratch.
 mkInplacePaths :: forall op. MakesILP op => FullGraph op -> FullGraph op
@@ -1258,14 +1289,8 @@ mkInplacePaths g = g&fusionILP.inplacePaths .~ validPaths
               Nothing -> S.empty
               Just bs -> S.map ((r,).(c,)) bs
 
-    -- The initial, length-1 paths that are formed from computations and all
-    -- their inputs and outputs.
-    initialPaths :: Set InplacePath
-    initialPaths = flip foldMap (g^.fusionILP.readEdges) \r@(_,c) -> case M.lookup c outputMap of
-        Nothing -> S.empty
-        Just bs -> S.map ((r,).(c,)) bs
-
-    -- Checks if the in-place update path is a valid one.
+    -- | Checks if the in-place update path is a valid one.
+    --
     -- An in-place update path is valid if:
     -- 1. We have sole ownership of both buffers. (Alloc, Unit)
     -- 2. The buffers are of the same shape.
@@ -1292,6 +1317,13 @@ mkInplacePaths g = g&fusionILP.inplacePaths .~ validPaths
 
         bytes :: ScalarType e -> Int
         bytes = bytesElt . TupRsingle
+
+    -- The initial, length-1 paths that are formed from computations and all
+    -- their inputs and outputs.
+    initialPaths :: Set InplacePath
+    initialPaths = flip foldMap (g^.fusionILP.readEdges) \r@(_,c) -> case M.lookup c outputMap of
+        Nothing -> S.empty
+        Just bs -> S.map ((r,).(c,)) bs
 
     -- For efficient lookup of outputs of computations.
     outputMap :: Map (Label Comp) (Labels Buff)
