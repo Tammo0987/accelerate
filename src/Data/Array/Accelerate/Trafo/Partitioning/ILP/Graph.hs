@@ -28,15 +28,18 @@ import Data.Array.Accelerate.AST.Idx
 import Data.Array.Accelerate.AST.LeftHandSide
 import Data.Array.Accelerate.AST.Operation hiding (Var)
 import Data.Array.Accelerate.Analysis.Hash.Exp
+import Data.Array.Accelerate.Analysis.Match
 import Data.Array.Accelerate.Array.Buffer
+import Data.Array.Accelerate.Error
+import Data.Array.Accelerate.Representation.Elt
 import Data.Array.Accelerate.Representation.Shape
+import Data.Array.Accelerate.Representation.Type
 import Data.Array.Accelerate.Trafo.Operation.LiveVars
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Labels
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Solver
 import Data.Array.Accelerate.Type
-import Data.Array.Accelerate.Error
 
--- Data structures (including custom Multimap)
+-- Data structures
 import Data.Set (Set)
 import Data.Map (Map)
 import qualified Data.Set as S
@@ -46,17 +49,11 @@ import Lens.Micro
 import Lens.Micro.Mtl
 
 import Control.Monad.State.Strict (State, runState)
-import Data.Foldable ( Foldable(fold, foldl', foldr'), for_, traverse_ )
-import Data.Kind (Type)
-import Unsafe.Coerce (unsafeCoerce)
 import Data.Coerce (coerce)
+import Data.Foldable (Foldable (fold, foldr'), traverse_)
+import Data.Kind (Type)
 import Debug.Trace
-import Data.Typeable
-import Data.Maybe
-import Data.Array.Accelerate.Analysis.Match
-import Data.Array.Accelerate.Representation.Type (TupR(TupRunit, TupRsingle), mapTupR)
-import Data.Array.Accelerate.Representation.Elt
-import Data.List (unfoldr)
+import Unsafe.Coerce (unsafeCoerce)
 
 --------------------------------------------------------------------------------
 -- Fusion Graph
@@ -991,7 +988,7 @@ mkFusionGraph (Alet LeftHandSideUnit _ bnd body)
 -- produced by a single computation, which is currently true because all
 -- instructions attach themselves to the buffer.
 mkFusionGraph (Alet lhs u bnd body) = do
-  c       <- freshComp
+  c       <- freshComp  -- TODO: If there is an issue with reconstruction, maybe move this behind "bndRes <- mkFusionGraph bnd". The order in which labels are generate affects the order in which the clusters are interpreted. Previously let-bindings where always in a separate cluster from the bound computation, but now they are usually in the same cluster to prevent all buffers from being manifest. That said, topsort should already be taking care of this ordering issue.
   lenv    <- use buffersEnv
   bndRes  <- mkFusionGraph bnd
   bndResW <- traverse (use . allWriters) bndRes
