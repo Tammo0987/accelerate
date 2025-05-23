@@ -453,7 +453,7 @@ getVarsFromEnv (TupRpair l r)   env | (el, bsl, ul) <- getVarsFromEnv l env
 
 -- | Get the value associated with a 'Var' from 'BuffersEnv'.
 getVarFromEnv :: Var a env b -> BuffersEnv env -> EnvVal b
-getVarFromEnv (varIdx -> idx) = lookupIdxInEnv idx
+getVarFromEnv = lookupIdxInEnv . varIdx
 
 -- | Get the value associated with an 'Idx' from 'BuffersEnv'.
 lookupIdxInEnv :: Idx env t -> BuffersEnv env -> EnvVal t
