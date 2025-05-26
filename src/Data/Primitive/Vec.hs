@@ -107,6 +107,7 @@ instance (S.Storable a, Prim a, KnownNat n) => S.Storable (Vec n a) where
         | otherwise = do
           value <- S.peekElemOff elemPtr i
           writeByteArray mba i value
+          go (i + 1)
     go 0
     ByteArray ba# <- unsafeFreezeByteArray mba
     return $! Vec ba#
@@ -118,6 +119,7 @@ instance (S.Storable a, Prim a, KnownNat n) => S.Storable (Vec n a) where
         | otherwise = do
           let value = indexByteArray# ba# i#
           S.pokeElemOff elemPtr i value
+          go (i + 1)
     go 0
 
 listOfVec :: forall a n. (Prim a, KnownNat n) => Vec n a -> [a]
