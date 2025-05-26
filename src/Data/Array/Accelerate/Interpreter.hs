@@ -98,6 +98,7 @@ import Control.Monad (when)
 import Data.Array.Accelerate.Trafo.Var (DeclareVars(DeclareVars), declareVars)
 import Data.Array.Accelerate.Trafo.Operation.Substitution (alet, aletUnique, weaken, LHS (LHS), mkLHS)
 import Data.Map (Map)
+import Data.Functor.Identity
 import System.IO.Unsafe (unsafePerformIO)
 
 data Interpreter
@@ -468,7 +469,7 @@ executeSchedule !env = \case
 executeBinding :: Val env -> S.Binding env t -> IO t
 executeBinding env = \case
   S.Compute expr ->
-    return $ evalExp expr (evalArrayInstrDefault env)
+    return $ runIdentity $ evalExp expr (evalArrayInstrDefault env)
   S.NewSignal _ -> do
     mvar <- newEmptyMVar
     return (S.Signal mvar, S.SignalResolver mvar)
@@ -742,33 +743,37 @@ fromFunction' repr sh f = (TupRsingle repr, fromFunction repr sh f)
 -- Scalar expression evaluation
 -- ----------------------------
 
-newtype EvalArrayInstr arr = EvalArrayInstr (forall s t. arr (s -> t) -> s -> t)
+newtype EvalArrayInstr m arr = EvalArrayInstr (forall s t. arr (s -> t) -> s -> m t)
 
-evalArrayInstrDefault :: Val aenv -> EvalArrayInstr (ArrayInstr aenv)
+evalArrayInstrDefault :: Val aenv -> EvalArrayInstr Identity (ArrayInstr aenv)
 evalArrayInstrDefault aenv = EvalArrayInstr $ \instr arg -> case instr of
-  Index buffer  -> indexBuffer (groundRelt $ varType buffer) (prj (varIdx buffer) aenv) arg
-  Parameter var -> prj (varIdx var) aenv
+  Index buffer  -> return $ indexBuffer (groundRelt $ varType buffer) (prj (varIdx buffer) aenv) arg
+  Parameter var -> return $ prj (varIdx var) aenv
 
-evalNoArrayInstr :: EvalArrayInstr NoArrayInstr
+evalNoArrayInstr :: EvalArrayInstr m NoArrayInstr
 evalNoArrayInstr = EvalArrayInstr $ \case {}
 
 -- Evaluate a closed scalar expression
 --
-evalExp :: HasCallStack => PreOpenExp arr () t -> EvalArrayInstr arr -> t
+evalExp :: (Monad m, HasCallStack) => PreOpenExp arr () t -> EvalArrayInstr m arr -> m t
 evalExp e = evalOpenExp e Empty
 
 -- Evaluate a closed scalar function
 --
-evalFun :: HasCallStack => PreOpenFun arr () t -> EvalArrayInstr arr -> t
+evalFun :: HasCallStack => PreOpenFun arr () t -> EvalArrayInstr Identity arr -> t
 evalFun f = evalOpenFun f Empty
 
 -- Evaluate an open scalar function
 --
-evalOpenFun :: HasCallStack => PreOpenFun arr env t -> Val env -> EvalArrayInstr arr -> t
-evalOpenFun (Body e)    env arr = evalOpenExp e env arr
+evalOpenFun :: HasCallStack => PreOpenFun arr env t -> Val env -> EvalArrayInstr Identity arr -> t
+evalOpenFun (Body e)    env arr = runIdentity $ evalOpenExp e env arr
 evalOpenFun (Lam lhs f) env arr =
   \x -> evalOpenFun f (env `push` (lhs, x)) arr
 
+evalUnaryFun :: (Monad m, HasCallStack) => PreOpenFun arr env (s -> t) -> Val env -> EvalArrayInstr m arr -> s -> m t
+evalUnaryFun (Lam lhs (Body e)) env arr x =
+  evalOpenExp e (env `push` (lhs, x)) arr
+evalUnaryFun _ _ _ _ = internalError "Expected unary function"
 
 -- Evaluate an open scalar expression
 --
@@ -779,36 +784,51 @@ evalOpenFun (Lam lhs f) env arr =
 --     leading to a large amount of wasteful recomputation.
 --
 evalOpenExp
-    :: forall env arr t. HasCallStack
+    :: forall env arr m t. (Monad m, HasCallStack)
     => PreOpenExp arr env t
     -> Val env
-    -> EvalArrayInstr arr
-    -> t
+    -> EvalArrayInstr m arr
+    -> m t
 evalOpenExp pexp env arr@(EvalArrayInstr runArrayInstr) =
   let
-      evalE :: PreOpenExp arr env t' -> t'
+      evalE :: PreOpenExp arr env t' -> m t'
       evalE e = evalOpenExp e env arr
 
-      evalF :: PreOpenFun arr env f' -> f'
-      evalF f = evalOpenFun f env arr
+      evalF :: PreOpenFun arr env (s -> t') -> s -> m t'
+      evalF f = evalUnaryFun f env arr
   in
   case pexp of
-    Let lhs exp1 exp2           -> let !v1  = evalE exp1
-                                       env' = env `push` (lhs, v1)
-                                   in  evalOpenExp exp2 env' arr
-    Evar (Var _ ix)             -> prj ix env
-    Const _ c                   -> c
-    Undef tp                    -> undefElt (TupRsingle tp)
-    PrimConst c                 -> evalPrimConst c
-    PrimApp f x                 -> evalPrim f (evalE x)
-    Nil                         -> ()
-    Pair e1 e2                  -> let !x1 = evalE e1
-                                       !x2 = evalE e2
-                                   in  (x1, x2)
-    VecPack   vecR e            -> pack   vecR $! evalE e
-    VecUnpack vecR e            -> unpack vecR $! evalE e
-    IndexSlice slice slix sh    -> restrict slice (evalE slix)
-                                                  (evalE sh)
+    Let lhs exp1 exp2 -> do
+      !v1 <- evalE exp1
+      let env' = env `push` (lhs, v1)
+      evalOpenExp exp2 env' arr
+    Evar (Var _ ix) ->
+      return $ prj ix env
+    Const _ c ->
+      return c
+    Undef tp ->
+      return $ undefElt (TupRsingle tp)
+    PrimConst c ->
+      return $ evalPrimConst c
+    PrimApp f x -> do
+      !v <- evalE x
+      return $ evalPrim f v
+    Nil ->
+      return ()
+    Pair e1 e2 -> do
+      !v1 <- evalE e1
+      !v2 <- evalE e2
+      return (v1, v2)
+    VecPack vecR e -> do
+      !v <- evalE e
+      return $ pack vecR v
+    VecUnpack vecR e -> do
+      !v <- evalE e
+      return $ unpack vecR v
+    IndexSlice slice slix sh -> do
+      !slix' <- evalE slix
+      !sh' <- evalE sh
+      return $ restrict slice slix' sh'
       where
         restrict :: SliceIndex slix sl co sh -> slix -> sh -> sl
         restrict SliceNil              ()        ()         = ()
@@ -818,8 +838,10 @@ evalOpenExp pexp env arr@(EvalArrayInstr runArrayInstr) =
         restrict (SliceFixed sliceIdx) (slx, _i)  (sl, _sz) =
           restrict sliceIdx slx sl
 
-    IndexFull slice slix sh     -> extend slice (evalE slix)
-                                                (evalE sh)
+    IndexFull slice slix sh -> do
+      !slix' <- evalE slix
+      !sh' <- evalE sh
+      return $ extend slice slix' sh'
       where
         extend :: SliceIndex slix sl co sh -> slix -> sl -> sh
         extend SliceNil              ()        ()       = ()
@@ -830,9 +852,17 @@ evalOpenExp pexp env arr@(EvalArrayInstr runArrayInstr) =
           let sh' = extend sliceIdx slx sl
           in  (sh', sz)
 
-    ToIndex shr sh ix           -> toIndex shr (evalE sh) (evalE ix)
-    FromIndex shr sh ix         -> fromIndex shr (evalE sh) (evalE ix)
-    Case e rhs def              -> evalE (caseof (evalE e) rhs)
+    ToIndex shr sh ix -> do
+      !sh' <- evalE sh
+      !ix' <- evalE ix
+      return $ toIndex shr sh' ix'
+    FromIndex shr sh ix -> do
+      !sh' <- evalE sh
+      !ix' <- evalE ix
+      return $ fromIndex shr sh' ix'
+    Case e rhs def -> do
+      !v <- evalE e
+      evalE $ caseof v rhs
       where
         caseof :: TAG -> [(TAG, PreOpenExp arr env t)] -> PreOpenExp arr env t
         caseof tag = go
@@ -844,22 +874,34 @@ evalOpenExp pexp env arr@(EvalArrayInstr runArrayInstr) =
               | Just d <- def = d
               | otherwise     = internalError "unmatched case"
 
-    Cond c t e
-      | toBool (evalE c)        -> evalE t
-      | otherwise               -> evalE e
+    Cond c t e -> do
+      !v <- evalE c
+      if toBool v then evalE t else evalE e
 
-    While cond body seed        -> go (evalE seed)
+    While cond body seed ->
+      evalE seed >>= go
       where
-        f       = evalF body
-        p       = evalF cond
-        go !x
-          | toBool (p x) = go (f x)
-          | otherwise    = x
+        go !x = do
+          c <- evalF cond x
+          if toBool c then
+            evalF body x >>= go
+          else
+            return x
 
-    ArrayInstr instr ix         -> runArrayInstr instr (evalE ix)
-    ShapeSize shr sh            -> size shr (evalE sh)
-    Foreign _ _ f e             -> evalOpenFun f Empty evalNoArrayInstr $ evalE e
-    Coerce t1 t2 e              -> evalCoerceScalar t1 t2 (evalE e)
+    ArrayInstr instr ix -> do
+      ix' <- evalE ix
+      runArrayInstr instr ix'
+    ShapeSize shr sh -> do
+      !sh' <- evalE sh
+      return $ size shr sh'
+    Foreign _ _ f e -> do
+      x <- evalE e
+      -- We execute 'f' in the Identity monad instead of monad 'm', since
+      -- it does not contain array instructions.
+      return $ evalOpenFun f Empty evalNoArrayInstr x
+    Coerce t1 t2 e -> do
+      x <- evalE e
+      return $ evalCoerceScalar t1 t2 x
 
 
 -- Coercions
