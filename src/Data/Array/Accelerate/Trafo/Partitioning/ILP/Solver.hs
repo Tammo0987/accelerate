@@ -21,6 +21,7 @@ import qualified Data.Set as S
 -- `Information` contains `Constraint` and `Bounds` from `ILPSolver`.
 -- I did not want to put them in the same module, so here we are.
 import {-# SOURCE #-} Data.Array.Accelerate.Trafo.Partitioning.ILP.Graph ( Var, MakesILP )
+import Data.Foldable
 
 
 -- Currently the only instance is for MIP, which gives bindings to a couple of solvers.
@@ -206,20 +207,48 @@ notB e = int 1 .-. e
 
 -- | If a is 0, then b is 0.
 impliesB :: Expression op -> Expression op -> Constraint op
-impliesB a b = a .>=. b
+impliesB = (.>=.)
+
+-- -- | Iff a and b are 0, then r is 0.
+-- andB :: Expression op -> Expression op -> Expression op -> Constraint op
+-- andB a b r = orB (notB a) (notB b) (notB r)
 
 -- | Iff a and b are 0, then r is 0.
+--
+-- Source: "Formulating Integer Linear Programs: A Rogues' Gallery", B3
 andB :: Expression op -> Expression op -> Expression op -> Constraint op
-andB a b r = orB (notB a) (notB b) (notB r)
+andB a b r = r .<=. a .+. b
+          <> r .>=. a
+          <> r .>=. b
+
+-- | Iff all xs are 0, then r is 0.
+allB :: Foldable f => f (Expression op) -> Expression op -> Constraint op
+allB xs r | null xs   = TrueConstraint
+          | otherwise = r .<=. fold xs
+                     <> foldMap (r .>=.) xs
+
+-- -- | Iff a and b are 1, then r is 1.
+-- -- not sure if this encoding is new, nor whether it is the simplest, but I think it works.
+-- -- perhaps defining andB is easier than defining orB?
+-- orB :: Expression op -> Expression op -> Expression op -> Constraint op
+-- orB a b r =
+--   (2 .*. r .<=. a .+. b) -- r can only be 1 if both a and b are 1, so this line fixes 3/4 cases
+--   <>
+--   (r .+. int 1 .>=. a .+. b) -- and this line forces r to be 1 if a and b are both 1, while not restricting the other cases
 
 -- | Iff a and b are 1, then r is 1.
--- not sure if this encoding is new, nor whether it is the simplest, but I think it works.
--- perhaps defining andB is easier than defining orB?
+--
+-- Source: "Formulating Integer Linear Programs: A Rogues' Gallery", B2
 orB :: Expression op -> Expression op -> Expression op -> Constraint op
-orB a b r =
-  (2 .*. r .<=. a .+. b) -- r can only be 1 if both a and b are 1, so this line fixes 3/4 cases
-  <>
-  (r .+. int 1 .>=. a .+. b) -- and this line forces r to be 1 if a and b are both 1, while not restricting the other cases
+orB a b r = r .+. int 1 .>=. a .+. b
+         <> r .<=. a
+         <> r .<=. b
+
+-- | Iff all xs are 1, then r is 1.
+anyB :: Foldable f => f (Expression op) -> Expression op -> Constraint op
+anyB xs r | null xs   = TrueConstraint
+          | otherwise = r .+. int (length xs - 1) .>=. fold xs
+                     <> foldMap (r .<=.) xs
 
 isEqualRangeN :: Expression op -> Expression op -> Expression op -> Constraint op
 isEqualRangeN = isEqualRange timesN

@@ -5,6 +5,7 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE BlockArguments #-}
 
 module Data.Array.Accelerate.Trafo.Partitioning.ILP.Solve where
 
@@ -15,7 +16,7 @@ import Data.Array.Accelerate.Trafo.Partitioning.ILP.Labels
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Solver hiding (finalize)
 
 import Data.List (groupBy, sortOn)
-import Prelude hiding ( pi, read )
+import Prelude hiding (sum, pi, read )
 
 import qualified Data.Map as M
 
@@ -30,7 +31,7 @@ import Lens.Micro.Extras ( view )
 import Data.Maybe (fromJust,  mapMaybe )
 import Control.Monad.State
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.NameGeneration (freshName)
-import Data.Foldable
+import Data.Foldable hiding (sum)
 import Data.Tuple (swap)
 import Debug.Trace
 
@@ -85,7 +86,7 @@ makeILP obj (FusionILP graph constraints bounds) = combine graphILP
     n :: Int
     n = 10 + 2 * S.size compN
 
-    graphILP = ILP minmax objFun myConstraints myBounds n
+    graphILP = ILP minmax objFun allConstraints allBounds n
 
     -- Since we want all clusters to have one 'iteration size', the final objFun should
     -- take care to never reward 'fusing' disjoint clusters, and then slightly penalise it.
@@ -160,7 +161,7 @@ makeILP obj (FusionILP graph constraints bounds) = combine graphILP
       Everything  -> foldMap (\l -> pi l .<=. numberOfClusters) compN
       _ -> mempty
 
-    myConstraints = fusibleAcyclicC <> strictAcyclicC <> infusibleC <> manifestC
+    fusionConstraints = fusibleAcyclicC <> strictAcyclicC <> infusibleC <> manifestC
       <> numberOfClustersC <> readC <> orderC <> finalize graph
 
     -- x_ij <= pi_j - pi_i <= n*x_ij for all fusible edges
@@ -174,15 +175,34 @@ makeILP obj (FusionILP graph constraints bounds) = combine graphILP
 
     -- if (i,b,j) is not fused, b has to be manifest
     -- TODO: final output is also manifest
-    manifestC = foldMap (\(i,b,j) -> notB (fused i j) `impliesB` manifest b) dataflowE
+    -- manifestC = foldMap (\(i,b,j) -> notB (fused i j) `impliesB` manifest b) dataflowE
+
+    -- if b is manifest, then sum_(i,b,j) 1 - x_ij >= 1 for all buffers b
+    -- ==> 1 - manifest b <= sum_(i,b,j) x_ij
+    -- strictManifestC
+    --   = M.foldMapWithKey (\b sum -> int 1 .-. manifest b .<=. sum)
+    --   $ foldl (flip \(i,b,j) -> M.insertWith (.+.) b (int 1 .-. fused i j)) M.empty dataflowE
+
+    -- forall b, iff all (i,b,j) are fused, then b is not manifest.
+    manifestC = M.foldMapWithKey (\b ijs -> allB (map (uncurry fused) ijs) (notB $ manifest b))
+              $ foldl (flip \(i,b,j) -> M.insertWith (<>) b [(i,j)]) M.empty dataflowE
+
+    -- -- Alternative, stricter manifestC:
+    -- -- iff b is     manifest, then sum_(i,b,j) x_ij >= 1 for all buffers b
+    -- -- iff b is not manifest, then sum_(i,b,j) x_ij == 0 for all buffers b
+    -- -- i.e. manifest b <= sum_(i,b,j) 1-x_ij <= 1 - manifest b
+    -- manifestC = M.foldMapWithKey (\b ijs -> between (notB $ manifest b) (foldMap (notB . uncurry fused) ijs) (S.size ijs .*. notB (manifest b))) fusedVarGroups
+
+    fusedVarGroups :: M.Map (Label Buff) (S.Set (Label Comp, Label Comp))
+    fusedVarGroups = foldl (flip \(i,b,j) -> M.insertWith S.union b (S.singleton (i,j))) M.empty dataflowE
 
     -- if (i,b,j) is fused, d_bj == d_ib
     orderC = flip foldMap fusibleE $ \(i,b,j) ->
                   timesN (fused i j) .>=. readDir b j .-. writeDir i b
       <> (-1) .*. timesN (fused i j) .<=. readDir b j .-. writeDir i b
 
-    myBounds :: Bounds op
-    myBounds = piB <> fusedB <> manifestB <> readB
+    fusionBounds :: Bounds op
+    fusionBounds = piB <> fusedB <> manifestB <> readB
 
     --  0 <= pi_i <= n
     piB = foldMap (\i -> lowerUpper 0 (Pi i) n) compN
@@ -202,7 +222,7 @@ makeILP obj (FusionILP graph constraints bounds) = combine graphILP
 
     -- Each buffer may only be used once for an in-place update:
     -- forall a \in buffN . Sum (1 - inplace a b) <= 1
-    singleUpdateC = foldMap (.<=. int 1) $ foldr (\((a,_),(_,b)) -> M.insertWith (.+.) a (notB $ inplace a b)) M.empty inplaceP
+    singleUpdateC = foldMap (.<=. int 1) $ foldl (flip \((a,_),(_,b)) -> M.insertWith (.+.) a (notB $ inplace a b)) M.empty inplaceP
 
     -- The in-place update is done by cluster Pi_b1 == pi_c2.
     -- forall ((b1,_),(c2,b2)) \in inplaceP . 0 <= Pi_b1 - pi_c2 <= n * inplace b1 b2
@@ -212,7 +232,7 @@ makeILP obj (FusionILP graph constraints bounds) = combine graphILP
     -- forall ((b1,c1),(_,b2)) \in inplaceP . pi_c1 + inplace b1 b2 <= Pi_b1
     finalClusterC = foldMap (\((b1,c1),(_,b2)) -> pi c1 .+. inplace b1 b2 .<=. pimax b1) inplaceP
 
-    inplaceCs = acrossClusterC <> singleUpdateC <> inplaceClusterC <> finalClusterC
+    inplaceConstraints = acrossClusterC <> singleUpdateC <> inplaceClusterC <> finalClusterC
 
 
     -- 0 <= pimax_b <= n
@@ -221,7 +241,11 @@ makeILP obj (FusionILP graph constraints bounds) = combine graphILP
     -- inplace_ij \in {0, 1}
     inplaceB = foldMap (binary . uncurry InPlace) $ S.map (\((i,_),(_,j)) -> (i,j)) inplaceP
 
-    inplaceBs = pimaxB <> inplaceB
+    inplaceBounds = pimaxB <> inplaceB
+
+
+    allConstraints = fusionConstraints <> inplaceConstraints
+    allBounds      = fusionBounds <> inplaceBounds
 
 
 

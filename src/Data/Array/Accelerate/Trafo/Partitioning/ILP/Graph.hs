@@ -579,7 +579,7 @@ manifest :: Label Buff -> Expression op
 manifest = var . Manifest
 
 -- | Safe constructor for 'Fused' variables.
-fused :: HasCallStack => Label Comp -> Label Comp -> Expression op
+fused :: Label Comp -> Label Comp -> Expression op
 fused prod cons  = var $ Fused prod cons
 
 -- | Safe constructor for 'ReadDir' variables.

@@ -82,7 +82,7 @@ ilpFusion' :: (MakesILP op, ILPSolver s op)
 ilpFusion' toGraph fromGraph s obj acc = do
   let fullgraph = {- traceGraph $ -} toGraph acc
   let ilp       = makeILP obj (fullgraph^.fusionILP)
-  let solution  = fromMaybe (error "Accelerate: No ILP solution found") (unsafePerformIO $ solve s ilp)
+  let solution  = {- traceWith ppSolution $ -} fromMaybe (error "Accelerate: No ILP solution found") (unsafePerformIO $ solve s ilp)
   let symbols'  = attachBackendLabels solution (fullgraph^.symbols)
   let readDirM  = interpretReadDirs  solution
   -- let writeDirM = interpretWriteDirs solution
@@ -99,8 +99,9 @@ ppSolution solution = "solution: " ++ foldMap ppVar (toList solution)
   where
     ppVar :: (Var op, Int) -> String
     ppVar (k, v) = case k of
-      Pi{} -> "\n" ++ show k ++ " == " ++ show v
+      Pi{}             -> "\n" ++ show k ++ " == " ++ show v
       Fused{} | v == 0 -> "\n" ++ show k
+      Manifest{}       -> "\n" ++ show k ++ " == " ++ show v
       _ -> ""
 
 ppList :: Show a => [a] -> String
