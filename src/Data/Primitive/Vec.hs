@@ -41,6 +41,8 @@ import Data.Primitive.ByteArray
 import Data.Primitive.Types
 import Language.Haskell.TH.Extra
 import Prettyprinter
+import qualified Foreign.Storable as S
+import Foreign.Ptr
 
 import GHC.Base                                                     ( isTrue# )
 import GHC.Int
@@ -92,6 +94,31 @@ instance (Show a, Prim a, KnownNat n) => Show (Vec n a) where
       vec = show
           . group . encloseSep (flatAlt "< " "<") (flatAlt " >" ">") ", "
           . map viaShow
+
+instance (S.Storable a, Prim a, KnownNat n) => S.Storable (Vec n a) where
+  sizeOf _ = S.sizeOf (undefined :: a) * fromIntegral (natVal' (proxy# :: Proxy# n))
+  alignment _ = S.alignment (undefined :: a)
+  peek vecPtr = do
+    let elemPtr = castPtr vecPtr :: Ptr a
+    mba <- newByteArray $ sizeOf (undefined :: a) * fromIntegral (natVal' (proxy# :: Proxy# n))
+    let
+      go i
+        | i == fromIntegral (natVal' (proxy# :: Proxy# n)) = return ()
+        | otherwise = do
+          value <- S.peekElemOff elemPtr i
+          writeByteArray mba i value
+    go 0
+    ByteArray ba# <- unsafeFreezeByteArray mba
+    return $! Vec ba#
+  poke vecPtr (Vec ba#) = do
+    let
+      elemPtr = castPtr vecPtr :: Ptr a
+      go i@(I# i#)
+        | i == fromIntegral (natVal' (proxy# :: Proxy# n)) = return ()
+        | otherwise = do
+          let value = indexByteArray# ba# i#
+          S.pokeElemOff elemPtr i value
+    go 0
 
 listOfVec :: forall a n. (Prim a, KnownNat n) => Vec n a -> [a]
 listOfVec (Vec ba#) = go 0#

@@ -412,10 +412,10 @@ library
         Data.Array.Accelerate.Analysis.Hash.Schedule.Uniform
         Data.Array.Accelerate.Analysis.Match
         Data.Array.Accelerate.Array.Buffer
-        Data.Array.Accelerate.Array.Remote
-        Data.Array.Accelerate.Array.Remote.Class
-        Data.Array.Accelerate.Array.Remote.LRU
-        Data.Array.Accelerate.Array.Remote.Table
+        -- Data.Array.Accelerate.Array.Remote
+        -- Data.Array.Accelerate.Array.Remote.Class
+        -- Data.Array.Accelerate.Array.Remote.LRU
+        -- Data.Array.Accelerate.Array.Remote.Table
         Data.Array.Accelerate.Async
         Data.Array.Accelerate.Backend
         Data.Array.Accelerate.Error

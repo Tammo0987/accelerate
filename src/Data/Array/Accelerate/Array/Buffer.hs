@@ -34,7 +34,7 @@
 module Data.Array.Accelerate.Array.Buffer (
 
   -- * Array operations and representations
-  Buffers, Buffer(..), MutableBuffers, MutableBuffer(..), ScalarArrayDataR,
+  Buffers, Buffer(..), MutableBuffers, MutableBuffer(..),
   runBuffers,
   newBuffers, newBuffer,
   indexBuffers, indexBuffers', indexBuffer, readBuffers, readBuffer, writeBuffers, writeBuffer,
@@ -47,9 +47,7 @@ module Data.Array.Accelerate.Array.Buffer (
   HTYPE_INT, HTYPE_WORD, HTYPE_CLONG, HTYPE_CULONG, HTYPE_CCHAR,
 
   -- * Utilities for type classes
-  SingleArrayDict(..), singleArrayDict,
-  ScalarArrayDict(..), scalarArrayDict,
-  scalarArrayDataR,
+  ScalarArrayDict(..), ScalarArrayDict,
 
   -- * TemplateHaskell
   liftBuffers, liftBuffer,
@@ -95,7 +93,7 @@ import System.Mem
 -- e.g. the shape of the array should be stored elsewhere.
 -- Replaces the former 'ScalarArrayData' type synonym.
 --
-newtype Buffer e = Buffer (ForeignPtr (ScalarArrayDataR e))
+newtype Buffer e = Buffer (ForeignPtr e)
 
 -- | A structure of buffers represents an array, corresponding to the SoA conversion.
 -- Replaces the old 'ArrayData' and 'MutableArrayData' type aliasses and the
@@ -103,28 +101,8 @@ newtype Buffer e = Buffer (ForeignPtr (ScalarArrayDataR e))
 --
 type Buffers e = Distribute Buffer e
 
-newtype MutableBuffer e = MutableBuffer (ForeignPtr (ScalarArrayDataR e))
+newtype MutableBuffer e = MutableBuffer (ForeignPtr e)
 type MutableBuffers e = Distribute MutableBuffer e
-
--- | Mapping from scalar type to the type as represented in memory in an
--- array.
---
-type family ScalarArrayDataR t where
-  {- ScalarArrayDataR Int       = Int
-  ScalarArrayDataR Int8      = Int8
-  ScalarArrayDataR Int16     = Int16
-  ScalarArrayDataR Int32     = Int32
-  ScalarArrayDataR Int64     = Int64
-  ScalarArrayDataR Word      = Word
-  ScalarArrayDataR Word8     = Word8
-  ScalarArrayDataR Word16    = Word16
-  ScalarArrayDataR Word32    = Word32
-  ScalarArrayDataR Word64    = Word64
-  ScalarArrayDataR Half      = Half
-  ScalarArrayDataR Float     = Float
-  ScalarArrayDataR Double    = Double -}
-  ScalarArrayDataR (Vec n t) = t
-  ScalarArrayDataR t         = t
 
 -- SEE: [HLS and GHC IDE]
 --
@@ -157,14 +135,8 @@ runQ $ do
   return []
 
 data ScalarArrayDict a where
-  ScalarArrayDict :: ( Buffers a ~ Buffer a, ScalarArrayDataR a ~ ScalarArrayDataR b, Storable b, Buffers b ~ Buffer b )
-                  => {-# UNPACK #-} !Int    -- vector width
-                  -> SingleType b           -- base type
-                  -> ScalarArrayDict a 
-
-data SingleArrayDict a where
-  SingleArrayDict :: ( Buffers a ~ Buffer a, ScalarArrayDataR a ~ a, Storable a )
-                  => SingleArrayDict a
+  ScalarArrayDict :: ( Buffers a ~ Buffer a, Storable a )
+                  => ScalarArrayDict a
 
 
 scalarArrayDict :: ScalarType a -> ScalarArrayDict a
@@ -173,45 +145,41 @@ scalarArrayDict = scalar
     scalar :: ScalarType a -> ScalarArrayDict a
     scalar (VectorScalarType t) = vector t
     scalar (SingleScalarType t)
-      | SingleArrayDict <- singleArrayDict t
-      = ScalarArrayDict 1 t
+      | ScalarArrayDict <- singleArrayDict t
+      = ScalarArrayDict
 
     vector :: VectorType a -> ScalarArrayDict a
     vector (VectorType w s)
-      | SingleArrayDict <- singleArrayDict s
-      = ScalarArrayDict w s 
+      | ScalarArrayDict <- singleArrayDict s
+      , SingleDict <- singleDict s
+      = ScalarArrayDict
 
-singleArrayDict :: SingleType a -> SingleArrayDict a
+singleArrayDict :: SingleType a -> ScalarArrayDict a
 singleArrayDict = single
   where
-    single :: SingleType a -> SingleArrayDict a
+    single :: SingleType a -> ScalarArrayDict a
     single (NumSingleType t) = num t
 
-    num :: NumType a -> SingleArrayDict a
+    num :: NumType a -> ScalarArrayDict a
     num (IntegralNumType t) = integral t
     num (FloatingNumType t) = floating t
 
-    integral :: IntegralType a -> SingleArrayDict a
-    integral TypeInt    = SingleArrayDict
-    integral TypeInt8   = SingleArrayDict
-    integral TypeInt16  = SingleArrayDict
-    integral TypeInt32  = SingleArrayDict
-    integral TypeInt64  = SingleArrayDict
-    integral TypeWord   = SingleArrayDict
-    integral TypeWord8  = SingleArrayDict
-    integral TypeWord16 = SingleArrayDict
-    integral TypeWord32 = SingleArrayDict
-    integral TypeWord64 = SingleArrayDict
+    integral :: IntegralType a -> ScalarArrayDict a
+    integral TypeInt    = ScalarArrayDict
+    integral TypeInt8   = ScalarArrayDict
+    integral TypeInt16  = ScalarArrayDict
+    integral TypeInt32  = ScalarArrayDict
+    integral TypeInt64  = ScalarArrayDict
+    integral TypeWord   = ScalarArrayDict
+    integral TypeWord8  = ScalarArrayDict
+    integral TypeWord16 = ScalarArrayDict
+    integral TypeWord32 = ScalarArrayDict
+    integral TypeWord64 = ScalarArrayDict
 
-    floating :: FloatingType a -> SingleArrayDict a
-    floating TypeHalf   = SingleArrayDict
-    floating TypeFloat  = SingleArrayDict
-    floating TypeDouble = SingleArrayDict
-
-scalarArrayDataR :: ScalarType t -> SingleType (ScalarArrayDataR t)
-scalarArrayDataR (VectorScalarType (VectorType _ t)) = t
-scalarArrayDataR (SingleScalarType t)
-  | SingleArrayDict <- singleArrayDict t = t
+    floating :: FloatingType a -> ScalarArrayDict a
+    floating TypeHalf   = ScalarArrayDict
+    floating TypeFloat  = ScalarArrayDict
+    floating TypeDouble = ScalarArrayDict
 
 -- Array operations
 -- ----------------
@@ -223,15 +191,9 @@ newBuffers (TupRsingle t)   !size
   | Refl <- reprIsSingle @ScalarType @e @MutableBuffer t = newBuffer t size
 
 newBuffer :: HasCallStack => ScalarType e -> Int -> IO (MutableBuffer e)
-newBuffer (SingleScalarType s) !size
-  | SingleDict      <- singleDict s
-  , SingleArrayDict <- singleArrayDict s
+newBuffer tp !size
+  | ScalarArrayDict <- scalarArrayDict tp
   = MutableBuffer <$> allocateArray size
-newBuffer (VectorScalarType v) !size
-  | VectorType w s  <- v
-  , SingleDict      <- singleDict s
-  , SingleArrayDict <- singleArrayDict s
-  = MutableBuffer <$> allocateArray (w * size)
 
 indexBuffers :: TypeR e -> Buffers e -> Int -> e
 indexBuffers tR arr ix = unsafePerformIO $ indexBuffers' tR arr ix
@@ -249,25 +211,9 @@ readBuffers (TupRsingle t)   !buffer  !ix
   | Refl <- reprIsSingle @ScalarType @e @MutableBuffer t = readBuffer t buffer ix
 
 readBuffer :: forall e. ScalarType e -> MutableBuffer e -> Int -> IO e
-readBuffer (SingleScalarType s) !(MutableBuffer buffer) !ix
-  | SingleDict      <- singleDict s
-  , SingleArrayDict <- singleArrayDict s
+readBuffer tp !(MutableBuffer buffer) !ix
+  | ScalarArrayDict <- scalarArrayDict tp
   = withForeignPtr buffer $ \ptr -> peekElemOff ptr ix
-readBuffer (VectorScalarType v) !(MutableBuffer buffer) (I# ix#)
-  | VectorType (I# w#) s <- v
-  , SingleDict           <- singleDict s
-  , SingleArrayDict      <- singleArrayDict s
-  = withForeignPtr buffer $ \ptr ->
-    let
-        !bytes# = w# *# sizeOf# (undefined :: ScalarArrayDataR e)
-        !addr#  = unPtr# ptr `plusAddr#` (ix# *# bytes#)
-     in
-     IO $ \s0 ->
-       case newAlignedPinnedByteArray# bytes# 16# s0     of { (# s1, mba# #) ->
-       case copyAddrToByteArray# addr# mba# 0# bytes# s1 of { s2             ->
-       case unsafeFreezeByteArray# mba# s2               of { (# s3, ba# #)  ->
-         (# s3, Vec ba# #)
-       }}}
 
 writeBuffers :: forall e. TypeR e -> MutableBuffers e -> Int -> e -> IO ()
 writeBuffers TupRunit         ()       !_  ()       = return ()
@@ -276,26 +222,9 @@ writeBuffers (TupRsingle t)   arr      !ix !val
   | Refl <- reprIsSingle @ScalarType @e @MutableBuffer t = writeBuffer t arr ix val
 
 writeBuffer :: forall e. ScalarType e -> MutableBuffer e -> Int -> e -> IO ()
-writeBuffer (SingleScalarType s) (MutableBuffer buffer) !ix !val
-  | SingleDict <- singleDict s
-  , SingleArrayDict <- singleArrayDict s
+writeBuffer tp (MutableBuffer buffer) !ix !val
+  | ScalarArrayDict <- scalarArrayDict tp
   = withForeignPtr buffer $ \ptr -> pokeElemOff ptr ix val
-writeBuffer (VectorScalarType v) (MutableBuffer buffer) (I# ix#) (Vec ba#)
-  | VectorType (I# w#) s <- v
-  , SingleDict           <- singleDict s
-  , SingleArrayDict      <- singleArrayDict s
-  = withForeignPtr buffer $ \ptr ->
-    let
-       !bytes# = w# *# sizeOf# (undefined :: ScalarArrayDataR e)
-       !addr#  = unPtr# ptr `plusAddr#` (ix# *# bytes#)
-     in
-     IO $ \s0 -> case copyByteArrayToAddr# ba# 0# addr# bytes# s0 of
-                   s1 -> (# s1, () #)
-{-
-unsafeArrayDataPtr :: ScalarType e -> ArrayData e -> Ptr (ScalarArrayDataR e)
-unsafeArrayDataPtr t arr
-  | ScalarArrayDict{} <- scalarArrayDict t
-  = unsafeUniqueArrayPtr arr-}
 
 touchBuffers :: forall e. TypeR e -> Buffers e -> IO ()
 touchBuffers TupRunit         ()       = return()
@@ -408,7 +337,7 @@ mallocPlainForeignPtrBytesAligned (I# size#) = IO $ \s0 ->
   case newAlignedPinnedByteArray# size# 64# s0 of
     (# s1, mbarr# #) -> (# s1, ForeignPtr (byteArrayContents# (unsafeCoerce# mbarr#)) (PlainPtr mbarr#) #)
 
-bufferRetainAndGetRef :: Buffer e -> IO (Ptr (ScalarArrayDataR e))
+bufferRetainAndGetRef :: Buffer e -> IO (Ptr e)
 bufferRetainAndGetRef (Buffer foreignPtr) = withForeignPtr foreignPtr $ \ptr -> do
   memoryRetain $ castPtr ptr
   return $ castPtr ptr
@@ -431,10 +360,8 @@ liftBuffers (TupRsingle s)   buffer
   | Refl <- reprIsSingle @ScalarType @e @Buffer s = liftBuffer s buffer
 
 liftBuffer :: forall e. ScalarType e -> Buffer e -> CodeQ (Buffer e)
-liftBuffer (VectorScalarType (VectorType w t)) (Buffer arr)
-  | SingleArrayDict <- singleArrayDict t = [|| Buffer $$(liftBufferData arr) ||]
-liftBuffer (SingleScalarType t)                (Buffer arr)
-  | SingleArrayDict <- singleArrayDict t = [|| Buffer $$(liftBufferData arr) ||]
+liftBuffer tp (Buffer arr)
+  | ScalarArrayDict <- scalarArrayDict tp = [|| Buffer $$(liftBufferData arr) ||]
 
 liftBufferData :: forall a. Storable a => ForeignPtr a -> CodeQ (ForeignPtr a)
 liftBufferData buffer = unsafePerformIO $ withForeignPtr buffer $ \ptr -> do
