@@ -8,7 +8,7 @@
 {-# LANGUAGE InstanceSigs             #-}
 {-# LANGUAGE KindSignatures           #-}
 {-# LANGUAGE LambdaCase               #-}
-{-# LANGUAGE PatternSynonyms          #-}
+
 {-# LANGUAGE RankNTypes               #-}
 {-# LANGUAGE ScopedTypeVariables      #-}
 {-# LANGUAGE StandaloneDeriving       #-}
@@ -46,7 +46,7 @@ import Lens.Micro
 import Lens.Micro.Mtl
 
 import Control.Monad.State.Strict (State, runState)
-import Data.Foldable ( Foldable(fold, foldl', foldr'), for_ )
+import Data.Foldable ( Foldable(fold, foldr'), for_ )
 import Data.Kind (Type)
 import Unsafe.Coerce (unsafeCoerce)
 import Data.Coerce (coerce)
@@ -94,14 +94,6 @@ type InfusibleEdge = DataflowEdge
 -- @
 -- (fusible, infusible) = S.partition (\(w,_,r) -> S.notMember (w,r) _strictEdges) _dataflowEdges
 -- @
---
--- Finally, I've added size edges to the graph. These edges point from a buffer
--- storing an array to the buffer storing its size. We do this because we need
--- to be able to infer the size of an array when we are doing in-place updates.
--- In the old implementation the consumer of an array was infusible with the
--- producer of the size variable. This is no longer enforced explicitly, but
--- because the size variable is required by the allocator, it is still enforced
--- implicitly.
 --
 data FusionGraph = FusionGraph   -- TODO: Use hashmaps and hashsets in production.
   {      _bufferNodes :: Labels Buff       -- ^ Buffers in the graph.
@@ -191,28 +183,28 @@ insertWrite (c, b) = writeEdges %~ S.insert (c, b)
 -- | Insert a strict relation between two computations.
 insertStrict :: (HasCallStack, HasFusionGraph g) => StrictEdge -> g -> g
 insertStrict (c1, c2) g
-  | c1 == c2                           = error $ "insertStrict " ++ show (c1, c2) ++ ": Reflexive edge"
-  | c1^.parent /= c2^.parent           = error $ "insertStrict " ++ show (c1, c2) ++ ": Different scopes"
-  | S.member (c2, c1) (g^.strictEdges) = error $ "insertStrict " ++ show (c1, c2) ++ ": Cyclic edge"
+  | c1 == c2                           = internalError "insertStrict: Reflexive edge"
+  | c1^.parent /= c2^.parent           = internalError "insertStrict: Different scopes"
+  | S.member (c2, c1) (g^.strictEdges) = internalError "insertStrict: Cyclic edge"
   | otherwise = g & strictEdges %~ S.insert (c1, c2)
 
 -- | Insert a fusible data-flow edge between two computations.
 insertFusible :: (HasCallStack, HasFusionGraph g) => DataflowEdge -> g -> g
 insertFusible (c1, b, c2) g
-  | c1 == c2                            = error $ "insertFusible " ++ show (c1, b, c2) ++ ": Reflexive edge"
-  | c1^.parent /= c2^.parent            = error $ "insertFusible " ++ show (c1, b, c2) ++ ": Different scopes"
-  | S.member (c2, c1) (g^.strictEdges)  = error $ "insertFusible " ++ show (c1, b, c2) ++ ": Cyclic edge"
-  | S.notMember (c1, b) (g^.writeEdges) = error $ "insertFusible " ++ show (c1, b, c2) ++ ": Missing write"
-  | S.notMember (b, c2) (g^.readEdges)  = error $ "insertFusible " ++ show (c1, b, c2) ++ ": Missing read"
+  | c1 == c2                            = internalError "insertFusible: Reflexive edge"
+  | c1^.parent /= c2^.parent            = internalError "insertFusible: Different scopes"
+  | S.member (c2, c1) (g^.strictEdges)  = internalError "insertFusible: Cyclic edge"
+  | S.notMember (c1, b) (g^.writeEdges) = internalError "insertFusible: Missing write"
+  | S.notMember (b, c2) (g^.readEdges)  = internalError "insertFusible: Missing read"
   | otherwise = g & dataflowEdges %~ S.insert (c1, b, c2)
 
 -- | Insert an infusible data-flow edge between two computations.
 insertInfusible :: (HasCallStack, HasFusionGraph g) => DataflowEdge -> g -> g
 insertInfusible (c1, b, c2) g
-  | c1 == c2                            = error $ "insertInfusible " ++ show (c1, b, c2) ++ ": Reflexive edge"
-  | S.member (c2, c1) (g^.strictEdges)  = error $ "insertInfusible " ++ show (c1, b, c2) ++ ": Cyclic edge"
-  | S.notMember (c1, b) (g^.writeEdges) = error $ "insertInfusible " ++ show (c1, b, c2) ++ ": Missing write"
-  | S.notMember (b, c2) (g^.readEdges)  = error $ "insertInfusible " ++ show (c1, b, c2) ++ ": Missing read"
+  | c1 == c2                            = internalError "insertInfusible: Reflexive edge"
+  | S.member (c2, c1) (g^.strictEdges)  = internalError "insertInfusible: Cyclic edge"
+  | S.notMember (c1, b) (g^.writeEdges) = internalError "insertInfusible: Missing write"
+  | S.notMember (b, c2) (g^.readEdges)  = internalError "insertInfusible: Missing read"
   | otherwise = g & dataflowEdges %~ S.insert (c1, b, c2)
                   & strictEdges   %~ S.insert (c1,    c2)
 
@@ -630,7 +622,7 @@ reindexLabelledArgsOp = reindexPreArgs reindexLabelledArgOp
 attachBackendLabels :: MakesILP op => Solution op -> Symbols op -> Symbols op
 attachBackendLabels sol = M.mapWithKey \cases
   l (SExe lenv largs op) -> SExe' lenv (labelLabelledArgs sol l largs) op
-  _  SExe'{} -> error "already converted???"
+  _  SExe'{} -> internalError "already converted???"
   _  con -> con
 
 
@@ -1143,7 +1135,7 @@ with l a f s = (l .~ s^.l) <$> f (s & l .~ a)
 -- This function is partial and will throw an error if the set is not singleton.
 fromSingletonSet :: HasCallStack => Set a -> a
 fromSingletonSet (S.toList -> [x]) = x
-fromSingletonSet _ = error "fromSingletonSet: Set is not singleton."
+fromSingletonSet _ = internalError "fromSingletonSet: Set is not singleton."
 
 -- | Print out information about the given buffer.
 traceBuff :: Label Buff -> State (FullGraphState op env) ()
@@ -1182,6 +1174,55 @@ traceEnv = use buffersEnv >>= traceEnv'
 toDOT :: FusionGraph -> Symbols op -> String
 toDOT g syms = "strict digraph {\n" ++
   concatMap (\c -> "  <" ++ show c ++ "> [shape=box, label=\"" ++ show (syms M.! c) ++ tail (show c) ++ "\"];\n") (g^.computationNodes) ++
+  -- concatMap (\b -> "  <" ++ show b ++ "> [shape=circle, label=\"" ++ show b ++ "\"];\n") (g^.bufferNodes) ++
+  -- concatMap (\b -> "  <" ++ show b ++ "> [shape=circle, label=\"" ++ show b ++ "\"];\n") (g^.bufferNodes) ++
+  -- concatMap (\b -> "  <" ++ show b ++ "> [shape=circle, label=\"" ++ show b ++ "\"];\n") (g^.bufferNodes) ++
+  -- concatMap (\b -> "  <" ++ show b ++ "> [shape=circle, label=\"" ++ show b ++ "\"];\n") (g^.bufferNodes) ++
+  -- concatMap (\b -> "  <" ++ show b ++ "> [shape=circle, label=\"" ++ show b ++ "\"];\n") (g^.bufferNodes) ++
+  -- concatMap (\b -> "  <" ++ show b ++ "> [shape=circle, label=\"" ++ show b ++ "\"];\n") (g^.bufferNodes) ++
+  -- concatMap (\b -> "  <" ++ show b ++ "> [shape=circle, label=\"" ++ show b ++ "\"];\n") (g^.bufferNodes) ++
+  -- concatMap (\b -> "  <" ++ show b ++ "> [shape=circle, label=\"" ++ show b ++ "\"];\n") (g^.bufferNodes) ++
+  -- concatMap (\b -> "  <" ++ show b ++ "> [shape=circle, label=\"" ++ show b ++ "\"];\n") (g^.bufferNodes) ++
+  -- concatMap (\b -> "  <" ++ show b ++ "> [shape=circle, label=\"" ++ show b ++ "\"];\n") (g^.bufferNodes) ++
+  -- concatMap (\b -> "  <" ++ show b ++ "> [shape=circle, label=\"" ++ show b ++ "\"];\n") (g^.bufferNodes) ++
+  -- concatMap (\b -> "  <" ++ show b ++ "> [shape=circle, label=\"" ++ show b ++ "\"];\n") (g^.bufferNodes) ++
+  -- concatMap (\b -> "  <" ++ show b ++ "> [shape=circle, label=\"" ++ show b ++ "\"];\n") (g^.bufferNodes) ++
+  -- concatMap (\b -> "  <" ++ show b ++ "> [shape=circle, label=\"" ++ show b ++ "\"];\n") (g^.bufferNodes) ++
+  -- concatMap (\b -> "  <" ++ show b ++ "> [shape=circle, label=\"" ++ show b ++ "\"];\n") (g^.bufferNodes) ++
+  -- concatMap (\b -> "  <" ++ show b ++ "> [shape=circle, label=\"" ++ show b ++ "\"];\n") (g^.bufferNodes) ++
+  -- concatMap (\(b,c) -> "  <" ++ show b ++ "> -> <" ++ show c ++ "> [];\n") (g^.readEdges) ++
+  -- concatMap (\(b,c) -> "  <" ++ show b ++ "> -> <" ++ show c ++ "> [];\n") (g^.readEdges) ++
+  -- concatMap (\(b,c) -> "  <" ++ show b ++ "> -> <" ++ show c ++ "> [];\n") (g^.readEdges) ++
+  -- concatMap (\(b,c) -> "  <" ++ show b ++ "> -> <" ++ show c ++ "> [];\n") (g^.readEdges) ++
+  -- concatMap (\(b,c) -> "  <" ++ show b ++ "> -> <" ++ show c ++ "> [];\n") (g^.readEdges) ++
+  -- concatMap (\(b,c) -> "  <" ++ show b ++ "> -> <" ++ show c ++ "> [];\n") (g^.readEdges) ++
+  -- concatMap (\(b,c) -> "  <" ++ show b ++ "> -> <" ++ show c ++ "> [];\n") (g^.readEdges) ++
+  -- concatMap (\(b,c) -> "  <" ++ show b ++ "> -> <" ++ show c ++ "> [];\n") (g^.readEdges) ++
+  -- concatMap (\(b,c) -> "  <" ++ show b ++ "> -> <" ++ show c ++ "> [];\n") (g^.readEdges) ++
+  -- concatMap (\(b,c) -> "  <" ++ show b ++ "> -> <" ++ show c ++ "> [];\n") (g^.readEdges) ++
+  -- concatMap (\(b,c) -> "  <" ++ show b ++ "> -> <" ++ show c ++ "> [];\n") (g^.readEdges) ++
+  -- concatMap (\(b,c) -> "  <" ++ show b ++ "> -> <" ++ show c ++ "> [];\n") (g^.readEdges) ++
+  -- concatMap (\(b,c) -> "  <" ++ show b ++ "> -> <" ++ show c ++ "> [];\n") (g^.readEdges) ++
+  -- concatMap (\(b,c) -> "  <" ++ show b ++ "> -> <" ++ show c ++ "> [];\n") (g^.readEdges) ++
+  -- concatMap (\(b,c) -> "  <" ++ show b ++ "> -> <" ++ show c ++ "> [];\n") (g^.readEdges) ++
+  -- concatMap (\(b,c) -> "  <" ++ show b ++ "> -> <" ++ show c ++ "> [];\n") (g^.readEdges) ++
+  -- concatMap (\(c,b) -> "  <" ++ show c ++ "> -> <" ++ show b ++ "> [];\n") (g^.writeEdges) ++
+  -- concatMap (\(c,b) -> "  <" ++ show c ++ "> -> <" ++ show b ++ "> [];\n") (g^.writeEdges) ++
+  -- concatMap (\(c,b) -> "  <" ++ show c ++ "> -> <" ++ show b ++ "> [];\n") (g^.writeEdges) ++
+  -- concatMap (\(c,b) -> "  <" ++ show c ++ "> -> <" ++ show b ++ "> [];\n") (g^.writeEdges) ++
+  -- concatMap (\(c,b) -> "  <" ++ show c ++ "> -> <" ++ show b ++ "> [];\n") (g^.writeEdges) ++
+  -- concatMap (\(c,b) -> "  <" ++ show c ++ "> -> <" ++ show b ++ "> [];\n") (g^.writeEdges) ++
+  -- concatMap (\(c,b) -> "  <" ++ show c ++ "> -> <" ++ show b ++ "> [];\n") (g^.writeEdges) ++
+  -- concatMap (\(c,b) -> "  <" ++ show c ++ "> -> <" ++ show b ++ "> [];\n") (g^.writeEdges) ++
+  -- concatMap (\(c,b) -> "  <" ++ show c ++ "> -> <" ++ show b ++ "> [];\n") (g^.writeEdges) ++
+  -- concatMap (\(c,b) -> "  <" ++ show c ++ "> -> <" ++ show b ++ "> [];\n") (g^.writeEdges) ++
+  -- concatMap (\(c,b) -> "  <" ++ show c ++ "> -> <" ++ show b ++ "> [];\n") (g^.writeEdges) ++
+  -- concatMap (\(c,b) -> "  <" ++ show c ++ "> -> <" ++ show b ++ "> [];\n") (g^.writeEdges) ++
+  -- concatMap (\(c,b) -> "  <" ++ show c ++ "> -> <" ++ show b ++ "> [];\n") (g^.writeEdges) ++
+  -- concatMap (\(c,b) -> "  <" ++ show c ++ "> -> <" ++ show b ++ "> [];\n") (g^.writeEdges) ++
+  -- concatMap (\(c,b) -> "  <" ++ show c ++ "> -> <" ++ show b ++ "> [];\n") (g^.writeEdges) ++
+  -- concatMap (\(c,b) -> "  <" ++ show c ++ "> -> <" ++ show b ++ "> [];\n") (g^.writeEdges) ++
+
   -- concatMap (\b -> "  <" ++ show b ++ "> [shape=circle, label=\"" ++ show b ++ "\"];\n") (g^.bufferNodes) ++
   -- concatMap (\(b,c) -> "  <" ++ show b ++ "> -> <" ++ show c ++ "> [];\n") (g^.readEdges) ++
   -- concatMap (\(c,b) -> "  <" ++ show c ++ "> -> <" ++ show b ++ "> [];\n") (g^.writeEdges) ++

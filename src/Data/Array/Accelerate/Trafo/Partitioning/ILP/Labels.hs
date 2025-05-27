@@ -22,15 +22,14 @@ either be a computation or a buffer.
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE OverloadedStrings #-}
 module Data.Array.Accelerate.Trafo.Partitioning.ILP.Labels where
 
 import Data.Array.Accelerate.AST.Operation
 import Data.Array.Accelerate.Representation.Type
 
 import Lens.Micro
-import Lens.Micro.TH
 import Lens.Micro.Mtl
-import Lens.Micro.Extras
 
 import Data.Set (Set)
 import qualified Data.Set as S
@@ -48,9 +47,10 @@ import Data.Typeable
 import Data.Array.Accelerate.Type (ScalarType)
 import Data.Array.Accelerate.Representation.Array
 import Data.Bifunctor (Bifunctor(..))
-import Data.Maybe (fromJust, fromMaybe)
-import Data.List
+import Data.Maybe (fromJust)
+import Data.List ( intercalate )
 import Debug.Trace
+import Data.Array.Accelerate.Error
 
 
 
@@ -128,7 +128,7 @@ instance Ord (Label t) where
 checkMismatch :: Parent -> Parent -> a -> a
 checkMismatch (Just l1) (Just l2) | l1 == l2 = id
 checkMismatch Nothing Nothing = id
-checkMismatch _ _ = error "checkMismatch: Mismatching labels detected."
+checkMismatch _ _ = internalError "checkMismatch: Mismatching labels detected"
 
 instance Hashable (Label t) where
   hashWithSalt :: Int -> Label t -> Int
@@ -204,7 +204,7 @@ instance Semigroup a => Semigroup (TupF t a) where
       go TupRunit         TupRunit         = TupRunit
       go (TupRsingle a)   (TupRsingle b)   = TupRsingle (coerce (a <> b))
       go (TupRpair l1 r1) (TupRpair l2 r2) = TupRpair (go l1 l2) (go r1 r2)
-      go _ _ = error "TupR_: Inaccessible left-hand side"
+      go _ _ = internalError "Inaccessible left-hand side"
 
 
 -- | Create a 'TupF' containing a single value in the same shape as a 'TupR'.
@@ -270,18 +270,18 @@ instance Semigroup (BuffersEnv env) where
   (<>) EnvNil EnvNil = EnvNil
   (<>) ((e1, bs1) :>>: env1) ((e2, bs2) :>>: env2)
     | e1 == e2  = (e1, bs1 <> bs2) :>>: (env1 <> env2)
-    | otherwise = error "mappend: Encountered diverging EnvLabels."
+    | otherwise = internalError "mappend: Encountered diverging EnvLabels."
 
 -- | Constructs a new 'BuffersEnv' by prepending labels for each element in the
 --   left-hand side.
 --
 -- The case where the left-hand side and the right-hand side are incompatible
--- should neven happen, but in case it does just replicate the labels.
+-- should never happen, but in case it does just replicate the labels.
 weakenEnv :: LeftHandSide s v env env' -> BuffersTup v -> BuffersEnv env -> State EnvLabel (BuffersEnv env')
 weakenEnv LeftHandSideWildcard{} _                  = pure
 weakenEnv LeftHandSideSingle{}   bs                 = \lenv -> freshE' >>= \e -> return ((e, bs) :>>: lenv)
 weakenEnv (LeftHandSidePair l r) (TupFpair lbs rbs) = weakenEnv l lbs >=> weakenEnv r rbs
-weakenEnv (LeftHandSidePair _ _) _ = error "consLHS: Inaccesible left-hand side."
+weakenEnv (LeftHandSidePair _ _) _ = internalError "consLHS: Inaccesible left-hand side."
 
 
 
@@ -408,7 +408,7 @@ getVarsFromEnv (TupRsingle var) env = getVarFromEnv var env
 getVarsFromEnv (TupRpair l r)   env | (Arr l', bs1) <- getVarsFromEnv l env
                                     , (Arr r', bs2) <- getVarsFromEnv r env
                                     = (Arr (TupFpair l' r'), TupFpair bs1 bs2)
-getVarsFromEnv _ _ = error "getVarsFromEnv: Inaccessible left-hand side."
+getVarsFromEnv _ _ = internalError "getVarsFromEnv: Inaccessible left-hand side."
 
 -- | Get the value associated with a 'Var' from 'BuffersEnv'.
 getVarFromEnv :: Var a env b -> BuffersEnv env -> (ArgIsArray (m sh b), BuffersTup b)
@@ -474,8 +474,8 @@ unbuffers (TupRpair t1 t2) (Arr (TupFpair l r))
   | Arr l' <- unbuffers t1 (Arr l)
   , Arr r' <- unbuffers t2 (Arr r)
   = Arr (TupFpair l' r')
-unbuffers _ (Arr _) = error "Tuple mismatch"
-unbuffers _ _ = error "Not an array"
+unbuffers _ (Arr _) = internalError "Tuple mismatch"
+unbuffers _ _ = internalError "Not an array"
 
 
 

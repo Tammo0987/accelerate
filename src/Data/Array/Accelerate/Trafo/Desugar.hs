@@ -333,7 +333,7 @@ class NFData' op => DesugarAcc (op :: Type -> Type) where
   -- When this is true, a 0-dimensional generate or map will
   -- be converted to Compute nodes, instead of Exec nodes.
   desugarPreferNoScalar :: Bool
-  desugarPreferNoScalar = False
+  desugarPreferNoScalar = True
 
 desugar :: (HasCallStack, DesugarAcc op) => Named.Acc a -> OperationAcc op () (DesugaredArrays a)
 desugar = desugarOpenAcc Empty
