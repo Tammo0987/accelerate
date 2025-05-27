@@ -89,6 +89,11 @@ import GHC.TypeLits
 
 -- Reified dictionaries
 --
+data ScalarDict a where
+  ScalarDict :: ( Eq a, Show a, Storable a )
+             => ScalarDict a
+
+
 data SingleDict a where
   SingleDict :: ( Eq a, Ord a, Show a, Storable a, Prim a )
              => SingleDict a
@@ -301,6 +306,12 @@ singleDict = single
     floating TypeHalf   = SingleDict
     floating TypeFloat  = SingleDict
     floating TypeDouble = SingleDict
+
+scalarDict :: ScalarType a -> ScalarDict a
+scalarDict (SingleScalarType tp)
+  | SingleDict <- singleDict tp = ScalarDict
+scalarDict (VectorScalarType (VectorType _ tp))
+  | SingleDict <- singleDict tp = ScalarDict
 
 
 scalarTypeInt :: ScalarType Int

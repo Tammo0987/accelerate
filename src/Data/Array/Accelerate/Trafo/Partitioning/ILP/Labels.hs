@@ -30,9 +30,7 @@ import Data.Array.Accelerate.AST.Operation
 import Data.Array.Accelerate.Representation.Type
 
 import Lens.Micro
-import Lens.Micro.TH
 import Lens.Micro.Mtl
-import Lens.Micro.Extras
 
 import Data.Set (Set)
 import qualified Data.Set as S
@@ -49,8 +47,8 @@ import Data.Foldable
 import Data.Array.Accelerate.Type (ScalarType)
 import Data.Array.Accelerate.Representation.Array
 import Data.Bifunctor (Bifunctor(..))
-import Data.Maybe (fromJust, fromMaybe)
-import Data.List
+import Data.Maybe (fromJust)
+import Data.List ( intercalate )
 import Debug.Trace
 import Data.Typeable
 import Data.Array.Accelerate.Analysis.Match
@@ -135,7 +133,7 @@ instance Ord (Label t) where
 checkMismatch :: Parent -> Parent -> a -> a
 checkMismatch (Just l1) (Just l2) | l1 == l2 = id
 checkMismatch Nothing Nothing = id
-checkMismatch _ _ = internalError "checkMismatch: Mismatching labels detected."
+checkMismatch _ _ = internalError "checkMismatch: Mismatching labels detected"
 
 instance Hashable (Label t) where
   hashWithSalt :: Int -> Label t -> Int

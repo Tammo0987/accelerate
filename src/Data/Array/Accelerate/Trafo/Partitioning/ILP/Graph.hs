@@ -8,7 +8,7 @@
 {-# LANGUAGE InstanceSigs             #-}
 {-# LANGUAGE KindSignatures           #-}
 {-# LANGUAGE LambdaCase               #-}
-{-# LANGUAGE PatternSynonyms          #-}
+
 {-# LANGUAGE RankNTypes               #-}
 {-# LANGUAGE ScopedTypeVariables      #-}
 {-# LANGUAGE StandaloneDeriving       #-}
@@ -55,6 +55,8 @@ import Data.Kind (Type)
 import Debug.Trace
 import Unsafe.Coerce (unsafeCoerce)
 
+
+
 --------------------------------------------------------------------------------
 -- Fusion Graph
 --------------------------------------------------------------------------------
@@ -98,14 +100,6 @@ type InplacePath   = (ReadEdge, WriteEdge)
 -- @
 -- (fusible, infusible) = S.partition (\(w,_,r) -> S.notMember (w,r) _strictEdges) _dataflowEdges
 -- @
---
--- Finally, I've added size edges to the graph. These edges point from a buffer
--- storing an array to the buffer storing its size. We do this because we need
--- to be able to infer the size of an array when we are doing in-place updates.
--- In the old implementation the consumer of an array was infusible with the
--- producer of the size variable. This is no longer enforced explicitly, but
--- because the size variable is required by the allocator, it is still enforced
--- implicitly.
 --
 data FusionGraph = FusionGraph   -- TODO: Use hashmaps and hashsets in production.
   {      _bufferNodes :: Labels Buff       -- ^ Buffers in the graph.
@@ -220,10 +214,10 @@ insertFusible (c1, b, c2) g
 -- | Insert an infusible data-flow edge between two computations.
 insertInfusible :: (HasCallStack, HasFusionGraph g) => DataflowEdge -> g -> g
 insertInfusible (c1, b, c2) g
-  | c1 == c2                            = internalError $ "insertInfusible: Reflexive edge"
-  | S.member (c2, c1) (g^.strictEdges)  = internalError $ "insertInfusible: Cyclic edge"
-  | S.notMember (c1, b) (g^.writeEdges) = internalError $ "insertInfusible: Missing write"
-  | S.notMember (b, c2) (g^.readEdges)  = internalError $ "insertInfusible: Missing read"
+  | c1 == c2                            = internalError "insertInfusible: Reflexive edge"
+  | S.member (c2, c1) (g^.strictEdges)  = internalError "insertInfusible: Cyclic edge"
+  | S.notMember (c1, b) (g^.writeEdges) = internalError "insertInfusible: Missing write"
+  | S.notMember (b, c2) (g^.readEdges)  = internalError "insertInfusible: Missing read"
   | otherwise = g & dataflowEdges %~ S.insert (c1, b, c2)
                   & strictEdges   %~ S.insert (c1,    c2)
 

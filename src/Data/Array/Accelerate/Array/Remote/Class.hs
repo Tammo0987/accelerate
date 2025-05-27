@@ -54,10 +54,10 @@ class (Applicative m, Monad m, MonadCatch m, MonadMask m) => RemoteMemory m wher
   mallocRemote :: Int -> m (Maybe (RemotePtr m Word8))
 
   -- | Copy the given number of elements from the host array into remote memory.
-  pokeRemote :: SingleType e -> Int -> RemotePtr m (ScalarArrayDataR e) -> Buffer e -> m ()
+  pokeRemote :: SingleType e -> Int -> RemotePtr m e -> Buffer e -> m ()
 
   -- | Copy the given number of elements from remote memory to the host array.
-  peekRemote :: SingleType e -> Int -> RemotePtr m (ScalarArrayDataR e) -> MutableBuffer e -> m ()
+  peekRemote :: SingleType e -> Int -> RemotePtr m e -> MutableBuffer e -> m ()
 
   -- | Cast a remote pointer.
   castRemotePtr :: RemotePtr m a -> RemotePtr m b

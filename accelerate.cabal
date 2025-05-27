@@ -357,7 +357,7 @@ library
         , microlens                     >= 0.4
         , microlens-th                  >= 0.4
         , microlens-mtl                 >= 0.2
-        , MIP                           >= 0.1.1
+        , MIP                           >= 0.2
         , mtl                           >= 2.0
         , prettyprinter                 >= 1.7
         , prettyprinter-ansi-terminal   >= 1.1.2
@@ -374,6 +374,7 @@ library
         -- The core language and reference implementation
         Data.Array.Accelerate
         Data.Array.Accelerate.Interpreter
+        Data.Array.Accelerate.Interpreter.Simple
 
         -- Prelude-like
         Data.Array.Accelerate.Control.Monad
@@ -411,10 +412,10 @@ library
         Data.Array.Accelerate.Analysis.Hash.Schedule.Uniform
         Data.Array.Accelerate.Analysis.Match
         Data.Array.Accelerate.Array.Buffer
-        Data.Array.Accelerate.Array.Remote
-        Data.Array.Accelerate.Array.Remote.Class
-        Data.Array.Accelerate.Array.Remote.LRU
-        Data.Array.Accelerate.Array.Remote.Table
+        -- Data.Array.Accelerate.Array.Remote
+        -- Data.Array.Accelerate.Array.Remote.Class
+        -- Data.Array.Accelerate.Array.Remote.LRU
+        -- Data.Array.Accelerate.Array.Remote.Table
         Data.Array.Accelerate.Async
         Data.Array.Accelerate.Backend
         Data.Array.Accelerate.Error
@@ -456,7 +457,6 @@ library
         Data.Array.Accelerate.Trafo.Partitioning.ILP.Labels
         -- Data.Array.Accelerate.Trafo.Partitioning.ILP.HiGHS
         Data.Array.Accelerate.Trafo.Partitioning.ILP.MIP
-        -- Data.Array.Accelerate.Trafo.Partitioning.ILP.Multimap
         Data.Array.Accelerate.Trafo.Partitioning.ILP.NameGeneration
         Data.Array.Accelerate.Trafo.Partitioning.ILP.Solve
         Data.Array.Accelerate.Trafo.Partitioning.ILP.Solver
