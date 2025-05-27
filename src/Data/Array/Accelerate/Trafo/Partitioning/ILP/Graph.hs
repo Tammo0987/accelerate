@@ -46,11 +46,13 @@ import Lens.Micro
 import Lens.Micro.Mtl
 
 import Control.Monad.State.Strict (State, runState)
-import Data.Foldable ( Foldable(fold, foldr'), for_ )
+import Data.Foldable ( Foldable(fold, foldr'), for_, traverse_ )
 import Data.Kind (Type)
 import Unsafe.Coerce (unsafeCoerce)
 import Data.Coerce (coerce)
 import Debug.Trace
+
+
 
 --------------------------------------------------------------------------------
 -- Fusion Graph
@@ -802,21 +804,22 @@ freshBuff = do
   fusionILP %= insertWrite (c, b)
   return (b, c)
 
--- | Read from a buffer and be fusisble with its writers.
-(--->) :: HasCallStack => Labels Buff -> Label Comp -> State (FullGraphState op env) ()
-(--->) bs c = for_ bs \b -> do
+-- | Read from a buffer.
+readsBuffers :: HasCallStack => Label Comp -> Labels Buff -> State (FullGraphState op env) ()
+readsBuffers c = traverse_ \b -> do
   ws <- use $ writers b
   fusionILP %= c `reads` b
   fusionILP %= ws >-|b|-> c
   readers b %= S.insert c
 
--- | Read from a buffer and be infusible with its writers.
-(===>) :: HasCallStack => Labels Buff -> Label Comp -> State (FullGraphState op env) ()
-(===>) bs c = for_ bs \b -> do
+-- | Require a buffer (i.e. to index into it or pass it to a function).
+requiresBuffers :: HasCallStack => Label Comp -> Labels Buff -> State (FullGraphState op env) ()
+requiresBuffers c = traverse_ \b -> do
   ws <- use $ writers b
   fusionILP %= c `reads` b
   fusionILP %= ws >=|b|=> c
   readers b %= S.insert c
+
 
 -- | Write to a buffer.
 --
@@ -825,8 +828,8 @@ freshBuff = do
 -- 2. All writers run before the computation.
 -- 3. We become the sole writer of the buffer.
 -- 4. We clear the readers of the buffer.
-(<===) :: HasCallStack => Labels Buff -> Label Comp -> State (FullGraphState op env) ()
-(<===) bs c = for_ bs \b -> do
+writesBuffers :: HasCallStack => Label Comp -> Labels Buff -> State (FullGraphState op env) ()
+writesBuffers c = traverse_ \b -> do
   rs <- use $ readers b
   ws <- use $ writers b
   fusionILP %= c `writes` b
@@ -842,8 +845,8 @@ freshBuff = do
 -- 2. All writers are infusible with this computation.
 -- 3. We become the sole writer of the buffer.
 -- 4. We clear the readers of the buffer.
-(<==>) :: HasCallStack => Labels Buff -> Label Comp -> State (FullGraphState op env) ()
-(<==>) bs c = for_ bs \b -> do
+mutatesBuffers :: HasCallStack => Label Comp -> Labels Buff -> State (FullGraphState op env) ()
+mutatesBuffers c = traverse_ \b -> do
   rs <- use $ readers b
   ws <- use $ writers b
   fusionILP %= c `reads` b
@@ -853,28 +856,43 @@ freshBuff = do
   writers b .= S.singleton c
   readers b .= S.empty
 
--- | Mutate a buffer with the identity function, preventing fusion.
+-- | Return a buffer.
 --
--- This is a special case of mutation where the buffer is not actually changed.
--- Because of this, we now don't need to enforce rules 1 and 4 from '(<==>)'.
-(<-->) :: HasCallStack => Labels Buff -> Label Comp -> State (FullGraphState op env) ()
-(<-->) bs c = for_ bs \b -> do
+-- This can be interpreted as mutation with the identity function (i.e. no-op).
+-- Since we don't actually change the contents of the buffer, we don't need to
+-- enforce 1 and 4.
+returnsBuffers :: HasCallStack => Label Comp -> Labels Buff -> State (FullGraphState op env) ()
+returnsBuffers c = traverse_ \b -> do
   ws <- use $ writers b
   fusionILP %= c `reads` b
   fusionILP %= c `writes` b
   fusionILP %= ws >=|b|=> c
   writers b .= S.singleton c
 
--- | Sequential composition of computations.
+-- | Bind a buffer to a let.
 --
--- Some buffers are produced using values produced by this computations.
--- Basically, we act as it the buffer is a function that still requires a value,
--- which is the value produced by us.
--- This operation is similar to '(<-->)', except the resulting infusible edges
--- are inverted and no read edges are created.
--- One could also interpret this as writing nothing to the buffer.
-(>>==) :: HasCallStack => Label Comp -> Labels Buff -> State (FullGraphState op env) ()
-(>>==) c bs = for_ bs \b -> do
+-- This can be interpreted as mutation with the identity function (i.e. no-op).
+-- Since we don't actually change the contents of the buffer, we don't need to
+-- enforce 1 and 4. We also don't enforce 2, because doing so would prevent all
+-- buffers from being non-manifest. (All buffers are bound to a let and
+-- infusible edges force manifestation, so all buffers would be manifest.)
+bindsBuffers :: HasCallStack => Label Comp -> Labels Buff -> State (FullGraphState op env) ()
+bindsBuffers c = traverse_ \b -> do
+  ws <- use $ writers b
+  fusionILP %= c `reads` b
+  fusionILP %= c `writes` b
+  fusionILP %= ws >-|b|-> c
+  writers b .= S.singleton c
+
+-- | A let-binding or function produces a buffer.
+--
+-- This just ensures that functions and let-bindings actually have a body.
+-- In most cases this is not required, but if body doesn't use the bound buffer
+-- it would try to generate a let-binding without a body.
+-- TODO: This is ugly and should be removed, but for that the reconstruction
+--       algorithm needs to be changed. It should be able to handle this case.
+producesBuffers :: HasCallStack => Label Comp -> Labels Buff -> State (FullGraphState op env) ()
+producesBuffers c = traverse_ \b -> do
   ws <- use $ writers b
   fusionILP %= c `writes` b
   fusionILP %= flip (foldr' (c==|-|=>)) ws
@@ -919,10 +937,10 @@ mkFullGraph' (Exec op args) = do
   let inpArrs =  inputArrays labelledArgs
   let outArrs = outputArrays labelledArgs
   let notArrs =    notArrays labelledArgs
-  inpArrs `S.difference`   outArrs ---> c
-  outArrs `S.difference`   inpArrs <=== c
-  inpArrs `S.intersection` outArrs <==> c
-  notArrs                          ===> c
+  readsBuffers    c $ inpArrs `S.difference`   outArrs
+  writesBuffers   c $ outArrs `S.difference`   inpArrs
+  mutatesBuffers  c $ inpArrs `S.intersection` outArrs
+  requiresBuffers c   notArrs
   zoom (backendGraphState renv wenv) (mkGraph c op labelledArgs)
   symbol c ?= SExe lenv labelledArgs op
   return TupFunit
@@ -938,39 +956,39 @@ mkFullGraph' (Alet lhs u bnd scp) = do
   lenv    <- use buffersEnv
   bndRes  <- mkFullGraph' bnd
   bndResW <- traverse (use . allWriters) bndRes
-  fold bndRes <--> c
+  bindsBuffers c $ fold bndRes
   lenv' <- zoom currEnvL (weakenEnv lhs bndRes lenv)
   symbol c ?= SLet (bindLHS lhs lenv') (fromSingletonSet $ fold bndResW) u
   res <- zoom (local lenv') (mkFullGraph' scp)
-  c >>== fold res
+  producesBuffers c $ fold res
   return res
 
 mkFullGraph' (Return vars) = do
   lenv <- use buffersEnv
   c    <- freshComp
   let (_, bs) = getVarsFromEnv vars lenv
-  fold bs <--> c
+  returnsBuffers c $ fold bs
   symbol c ?= SRet lenv vars
   return bs
 
 mkFullGraph' (Compute expr) = do
   lenv   <- use buffersEnv
   (b, c) <- freshBuff
-  getExpDeps expr lenv ===> c
+  requiresBuffers c $ getExpDeps expr lenv
   symbol c ?= SCmp lenv expr
   return $ tupFlike (expType expr) (S.singleton b)
 
 mkFullGraph' (Alloc shr e sh) = do
   lenv   <- use buffersEnv
   (b, c) <- freshBuff
-  getVarsDeps sh lenv ===> c
+  requiresBuffers c $ getVarsDeps sh lenv
   symbol c ?= SAlc lenv shr e sh
   return $ TupFsingle (S.singleton b)
 
 mkFullGraph' (Unit v) = do
   lenv   <- use buffersEnv
   (b, c) <- freshBuff
-  getVarDeps v lenv ===> c
+  requiresBuffers c $ getVarDeps v lenv
   symbol c ?= SUnt lenv v
   return $ TupFsingle (S.singleton b)
 
@@ -985,14 +1003,14 @@ mkFullGraph' (Acond cond tacc facc) = do
   zoom (scope c_cond) do
     c_true  <- freshComp
     c_false <- freshComp
-    getVarDeps cond lenv ===> c_cond
+    requiresBuffers c_cond $ getVarDeps cond lenv
     symbol c_cond ?= SITE lenv cond c_true c_false
     (t_res, t_renv, t_wenv) <- block c_true  mkFullGraph' tacc
     (f_res, f_renv, f_wenv) <- block c_false mkFullGraph' facc
     readersEnv .= M.unionWith S.union t_renv f_renv
     writersEnv .= M.unionWith S.union t_wenv f_wenv
     let res = t_res <> f_res
-    fold res <--> c_cond
+    returnsBuffers c_cond $ fold res
     return res
 
 mkFullGraph' (Awhile u cond body init) = do
@@ -1002,14 +1020,14 @@ mkFullGraph' (Awhile u cond body init) = do
     c_cond  <- freshComp
     c_body  <- freshComp
     let (_, init_res) = getVarsFromEnv init lenv
-    fold init_res ===> c_while
+    requiresBuffers c_while $ fold init_res
     symbol c_while ?= SWhl lenv c_cond c_body init u
     (_                       , cond_renv, cond_wenv) <- block c_cond mkFullGraphF' cond
     (unsafeCoerce -> body_res, body_renv, body_wenv) <- block c_body mkFullGraphF' body
     readersEnv .= M.unionWith S.union cond_renv body_renv
     writersEnv .= M.unionWith S.union cond_wenv body_wenv
     let res = init_res <> body_res
-    fold res <--> c_while
+    returnsBuffers c_while $ fold res
     return res
 
 
@@ -1020,7 +1038,7 @@ mkFullGraphF' (Abody acc) = do
   c <- freshComp
   zoom (scope c) do
     res <- mkFullGraph' acc
-    fold res <--> c
+    returnsBuffers c $ fold res
     symbol c ?= SBod res
     fusionILP.constraints %= (<> foldMap ((.==. int 0) . manifest) (fold res))
     return (unsafeCoerce res)
@@ -1032,7 +1050,7 @@ mkFullGraphF' (Alam lhs f) = do
   res  <- zoom (local lenv') (mkFullGraphF' f)
   resW <- traverse (use . allWriters) res
   symbol c ?= SFun (bindLHS lhs lenv') (fromSingletonSet $ fold resW)
-  c >>== fold res
+  producesBuffers c $ fold res
   return res
 
 
