@@ -23,6 +23,7 @@ either be a computation or a buffer.
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE OverloadedStrings #-}
 module Data.Array.Accelerate.Trafo.Partitioning.ILP.Labels where
 
 import Data.Array.Accelerate.AST.Operation
@@ -56,6 +57,7 @@ import Data.Array.Accelerate.Analysis.Match
 import Unsafe.Coerce (unsafeCoerce)
 import Control.Applicative ((<|>))
 import Data.Array.Accelerate.Representation.Ground (groundRelt)
+import Data.Array.Accelerate.Error
 
 
 
@@ -133,7 +135,7 @@ instance Ord (Label t) where
 checkMismatch :: Parent -> Parent -> a -> a
 checkMismatch (Just l1) (Just l2) | l1 == l2 = id
 checkMismatch Nothing Nothing = id
-checkMismatch _ _ = error "checkMismatch: Mismatching labels detected."
+checkMismatch _ _ = internalError "checkMismatch: Mismatching labels detected."
 
 instance Hashable (Label t) where
   hashWithSalt :: Int -> Label t -> Int
@@ -217,7 +219,7 @@ instance Semigroup a => Semigroup (TupF t a) where
   (<>) TupFunit         TupFunit         = TupFunit
   (<>) (TupFsingle a)   (TupFsingle b)   = TupFsingle (a <> b)
   (<>) (TupFpair l1 r1) (TupFpair l2 r2) = TupFpair (l1 <> l2) (r1 <> r2)
-  (<>) _ _ = error "(<>) [TupF]: Inaccessible left-hand side"
+  (<>) _ _ = internalError "Inaccessible left-hand side"
 
 -- | Tuple of 'Labels' of type 'Buff'.
 type BuffersTup t = TupF t (Labels Buff)
@@ -279,7 +281,7 @@ instance Semigroup (BuffersEnv env) where
   (<>) EnvNil EnvNil = EnvNil
   (<>) ((e1, bs1, us1) :>>: env1) ((e2, bs2, us2) :>>: env2)
     | e1 == e2  = (e1, bs1 <> bs2, us1 <> us2) :>>: (env1 <> env2)
-    | otherwise = error "mappend: Encountered diverging EnvLabels."
+    | otherwise = internalError "mappend: Encountered diverging EnvLabels."
 
 -- | Constructs a new 'BuffersEnv' by prepending labels for each element in the
 --   left-hand side.
@@ -290,7 +292,7 @@ weakenEnv :: LeftHandSide s v env env' -> BuffersTup v -> Uniquenesses v -> Buff
 weakenEnv LeftHandSideWildcard{} _ _ = pure
 weakenEnv LeftHandSideSingle{} bs us = \lenv -> freshE' >>= \e -> return ((e, bs, us) :>>: lenv)
 weakenEnv (LeftHandSidePair l r) (TupFpair lbs rbs) (TupRpair lus rus) = weakenEnv l lbs lus >=> weakenEnv r rbs rus
-weakenEnv (LeftHandSidePair _ _) _ _ = error "weakenEnv: inaccesible left-hand side"
+weakenEnv (LeftHandSidePair _ _) _ _ = internalError "weakenEnv: Inaccesible left-hand side"
 
 
 
@@ -327,6 +329,11 @@ bindLHS :: LeftHandSide s v env env' -> BuffersEnv env' -> BoundLHS s v env env'
 bindLHS (LeftHandSideSingle sv) (l :>>: _) = BoundLHSsingle l sv
 bindLHS (LeftHandSideWildcard tr) _ = BoundLHSwildcard tr
 bindLHS (LeftHandSidePair l r) env = BoundLHSpair (bindLHS l (stripLHS r env)) (bindLHS r env)
+
+unbindLHS :: BoundLHS s v env env' -> LeftHandSide s v env env'
+unbindLHS (BoundLHSsingle _ sv) = LeftHandSideSingle sv
+unbindLHS (BoundLHSwildcard tr) = LeftHandSideWildcard tr
+unbindLHS (BoundLHSpair l r)    = LeftHandSidePair (unbindLHS l) (unbindLHS r)
 
 -- | Remove values bound by the left-hand side from the environment.
 stripLHS :: LeftHandSide s v env env' -> BuffersEnv env' -> BuffersEnv env
@@ -387,7 +394,7 @@ getLabelDeps (NotArr deps) = deps
 -- | Get the set of unique array dependencies of an 'ArgLabel'.
 getLabelUniqueArrDeps :: ArgLabel t -> Labels Buff
 getLabelUniqueArrDeps (Arr (_, arr, u) _) = uniqueLabels u arr
-getLabelUniqueArrDeps (NotArr _) = error "getLabelUniqueArrDeps: expected Arr but got NotArr"
+getLabelUniqueArrDeps (NotArr _) = internalError "getLabelUniqueArrDeps: Expected Arr but got NotArr"
 
 -- | Given 'Uniquenesses', get the unique labels from 'BuffersTup'.
 uniqueLabels :: Uniquenesses e -> BuffersTup e -> Labels Buff
@@ -395,12 +402,12 @@ uniqueLabels TupRunit TupFunit      = mempty
 uniqueLabels (TupRsingle Shared) _  = mempty
 uniqueLabels (TupRsingle Unique) bs = fold bs
 uniqueLabels (TupRpair ul ur) (TupFpair l r) = uniqueLabels ul l <> uniqueLabels ur r
-uniqueLabels u _ = error $ "getLabelUniqueDeps: tuple mismatch " ++ show u
+uniqueLabels _ _ = internalError "uniqueLabels: Tuple mismatch "
 
 -- | Get the arrays of an 'ArgLabel'.
 getLabelArrays :: ArgLabel (m sh e) -> BuffersTup e
 getLabelArrays (Arr (_, arr, _) (_, _, _)) = arr
-getLabelArrays (NotArr _) = error "getLabelArrDeps: expected Arr but got NotArr"
+getLabelArrays (NotArr _) = internalError "getLabelArrays: Expected Arr but got NotArr"
 
 -- | Get the array dependencies of an 'ArgLabel'.
 getLabelArrDeps :: ArgLabel (m sh e) -> Labels Buff
@@ -409,7 +416,7 @@ getLabelArrDeps = fold . getLabelArrays
 -- | Get the shapes of an 'ArgLabel'.
 getLabelShape :: ArgLabel (m sh e) -> BuffersTup sh
 getLabelShape (Arr (_, _, _) (_, sh, _)) = sh
-getLabelShape (NotArr _) = error "getLabelShapeDeps: expected Arr but got NotArr"
+getLabelShape (NotArr _) = internalError "getLabelShape: Expected Arr but got NotArr"
 
 -- | Get the shape dependencies of an 'ArgLabel'.
 getLabelShDeps :: ArgLabel (m sh e) -> Labels Buff
@@ -516,7 +523,7 @@ unbuffers (TupRpair t1 t2) (TupFpair el er, TupFpair bsl bsr, TupRpair ul ur)
   | (el', bsl', ul') <- unbuffers t1 (el, bsl, ul)
   , (er', bsr', ur') <- unbuffers t2 (er, bsr, ur)
   = (TupFpair el' er', TupFpair bsl' bsr', TupRpair ul' ur')
-unbuffers _ _ = error "Tuple mismatch"
+unbuffers _ _ = internalError "unbuffers: Tuple mismatch"
 
 
 

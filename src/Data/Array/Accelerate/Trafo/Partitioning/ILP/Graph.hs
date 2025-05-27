@@ -54,8 +54,6 @@ import Data.Foldable (Foldable (fold, foldr'), traverse_)
 import Data.Kind (Type)
 import Debug.Trace
 import Unsafe.Coerce (unsafeCoerce)
-import Control.Applicative ((<|>))
-import Data.Maybe (fromMaybe)
 
 --------------------------------------------------------------------------------
 -- Fusion Graph
@@ -204,28 +202,28 @@ insertWrite (c, b) = writeEdges %~ S.insert (c, b)
 -- | Insert a strict relation between two computations.
 insertStrict :: (HasCallStack, HasFusionGraph g) => StrictEdge -> g -> g
 insertStrict (c1, c2) g
-  | c1 == c2                           = error $ "insertStrict " ++ show (c1, c2) ++ ": Reflexive edge"
-  | c1^.parent /= c2^.parent           = error $ "insertStrict " ++ show (c1, c2) ++ ": Different scopes"
-  | S.member (c2, c1) (g^.strictEdges) = error $ "insertStrict " ++ show (c1, c2) ++ ": Cyclic edge"
+  | c1 == c2                           = internalError "insertStrict: Reflexive edge"
+  | c1^.parent /= c2^.parent           = internalError "insertStrict: Different scopes"
+  | S.member (c2, c1) (g^.strictEdges) = internalError "insertStrict: Cyclic edge"
   | otherwise = g & strictEdges %~ S.insert (c1, c2)
 
 -- | Insert a fusible data-flow edge between two computations.
 insertFusible :: (HasCallStack, HasFusionGraph g) => DataflowEdge -> g -> g
 insertFusible (c1, b, c2) g
-  | c1 == c2                            = error $ "insertFusible " ++ show (c1, b, c2) ++ ": Reflexive edge"
-  | c1^.parent /= c2^.parent            = error $ "insertFusible " ++ show (c1, b, c2) ++ ": Different scopes"
-  | S.member (c2, c1) (g^.strictEdges)  = error $ "insertFusible " ++ show (c1, b, c2) ++ ": Cyclic edge"
-  | S.notMember (c1, b) (g^.writeEdges) = error $ "insertFusible " ++ show (c1, b, c2) ++ ": Missing write"
-  | S.notMember (b, c2) (g^.readEdges)  = error $ "insertFusible " ++ show (c1, b, c2) ++ ": Missing read"
+  | c1 == c2                            = internalError "insertFusible: Reflexive edge"
+  | c1^.parent /= c2^.parent            = internalError "insertFusible: Different scopes"
+  | S.member (c2, c1) (g^.strictEdges)  = internalError "insertFusible: Cyclic edge"
+  | S.notMember (c1, b) (g^.writeEdges) = internalError "insertFusible: Missing write"
+  | S.notMember (b, c2) (g^.readEdges)  = internalError "insertFusible: Missing read"
   | otherwise = g & dataflowEdges %~ S.insert (c1, b, c2)
 
 -- | Insert an infusible data-flow edge between two computations.
 insertInfusible :: (HasCallStack, HasFusionGraph g) => DataflowEdge -> g -> g
 insertInfusible (c1, b, c2) g
-  | c1 == c2                            = error $ "insertInfusible " ++ show (c1, b, c2) ++ ": Reflexive edge"
-  | S.member (c2, c1) (g^.strictEdges)  = error $ "insertInfusible " ++ show (c1, b, c2) ++ ": Cyclic edge"
-  | S.notMember (c1, b) (g^.writeEdges) = error $ "insertInfusible " ++ show (c1, b, c2) ++ ": Missing write"
-  | S.notMember (b, c2) (g^.readEdges)  = error $ "insertInfusible " ++ show (c1, b, c2) ++ ": Missing read"
+  | c1 == c2                            = internalError $ "insertInfusible: Reflexive edge"
+  | S.member (c2, c1) (g^.strictEdges)  = internalError $ "insertInfusible: Cyclic edge"
+  | S.notMember (c1, b) (g^.writeEdges) = internalError $ "insertInfusible: Missing write"
+  | S.notMember (b, c2) (g^.readEdges)  = internalError $ "insertInfusible: Missing read"
   | otherwise = g & dataflowEdges %~ S.insert (c1, b, c2)
                   & strictEdges   %~ S.insert (c1,    c2)
 
@@ -660,7 +658,7 @@ reindexLabelledArgsOp = reindexPreArgs reindexLabelledArgOp
 attachBackendLabels :: MakesILP op => Solution op -> Symbols op -> Symbols op
 attachBackendLabels sol = M.mapWithKey \cases
   l (SExe lenv largs op) -> SExe' lenv (labelLabelledArgs sol l largs) op
-  _  SExe'{} -> error "already converted???"
+  _  SExe'{} -> internalError "already converted???"
   _  con -> con
 
 
@@ -1080,7 +1078,7 @@ mkFusionGraph (Awhile u cond body init) = do
 -- | Construct the fusion graph of a single-argument function.
 mkFusionGraphW :: forall op env s t. MakesILP op
                => Uniquenesses s -> FusionGraphMaker PreOpenAfun op env (s -> t) (BuffersTup t)
-mkFusionGraphW _ (Abody _) = error "mkFusionGraphW: expected Alam"
+mkFusionGraphW _ (Abody _) = internalError "mkFusionGraphW: expected Alam"
 mkFusionGraphW u (Alam lhs f) = do
   lenv <- use buffersEnv
   (S.singleton -> b, c) <- freshBuff
@@ -1240,28 +1238,35 @@ combineInplacePaths g = g&fusionILP.inplacePaths %~ stepsPaths 1000
 
 -- | Filters the in-place update paths to only include those that are valid.
 filterInplacePaths :: forall op. FullGraph op -> FullGraph op
-filterInplacePaths g = g & fusionILP.inplacePaths %~ S.filter sameElementSize
+filterInplacePaths g = g & fusionILP.inplacePaths %~ S.filter sameElementType
   where
-    -- Checks if two in-place updates have the same element size.
-    sameElementSize :: InplacePath -> Bool
-    sameElementSize ((b1, _), (_, b2))
-      | Just SFun{} <- g^.allocator b1 = False
-      | Just SFun{} <- g^.allocator b2 = False
-      | otherwise = getElementSize b1 == getElementSize b2
+    -- Checks if two in-place updates have the same element type.
+    sameElementType :: InplacePath -> Bool
+    sameElementType ((b1, _), (_, b2))
+      | Exists tp1 <- getElt b1
+      , Exists tp2 <- getElt b2
+      , Just Refl  <- matchTypeR tp1 tp2 = True
+      | otherwise                        = False
 
     -- Gets the element size of a buffer.
-    getElementSize :: Label Buff -> Int
-    getElementSize b = case g^.allocator b of
-      Just (SAlc _ _ e _) -> bytes e
-      Just (SUnt _ v)     -> bytes $ varType v
-      Just (SUse e _ _)   -> bytes e
-      Just (SFun _ _)   -> error "getElementSize: don't know how to handle yet"
-      Just _  -> error "getElementSize: not an array allocator"
-      Nothing -> error "getElementSize: no allocator found"
+    getElt :: Label Buff -> Exists TypeR
+    getElt b = case g^.allocator b of
+      Just (SAlc _ _ e _) -> Exists $ TupRsingle e
+      Just (SUnt _ v)     -> Exists $ TupRsingle $ varType v
+      Just (SUse e _ _)   -> Exists $ TupRsingle e
+      Just (SFun lhs _)   -> groundsRtoTypeR $ lhsToTupR $ unbindLHS lhs
+      Just _  -> internalError "getElementSize: not an array allocator"
+      Nothing -> internalError "getElementSize: no allocator found"
 
-    -- The number of bytes used by a scalar type.
-    bytes :: ScalarType e -> Int
-    bytes = bytesElt . TupRsingle
+    -- Use exists because we don't know the exact type.
+    groundsRtoTypeR :: GroundsR s -> Exists TypeR
+    groundsRtoTypeR TupRunit = Exists TupRunit
+    groundsRtoTypeR (TupRsingle (GroundRscalar tp)) = Exists $ TupRsingle tp
+    groundsRtoTypeR (TupRsingle (GroundRbuffer tp)) = Exists $ TupRsingle tp
+    groundsRtoTypeR (TupRpair e1 e2)
+      | Exists tp1 <- groundsRtoTypeR e1
+      , Exists tp2 <- groundsRtoTypeR e2
+      = Exists $ TupRpair tp1 tp2
 
 -- | Finalizes the in-place update paths by combining them and filtering them.
 finalizeInplacePaths :: FullGraph op -> FullGraph op
@@ -1312,8 +1317,8 @@ mkInplacePaths g = g&fusionILP.inplacePaths .~ validPaths
           Just x@SUnt{} -> x
           Just x@SUse{} -> x
           Just x@SFun{} -> x
-          Just _  -> error "getAlloc: not an array allocator"
-          Nothing -> error "getAlloc: no allocator found"
+          Just _  -> internalError "getAlloc: not an array allocator"
+          Nothing -> internalError "getAlloc: no allocator found"
 
         bytes :: ScalarType e -> Int
         bytes = bytesElt . TupRsingle
@@ -1389,7 +1394,7 @@ with l a f s = (l .~ s^.l) <$> f (s & l .~ a)
 -- This function is partial and will throw an error if the set is not singleton.
 fromSingletonSet :: HasCallStack => Set a -> a
 fromSingletonSet (S.toList -> [x]) = x
-fromSingletonSet _ = error "fromSingletonSet: Set is not singleton."
+fromSingletonSet _ = internalError "fromSingletonSet: Set is not singleton."
 
 -- | Print out information about the given buffer.
 traceBuff :: Label Buff -> State (FusionGraphState op env) ()
