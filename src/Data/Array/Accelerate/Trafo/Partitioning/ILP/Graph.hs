@@ -8,7 +8,6 @@
 {-# LANGUAGE InstanceSigs             #-}
 {-# LANGUAGE KindSignatures           #-}
 {-# LANGUAGE LambdaCase               #-}
-
 {-# LANGUAGE RankNTypes               #-}
 {-# LANGUAGE ScopedTypeVariables      #-}
 {-# LANGUAGE StandaloneDeriving       #-}
@@ -18,7 +17,7 @@
 {-# LANGUAGE TypeFamilyDependencies   #-}
 {-# LANGUAGE UndecidableInstances     #-}
 {-# LANGUAGE ViewPatterns             #-}
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE OverloadedStrings        #-}
 module Data.Array.Accelerate.Trafo.Partitioning.ILP.Graph where
 
 import Prelude hiding ( init, reads )
@@ -1194,7 +1193,7 @@ mkUnitInplacePaths _ _ _ = S.empty
 -- | Combines the in-place update paths of length 1 (i.e. across computations)
 --   to in-place update paths of arbitrary length.
 combineInplacePaths :: FullGraph op -> FullGraph op
-combineInplacePaths g = g&fusionILP.inplacePaths %~ stepsPaths 1000
+combineInplacePaths g = g&fusionILP.inplacePaths %~ stepsPaths 50
   where
     -- Keep extending the path until no more extensions are possible or the
     -- iteration limit reaches 0.
@@ -1265,6 +1264,7 @@ filterInplacePaths g = g & fusionILP.inplacePaths %~ S.filter sameElementType
 -- | Finalizes the in-place update paths by combining them and filtering them.
 finalizeInplacePaths :: FullGraph op -> FullGraph op
 finalizeInplacePaths = filterInplacePaths . combineInplacePaths
+
 
 
 -- | Naive approach: find in-place updates from scratch.
