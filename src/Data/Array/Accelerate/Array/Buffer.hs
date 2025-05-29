@@ -128,6 +128,9 @@ memoryRetain = undefined
 memoryRelease :: Ptr () -> IO ()
 memoryRelease = undefined
 
+memoryReleaseRef :: FunPtr (Ptr () -> IO ())
+memoryReleaseRef = undefined
+
 #endif
 
 -- SEE: [linking to .c files]
