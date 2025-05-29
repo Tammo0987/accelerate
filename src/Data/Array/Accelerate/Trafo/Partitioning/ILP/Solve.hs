@@ -6,6 +6,7 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE BlockArguments #-}
+{-# LANGUAGE LambdaCase #-}
 
 module Data.Array.Accelerate.Trafo.Partitioning.ILP.Solve where
 
@@ -29,12 +30,9 @@ import Data.Function ( on )
 import Lens.Micro ((^.),  _1 )
 import Lens.Micro.Extras ( view )
 import Data.Maybe (fromJust,  mapMaybe )
-import Control.Monad (forM, replicateM)
 import Control.Monad.State
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.NameGeneration (freshName)
-import Data.Foldable hiding (sum)
-import Data.Tuple (swap)
-import Debug.Trace
+import Data.Foldable
 
 data Objective
   = NumClusters
@@ -106,7 +104,7 @@ makeILP obj (FusionILP graph constraints bounds) = combine graphILP
       Everything         -> (Minimise, numberOfClusters .+. numberOfArrayReadsWrites) -- arrayreadswrites already indictly includes everything else
 
     -- objective function that maximises the number of edges we fuse, and minimises the number of array reads if you ignore horizontal fusion
-    numberOfUnfusedEdges = foldl' (\e (prod, _, cons) -> e .+. fused prod cons) (int 0) fusibleE
+    numberOfUnfusedEdges = foldMap fused fusibleE
 
     -- A cost function that doesn't ignore horizontal fusion.
     -- Idea: Each node $x$ with $n$ outgoing edges gets $n$ extra variables.
@@ -127,8 +125,8 @@ makeILP obj (FusionILP graph constraints bounds) = combine graphILP
       (subConstraint, subBounds) <- flip foldMapM consumers $ \(buff,cons) -> do
         useVars <- replicateM nConsumers useVar -- these are the n^2 variables: For each consumer, n variables which each check the equality of pi to readpi
         let constraint = foldMap
-              (\(uv, rp, ro) -> isEqualRangeN (var rp) (pi cons)           (var uv)
-                             <> isEqualRangeN (var ro) (readDir buff cons) (var uv))
+              (\(uv, rp, ro) -> isEqualRangeN (var rp) (pi cons)              (var uv)
+                             <> isEqualRangeN (var ro) (readDir (buff, cons)) (var uv))
               (zip3 useVars readPis readOrders)
         return (constraint <> foldl (.+.) (int 0) (map var useVars) .<=. int (nConsumers-1), foldMap binary useVars)
       readPi0s <- replicateM nConsumers readPi0Var
@@ -166,41 +164,26 @@ makeILP obj (FusionILP graph constraints bounds) = combine graphILP
       <> numberOfClustersC <> readC <> orderC <> finalize graph
 
     -- x_ij <= pi_j - pi_i <= n*x_ij for all fusible edges
-    fusibleAcyclicC = foldMap (\(i,_,j) -> between (fused i j) (pi j .-. pi i) (timesN $ fused i j)) fusibleE
+    fusibleAcyclicC = foldMap (\e@(i,_,j) -> between (fused e) (pi j .-. pi i) (timesN $ fused e)) fusibleE
 
     -- pi_i < pi_j for all strict edges  NEW!
     strictAcyclicC = foldMap (\(i,j) -> pi i .<. pi j) strictE
 
     -- x_ij == 1 for all infusible edges
-    infusibleC = foldMap (\(i,_,j) -> fused i j .==. int 1) infusibleE
+    infusibleC = foldMap (\e -> fused e .==. int 1) infusibleE
 
     -- if (i,b,j) is not fused, b has to be manifest
     -- TODO: final output is also manifest
     -- manifestC = foldMap (\(i,b,j) -> notB (fused i j) `impliesB` manifest b) dataflowE
 
-    -- if b is manifest, then sum_(i,b,j) 1 - x_ij >= 1 for all buffers b
-    -- ==> 1 - manifest b <= sum_(i,b,j) x_ij
-    -- strictManifestC
-    --   = M.foldMapWithKey (\b sum -> int 1 .-. manifest b .<=. sum)
-    --   $ foldl (flip \(i,b,j) -> M.insertWith (.+.) b (int 1 .-. fused i j)) M.empty dataflowE
+    -- forall b, iff all (w,b,r) are fused, then b is not manifest.
+    manifestC = M.foldMapWithKey (\b es -> allB (map fused es) (notB $ manifest b))
+              $ foldl (flip \e@(_,b,_) -> M.insertWith (<>) b [e]) M.empty dataflowE
 
-    -- forall b, iff all (i,b,j) are fused, then b is not manifest.
-    manifestC = M.foldMapWithKey (\b ijs -> allB (map (uncurry fused) ijs) (notB $ manifest b))
-              $ foldl (flip \(i,b,j) -> M.insertWith (<>) b [(i,j)]) M.empty dataflowE
-
-    -- -- Alternative, stricter manifestC:
-    -- -- iff b is     manifest, then sum_(i,b,j) x_ij >= 1 for all buffers b
-    -- -- iff b is not manifest, then sum_(i,b,j) x_ij == 0 for all buffers b
-    -- -- i.e. manifest b <= sum_(i,b,j) 1-x_ij <= 1 - manifest b
-    -- manifestC = M.foldMapWithKey (\b ijs -> between (notB $ manifest b) (foldMap (notB . uncurry fused) ijs) (S.size ijs .*. notB (manifest b))) fusedVarGroups
-
-    fusedVarGroups :: M.Map (Label Buff) (S.Set (Label Comp, Label Comp))
-    fusedVarGroups = foldl (flip \(i,b,j) -> M.insertWith S.union b (S.singleton (i,j))) M.empty dataflowE
-
-    -- if (i,b,j) is fused, d_bj == d_ib
-    orderC = flip foldMap fusibleE $ \(i,b,j) ->
-                  timesN (fused i j) .>=. readDir b j .-. writeDir i b
-      <> (-1) .*. timesN (fused i j) .<=. readDir b j .-. writeDir i b
+    -- if (w,b,r) is fused, then d_wb == d_br
+    orderC = flip foldMap fusibleE $ \e@(w,b,r) ->
+                  timesN (fused e) .>=. readDir (b,r) .-. writeDir (w,b)
+      <> (-1) .*. timesN (fused e) .<=. readDir (b,r) .-. writeDir (w,b)
 
     fusionBounds :: Bounds op
     fusionBounds = piB <> fusedB <> manifestB <> readB
@@ -208,39 +191,42 @@ makeILP obj (FusionILP graph constraints bounds) = combine graphILP
     --  0 <= pi_i <= n
     piB = foldMap (\i -> lowerUpper 0 (Pi i) n) compN
 
-    -- x_ij \in {0, 1}
+    -- 0 <= x_ij <= 1
     fusedB = foldMap (binary . uncurry Fused) $ S.map (\(i,_,j) -> (i,j)) dataflowE
 
-    -- m_i \in {0, 1}
+    -- 0 <= m_i  <= 1
     manifestB = foldMap (binary . Manifest) buffN
 
 
     -- For in-place updates:
 
-    -- If an in-place update occurs the computations must be in the same cluster:
-    -- forall ((b1,c1),(c2,b2)) \in inplaceP . pi_c2 - pi_c1 <= n * inplace b1 b2
-    acrossClusterC = foldMap (\((b1,c1),(c2,b2)) -> (pi c2 .-. pi c1) .<=. timesN (inplace b1 b2)) inplaceP
+    -- If inplace p, then c1 == c2
+    acrossClusterC = flip foldMap inplaceP \case
+      p@((_,c1),(c2,_))
+        | c1 == c2  -> mempty
+        | otherwise -> isEqualRangeN (pi c1) (pi c2) (inplace p)
 
-    -- Each buffer may only be used once for an in-place update:
-    -- forall a \in buffN . Sum (1 - inplace a b) <= 1
-    singleUpdateC = foldMap (.<=. int 1) $ foldl (flip \((a,_),(_,b)) -> M.insertWith (.+.) a (notB $ inplace a b)) M.empty inplaceP
+    -- If inplace p, then manifest b1 and manifest b2
+    onManifestC = foldMap (\p@((b1,_),(_,b2)) -> (inplace p `impliesB` manifest b1) <> (inplace p `impliesB` manifest b2)) inplaceP
 
-    -- The in-place update is done by cluster Pi_b1 == pi_c2.
-    -- forall ((b1,_),(c2,b2)) \in inplaceP . 0 <= Pi_b1 - pi_c2 <= n * inplace b1 b2
-    inplaceClusterC = foldMap (\((b1,_),(c2,b2)) -> between (int 0) (pimax b1 .-. pi c2) (timesN $ inplace b1 b2)) inplaceP
+    -- Forall b, at most one inplace p
+    singleUpdateC = foldMap (packB 1) $ foldl (flip \p@((b,_),_) -> M.insertWith (<>) b [inplace p]) M.empty inplaceP
 
-    -- The in-place update is done by the sole, largest cluster reading the buffer:
-    -- forall ((b1,c1),(_,b2)) \in inplaceP . pi_c1 + inplace b1 b2 <= Pi_b1
-    finalClusterC = foldMap (\((b1,c1),(_,b2)) -> pi c1 .+. inplace b1 b2 .<=. pimax b1) inplaceP
+    -- If inplace p, then pimax b1 == pi c2
+    inplaceClusterC = foldMap (\p@((b1,_),(c2,_)) -> between (int 0) (pimax b1 .-. pi c2) (timesN $ inplace p)) inplaceP
 
-    inplaceConstraints = acrossClusterC <> singleUpdateC <> inplaceClusterC <> finalClusterC
+    -- Iff     inplace p, then pi c1     <= pimax b1
+    -- Iff not inplace p, then pi c1 + 1 <= pimax b1
+    finalClusterC = foldMap (\p@((b1,c1),_) -> pi c1 .+. inplace p .<=. pimax b1) inplaceP
+
+    inplaceConstraints = acrossClusterC <> onManifestC <> singleUpdateC <> inplaceClusterC <> finalClusterC
 
 
-    -- 0 <= pimax_b <= n
-    pimaxB = foldMap (\b -> lowerUpper 0 (PiMax b) n) buffN
+    -- 0 <= pimax_b
+    pimaxB = foldMap (lower 0 . PiMax) buffN
 
-    -- inplace_ij \in {0, 1}
-    inplaceB = foldMap (binary . uncurry InPlace) $ S.map (\((i,_),(_,j)) -> (i,j)) inplaceP
+    -- inplace b1 b2 \in {0, 1}
+    inplaceB = foldMap (\((b1,c1),(_,b2)) -> binary $ InPlace b1 c1 b2) inplaceP
 
     inplaceBounds = pimaxB <> inplaceB
 

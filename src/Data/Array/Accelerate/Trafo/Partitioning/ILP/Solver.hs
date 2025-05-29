@@ -11,6 +11,7 @@
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE InstanceSigs #-}
+{-# LANGUAGE OverloadedStrings #-}
 module Data.Array.Accelerate.Trafo.Partitioning.ILP.Solver where
 
 import qualified Data.Map as M
@@ -23,6 +24,7 @@ import qualified Data.Set as S
 -- import {-# SOURCE #-} Data.Array.Accelerate.Trafo.Partitioning.ILP.Graph ( )
 import Data.Foldable
 import Data.Kind (Type)
+import Data.Array.Accelerate.Error
 
 
 data family Var (op :: Type -> Type)
@@ -260,7 +262,26 @@ isEqualRangeN = isEqualRange timesN
 -- given a function f that multiplies by the size of the domain of a and b, r can only be 0(true) when a and b are equal
 -- note that r can always be 1
 isEqualRange :: (Expression op -> Expression op) -> Expression op -> Expression op -> Expression op -> Constraint op
-isEqualRange f a b r = a .-. f r .<=. b <> b .<=. a .+. f r
+isEqualRange f a b r = between (a .-. f r) b (a .+. f r)
+
+
+-- | From a set of booleans, select at most n to be 0 (true).
+packB :: Foldable f => Int -> f (Expression op) -> Constraint op
+packB n xs
+  | n >= length xs = TrueConstraint
+  | n >= 0         = fold xs .>=. int (length xs - n)
+  | otherwise      = internalError "packB: always false"
+
+-- | From a set of booleans, select at least n to be 0 (true).
+coverB :: Foldable f => Int -> f (Expression op) -> Constraint op
+coverB n xs
+  | n <= 0         = TrueConstraint
+  | n <= length xs = fold xs .<=. int (length xs - n)
+  | otherwise      = internalError "coverB: always false"
+
+-- | From a set of booleans, select exactly n to be 0 (true).
+partitionB :: Foldable f => Int -> f (Expression op) -> Constraint op
+partitionB n xs = packB n xs <> coverB n xs
 
 
 -- helpers for solving an ILP

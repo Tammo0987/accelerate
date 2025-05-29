@@ -519,9 +519,10 @@ data instance Var (op :: Type -> Type)
     -- This is what allows backends to specify how each of the operations can fuse.
 
   -- Variables introduced for in-place updates:
-  | InPlace (Label Buff) (Label Buff)
+  | InPlace (Label Buff) (Label Comp) (Label Buff)
     -- ^ 0 means in-place, 1 means not in-place. The first label is an input of a cluster, the second label is an output of a cluster.
-    -- TODO: Might need to include some additional information to mark the cluster/computation affected by substitution.
+    -- All 'InPlace' variables need to be unique, so we can't omit the first computation (the reader of the input buffer), but we can safely omit the second (writer of the output) because there should in theory only be one writer per buffer in the cases we care about.
+    -- If the above assumption is not correct, you'll find that the ILP solver will throw an error @must have >=1 lines@, which is caused by an invalid ILP (in this case because we get duplicate variables in a single constraint).
   | PiMax (Label Buff)
     -- ^ The cluster number of the largest reader of the buffer, since in-place updates are only allowed on the final consumer of an array/buffer.
   -- | WriteDirPiMax (Label Buff)
@@ -571,21 +572,22 @@ manifest :: Label Buff -> Expression op
 manifest = var . Manifest
 
 -- | Safe constructor for 'Fused' variables.
-fused :: Label Comp -> Label Comp -> Expression op
-fused prod cons  = var $ Fused prod cons
+fused :: DataflowEdge -> Expression op
+fused (w, _, r)= var $ Fused w r
 
 -- | Safe constructor for 'ReadDir' variables.
-readDir :: Label Buff -> Label Comp -> Expression op
-readDir buff = var . ReadDir buff
+readDir :: ReadEdge -> Expression op
+readDir = var . uncurry ReadDir
 
 -- | Safe constructor for 'WriteDir' variables.
-writeDir :: Label Comp -> Label Buff -> Expression op
-writeDir comp = var . WriteDir comp
+writeDir :: WriteEdge -> Expression op
+writeDir = var . uncurry WriteDir
 
 -- | Safe constructor for 'InPlace' variables.
-inplace :: Label Buff -> Label Buff -> Expression op
-inplace prod cons = var $ InPlace prod cons
+inplace :: InplacePath -> Expression op
+inplace ((b1,c1),(_,b2)) = var $ InPlace b1 c1 b2
 
+-- | Safe constructor for 'PiMax' variables.
 pimax :: Label Buff -> Expression op
 pimax = var . PiMax
 
