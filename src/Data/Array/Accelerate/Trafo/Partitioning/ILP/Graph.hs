@@ -18,6 +18,7 @@
 {-# LANGUAGE UndecidableInstances     #-}
 {-# LANGUAGE ViewPatterns             #-}
 {-# LANGUAGE OverloadedStrings        #-}
+{-# OPTIONS_GHC -Wno-orphans          #-}
 module Data.Array.Accelerate.Trafo.Partitioning.ILP.Graph where
 
 import Prelude hiding ( init, reads )
