@@ -483,7 +483,7 @@ labelLabelledArgs _ _ ArgsNil = ArgsNil
 -- ILP Variables
 --------------------------------------------------------------------------------
 
-data Var (op :: Type -> Type)
+data instance Var (op :: Type -> Type)
   -- Variables used by fusion:
   = Pi (Label Comp)
     -- ^ Used for acyclic ordering of clusters.
