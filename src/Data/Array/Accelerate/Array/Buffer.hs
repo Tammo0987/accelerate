@@ -119,6 +119,9 @@ foreign import ccall unsafe "&accelerate_buffer_release" memoryReleaseRef :: Fun
 memoryAlloc :: Word64 -> IO (Ptr ())
 memoryAlloc = undefined
 
+memoryByteSize :: Ptr () -> IO Word64
+memoryByteSize = undefined
+
 memoryRetain :: Ptr () -> IO ()
 memoryRetain = undefined
 
