@@ -184,7 +184,7 @@ tupFlike (TupRpair l r) b = TupFpair (tupFlike l b) (tupFlike r b)
 
 matchTupF :: TupF s a -> TupF t a -> Maybe (s :~: t)
 matchTupF TupFunit       TupFunit       = Just Refl
-matchTupF (TupFsingle _) (TupFsingle _) = Just (unsafeCoerce Refl :: s :~: t)
+matchTupF (TupFsingle _) (TupFsingle _) = Just (unsafeCoerce Refl :: s :~: t)  -- TODO: This can probably be cleaner if we change the definition of 'Buff' and 'Comp' to be similar to 'Buffer' and (type of computation?).
 matchTupF (TupFpair l1 r1) (TupFpair l2 r2) = do
   Refl <- matchTupF l1 l2
   Refl <- matchTupF r1 r2
