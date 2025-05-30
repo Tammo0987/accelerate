@@ -223,7 +223,10 @@ makeILP obj (FusionILP graph constraints bounds) = combine graphILP
     -- Iff not inplace p, then pi c1 + 1 <= pimax b1
     finalClusterC = foldMap (\p@((b1,c1),_) -> pi c1 .+. inplace p .<=. pimax b1) inplaceP
 
-    -- TODO: Maybe add a constraint that c2 is the first writer to b2? This would make sense because the graph doesn't acctually enforce there is only one writer per buffer.
+    -- TODO: Maybe add a constraint that c2 is the first writer to b2?
+    -- This would make sense because the graph doesn't acctually enforce there is only one writer per buffer.
+    -- For most cases there shouldn't be more than 2 writers, one of which is a let-binding, so no issues arise without this constraint.
+    -- However, a mutable computation would create a third writer, which would be a problem.
 
     inplaceConstraints = acrossClusterC <> onManifestC <> singleUpdateC <> inplaceClusterC <> finalClusterC
 
