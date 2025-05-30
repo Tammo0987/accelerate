@@ -40,8 +40,8 @@ data Benchmarking = GreedyUp | GreedyDown | NoFusion
 data FusionType = Fusion Objective | Benchmarking Benchmarking
 
 defaultObjective :: FusionType
-defaultObjective = Fusion IntermediateArrays
--- defaultObjective = Fusion NumInplace
+-- defaultObjective = Fusion IntermediateArrays
+defaultObjective = Fusion NumInplace
 
 -- data type that should probably be in the options
 newtype Solver = MIPSolver MIPSolver

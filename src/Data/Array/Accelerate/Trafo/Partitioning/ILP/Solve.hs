@@ -281,17 +281,22 @@ interpretClusters sol = do
     scopeLabel :: [Labels Comp] -> Label Comp
     scopeLabel = fromJust . view parent . S.findMin . head
 
--- | `groupBy` except it's equivalent to SQL's `GROUP BY` clause. I.e. the
--- groups
+-- | `groupBy` except it's equivalent to SQL's `GROUP BY` clause.
 partition :: Ord b => (a -> b) -> [a] -> [[a]]
-partition f = groupBy (on (==) f) . sortOn f
+partition f = groupBy ((==) `on` f) . sortOn f
 
 interpretInplaceUpdates :: Solution op -> M.Map (Label Buff) (Label Buff)
-interpretInplaceUpdates sol = M.fromList $ mapMaybe fromInPlace $ M.toList sol
+interpretInplaceUpdates sol = M.map firstInChain inplaceM
   where
+    -- Map from buffer to the buffer that will replace it.
+    inplaceM = M.fromList $ mapMaybe fromInPlace $ M.toList sol
+
     fromInPlace :: (Var op, Int) -> Maybe (Label Buff, Label Buff)
     fromInPlace (InPlace b1 _ _ b2, v) | v == 0 = Just (b2, b1)
     fromInPlace _ = Nothing
+
+    firstInChain :: Label Buff -> Label Buff
+    firstInChain b = maybe b firstInChain (M.lookup b inplaceM)
 
 -- | Cluster labels, distinguishing between execute and non-execute labels.
 data ClusterLs = Execs (Labels Comp) | NonExec (Label Comp)

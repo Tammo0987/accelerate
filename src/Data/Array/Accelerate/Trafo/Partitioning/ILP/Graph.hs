@@ -54,6 +54,7 @@ import Data.Foldable (Foldable (fold, foldr'), traverse_)
 import Data.Kind (Type)
 import Debug.Trace
 import Unsafe.Coerce (unsafeCoerce)
+import Data.Maybe (fromMaybe)
 
 
 
@@ -1345,15 +1346,17 @@ mkInplacePaths g = g&fusionILP.inplacePaths .~ validPaths
 -- | Makes a ReindexPartial, which allows us to transform indices in @env@ into indices in @env'@.
 -- We cannot guarantee the index is present in env', so we use the partiality of ReindexPartial by
 -- returning a Maybe. Uses unsafeCoerce to re-introduce type information implied by the EnvLabels.
-mkReindexPartial :: Map (Label Buff) (Label Buff) -> BuffersEnv env -> BuffersEnv env' -> ReindexPartial Maybe env env'
-mkReindexPartial m env env' idx = go env'
+mkReindexPartial :: forall env env'. Map (Label Buff) (Label Buff) -> BuffersEnv env -> BuffersEnv env' -> ReindexPartial Maybe env env'
+mkReindexPartial m env env' idx = idxOf (inplaceOf $ lookupIdxInEnv idx env^._2) env'
   where
-    -- The EnvLabel in the original environment
-    (e,bs,_) = lookupIdxInEnv idx env
+    --
+    inplaceOf :: BuffersTup a -> BuffersTup a
+    inplaceOf (TupFsingle bs) = TupFsingle $ maybe bs S.fromList (traverse (`M.lookup` m) $ S.toList bs)
+    inplaceOf bs = bs
 
     -- Find the corresponding EnvLabel in the new environment.
-    go :: forall e a. BuffersEnv e -> Maybe (Idx e a)
-    go ((e',bs',_) :>>: rest) -- e' is the ELabel in the new environment
+    idxOf :: forall e a. BuffersTup a -> BuffersEnv e -> Maybe (Idx e a)
+    idxOf bs ((_,bs',_) :>>: rest) -- bs' is the BuffersTup in the new environment
       -- Here we have to convince GHC that the top element in the environment
       -- really does have the same type as the one we were searching for.
       -- Some literature does this stuff too: 'effect handlers in haskell, evidently'
@@ -1364,11 +1367,11 @@ mkReindexPartial m env env' idx = go env'
       | Just Refl <- matchTupF bs bs'
       , bs == bs' = Just $ unsafeCoerce @(Idx e _) @(Idx e a) ZeroIdx
       -- Recurse if we did not find e' yet.
-      | otherwise = SuccIdx <$> go rest
+      | otherwise = SuccIdx <$> idxOf bs rest
     -- If we hit the end, the Elabel was not present in the environment.
     -- That probably means we'll error out at a later point, but maybe there is
     -- a case where we try multiple options? No need to worry about it here.
-    go EnvNil = Nothing
+    idxOf _ EnvNil = Nothing
 
 
 --------------------------------------------------------------------------------
