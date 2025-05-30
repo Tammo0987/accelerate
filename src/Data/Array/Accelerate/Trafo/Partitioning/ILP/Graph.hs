@@ -519,10 +519,9 @@ data instance Var (op :: Type -> Type)
     -- This is what allows backends to specify how each of the operations can fuse.
 
   -- Variables introduced for in-place updates:
-  | InPlace (Label Buff) (Label Comp) (Label Buff)
+  | InPlace (Label Buff) (Label Comp) (Label Comp) (Label Buff)
     -- ^ 0 means in-place, 1 means not in-place. The first label is an input of a cluster, the second label is an output of a cluster.
-    -- All 'InPlace' variables need to be unique, so we can't omit the first computation (the reader of the input buffer), but we can safely omit the second (writer of the output) because there should in theory only be one writer per buffer in the cases we care about.
-    -- If the above assumption is not correct, you'll find that the ILP solver will throw an error @must have >=1 lines@, which is caused by an invalid ILP (in this case because we get duplicate variables in a single constraint).
+    -- All 'InPlace' variables need to be unique, so we can't omit the computation labels. Taking one path through a cluster is different from taking another.
   | PiMax (Label Buff)
     -- ^ The cluster number of the largest reader of the buffer, since in-place updates are only allowed on the final consumer of an array/buffer.
   -- | WriteDirPiMax (Label Buff)
@@ -585,7 +584,7 @@ writeDir = var . uncurry WriteDir
 
 -- | Safe constructor for 'InPlace' variables.
 inplace :: InplacePath -> Expression op
-inplace ((b1,c1),(_,b2)) = var $ InPlace b1 c1 b2
+inplace ((b1,c1),(c2,b2)) = var $ InPlace b1 c1 c2 b2
 
 -- | Safe constructor for 'PiMax' variables.
 pimax :: Label Buff -> Expression op

@@ -41,6 +41,7 @@ data Objective
   | IntermediateArrays
   | FusedEdges
   | Everything
+  | NumInplace
   deriving (Show, Bounded, Enum)
 
 
@@ -102,6 +103,7 @@ makeILP obj (FusionILP graph constraints bounds) = combine graphILP
       IntermediateArrays -> (Minimise, numberOfManifestArrays)
       FusedEdges         -> (Minimise, numberOfUnfusedEdges)
       Everything         -> (Minimise, numberOfClusters .+. numberOfArrayReadsWrites) -- arrayreadswrites already indictly includes everything else
+      NumInplace         -> (Minimise, numberOfInplaceUpdates)
 
     -- objective function that maximises the number of edges we fuse, and minimises the number of array reads if you ignore horizontal fusion
     numberOfUnfusedEdges = foldMap fused fusibleE
@@ -200,6 +202,8 @@ makeILP obj (FusionILP graph constraints bounds) = combine graphILP
 
     -- For in-place updates:
 
+    numberOfInplaceUpdates = foldMap inplace inplaceP
+
     -- If inplace p, then c1 == c2
     acrossClusterC = flip foldMap inplaceP \case
       p@((_,c1),(c2,_))
@@ -226,7 +230,7 @@ makeILP obj (FusionILP graph constraints bounds) = combine graphILP
     pimaxB = foldMap (lower 0 . PiMax) buffN
 
     -- inplace b1 b2 \in {0, 1}
-    inplaceB = foldMap (\((b1,c1),(_,b2)) -> binary $ InPlace b1 c1 b2) inplaceP
+    inplaceB = foldMap (\((b1,c1),(c2,b2)) -> binary $ InPlace b1 c1 c2 b2) inplaceP
 
     inplaceBounds = pimaxB <> inplaceB
 
@@ -281,6 +285,13 @@ interpretClusters sol = do
 -- groups
 partition :: Ord b => (a -> b) -> [a] -> [[a]]
 partition f = groupBy (on (==) f) . sortOn f
+
+interpretInplaceUpdates :: Solution op -> M.Map (Label Buff) (Label Buff)
+interpretInplaceUpdates sol = M.fromList $ mapMaybe fromInPlace $ M.toList sol
+  where
+    fromInPlace :: (Var op, Int) -> Maybe (Label Buff, Label Buff)
+    fromInPlace (InPlace b1 _ _ b2, v) | v == 0 = Just (b2, b1)
+    fromInPlace _ = Nothing
 
 -- | Cluster labels, distinguishing between execute and non-execute labels.
 data ClusterLs = Execs (Labels Comp) | NonExec (Label Comp)

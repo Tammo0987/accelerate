@@ -11,7 +11,7 @@ module Data.Array.Accelerate.Trafo.Partitioning.ILP where
 
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Graph
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Solve
-    ( interpretClusters, makeILP, splitExecs, ClusterLs, Objective (..), interpretReadDirs, interpretWriteDirs )
+    ( interpretClusters, makeILP, splitExecs, ClusterLs, Objective (..), interpretReadDirs, interpretWriteDirs, interpretInplaceUpdates )
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Clustering
     ( reconstruct, reconstructF, ReadDirM )
 import Data.Array.Accelerate.AST.Partitioned
@@ -82,10 +82,11 @@ ilpFusion' :: (MakesILP op, ILPSolver s op)
 ilpFusion' toGraph fromGraph s obj acc = do
   let fullgraph = {- traceGraph $ -} toGraph acc
   let ilp       = makeILP obj (fullgraph^.fusionILP)
-  let solution  = {- traceWith ppSolution $ -} fromMaybe (error "Accelerate: No ILP solution found") (unsafePerformIO $ solve s ilp)
+  let solution  = traceWith ppSolution $ fromMaybe (error "Accelerate: No ILP solution found") (unsafePerformIO $ solve s ilp)
   let symbols'  = attachBackendLabels solution (fullgraph^.symbols)
   let readDirM  = interpretReadDirs  solution
   -- let writeDirM = interpretWriteDirs solution
+  let inplaceM  = interpretInplaceUpdates solution
   let (topClusters, subClustersM) = splitExecs (interpretClusters solution) symbols'
   fromGraph (fullgraph^.fusionILP.graph) topClusters subClustersM symbols' readDirM
 
