@@ -31,6 +31,7 @@ module Data.Array.Accelerate.Trafo.Partitioning.ILP.Clustering where
 import Data.Array.Accelerate.AST.LeftHandSide ( Exists(..), LeftHandSide (..), lhsToTupR )
 import Data.Array.Accelerate.AST.Partitioned
 import Data.Array.Accelerate.AST.Var
+import Data.Array.Accelerate.AST.Operation ( ReindexPartial )
 import Data.Array.Accelerate.Representation.Type
 import Data.Array.Accelerate.Type ( scalarType )
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Graph hiding (readEdges, writeEdges, strictEdges, dataflowEdges, symbols, graph)
@@ -89,12 +90,12 @@ map' !?? key = case map' M.!? key of
 -- (namely, what it was before fusion), via an GroundsR.
 -- Since fusion goes via an untyped ILP, during reconstruction we need to rebuild the program and temporarily
 -- fulfill this contract: if something goes wrong during fusion or at the caller, bad things happen.
-reconstruct :: forall op a. MakesILP op => GroundsR a -> Bool -> FusionGraph -> [ClusterLs] -> M.Map (Label Comp) [ClusterLs] -> Symbols op -> ReadDirM -> PreOpenAcc (Clustered op) () a
-reconstruct repr a b c d e f = case openReconstruct a EnvNil b c d e f of
+reconstruct :: forall op a. MakesILP op => GroundsR a -> Bool -> FusionGraph -> [ClusterLs] -> M.Map (Label Comp) [ClusterLs] -> Symbols op -> ReadDirM -> InplaceM -> PreOpenAcc (Clustered op) () a
+reconstruct repr a b c d e f g = case openReconstruct a EnvNil b c d e f g of
           Exists res -> expectType repr res
 
-reconstructF :: forall op a. (HasCallStack, MakesILP op) => PreOpenAfun op () a -> Bool -> FusionGraph -> [ClusterLs] -> M.Map (Label Comp) [ClusterLs] -> Symbols op -> ReadDirM -> PreOpenAfun (Clustered op) () a
-reconstructF original a b c d e f = case openReconstructF a EnvNil b c (Label 1 Nothing) d e f of
+reconstructF :: forall op a. (HasCallStack, MakesILP op) => PreOpenAfun op () a -> Bool -> FusionGraph -> [ClusterLs] -> M.Map (Label Comp) [ClusterLs] -> Symbols op -> ReadDirM -> InplaceM -> PreOpenAfun (Clustered op) () a
+reconstructF original a b c d e f g = case openReconstructF a EnvNil b c (Label 1 Nothing) d e f g of
           Exists res -> expectFunTypeEqual original res
 
 
@@ -107,6 +108,7 @@ foldC f x (ExecL ls) = foldr f x ls
 foldC f x (NonExecL l) = f l x
 
 type ReadDirM = M.Map ReadEdge Int
+type InplaceM = M.Map (Label Buff) (Label Buff)
 
 topSort :: Bool -> FusionGraph -> Labels Comp -> ReadDirM -> [ClusterL]
 topSort _ _ (S.toList -> [l]) _ = [ExecL [l]]  -- If the cluster is empty.
@@ -180,8 +182,9 @@ openReconstruct   :: MakesILP op
                   -> M.Map (Label Comp) [ClusterLs]
                   -> Symbols op
                   -> ReadDirM
+                  -> InplaceM
                   -> Exists (PreOpenAcc (Clustered op) aenv)
-openReconstruct  a b c d   e f g = (\(Left x) -> x) $ openReconstruct' a b c d Nothing e f g
+openReconstruct  a b c d   e f g h = (\(Left x) -> x) $ openReconstruct' a b c d Nothing e f g h
 openReconstructF  :: (HasCallStack, MakesILP op)
                   => Bool
                   -> BuffersEnv aenv
@@ -191,15 +194,19 @@ openReconstructF  :: (HasCallStack, MakesILP op)
                   -> M.Map (Label Comp) [ClusterLs]
                   -> Symbols op
                   -> ReadDirM
+                  -> InplaceM
                   -> Exists (PreOpenAfun (Clustered op) aenv)
-openReconstructF a b c d l e f g = (\(Right x) -> x) $ openReconstruct' a b c d (Just l) e f g
+openReconstructF a b c d l e f g h = (\(Right x) -> x) $ openReconstruct' a b c d (Just l) e f g h
 
-openReconstruct' :: forall op aenv. (HasCallStack, MakesILP op) => Bool -> BuffersEnv aenv -> FusionGraph -> [ClusterLs] -> Maybe (Label Comp) -> M.Map (Label Comp) [ClusterLs] -> Symbols op -> ReadDirM -> Either (Exists (PreOpenAcc (Clustered op) aenv)) (Exists (PreOpenAfun (Clustered op) aenv))
-openReconstruct' singletons labelenv graph clusterslist mlab subclustersmap symbols readDirM =
+openReconstruct' :: forall op aenv. (HasCallStack, MakesILP op) => Bool -> BuffersEnv aenv -> FusionGraph -> [ClusterLs] -> Maybe (Label Comp) -> M.Map (Label Comp) [ClusterLs] -> Symbols op -> ReadDirM -> InplaceM -> Either (Exists (PreOpenAcc (Clustered op) aenv)) (Exists (PreOpenAfun (Clustered op) aenv))
+openReconstruct' singletons labelenv graph clusterslist mlab subclustersmap symbols readDirM inplaceM =
   case mlab of
   Just l  -> Right $ makeASTF labelenv l mempty
   Nothing -> Left $ makeAST labelenv clusters mempty
   where
+    mkReindexPartial' :: BuffersEnv env -> BuffersEnv env' -> ReindexPartial Maybe env env'
+    mkReindexPartial' = mkReindexPartial inplaceM
+
     -- Make a tree of let bindings
 
     -- In mkFullGraph, we make sure that the bound body of a let will be in an earlier cluster.
@@ -218,17 +225,17 @@ openReconstruct' singletons labelenv graph clusterslist mlab subclustersmap symb
         SExe'{}    -> error "should be Fold/InitFold!"
         SUse se  n be             -> Exists $ Use se n be
         SITE env' c t f   -> case (makeAST env (subcluster t) prev, makeAST env (subcluster f) prev) of
-          (Exists tacc, Exists facc) -> Exists $ tryBuildAcond (fromJust $ reindexVar (mkReindexPartial env' env) c) tacc facc
+          (Exists tacc, Exists facc) -> Exists $ tryBuildAcond (fromJust $ reindexVar (mkReindexPartial' env' env) c) tacc facc
         SWhl env' c b i u -> case (subcluster c, subcluster b) of
           (findTopOfF -> c', findTopOfF -> b') -> case (makeASTF env c' prev, makeASTF env b' prev) of
-            (Exists cfun, Exists bfun) -> Exists $ tryBuildAwhile u cfun bfun (fromJust $ reindexVars (mkReindexPartial env' env) i)
+            (Exists cfun, Exists bfun) -> Exists $ tryBuildAwhile u cfun bfun (fromJust $ reindexVars (mkReindexPartial' env' env) i)
         SLet {} -> error $ "let without scope " ++ show cluster
         SFun {} -> error "wrong type: function"
         SBod {} -> error "wrong type: function"
-        SRet env' vars     -> Exists $ Return      (fromJust $ reindexVars (mkReindexPartial env' env) vars)
-        SCmp env' expr     -> Exists $ Compute     (fromJust $ reindexExp  (mkReindexPartial env' env) expr)
-        SAlc env' shr e sh -> Exists $ Alloc shr e (fromJust $ reindexVars (mkReindexPartial env' env) sh)
-        SUnt env' evar     -> Exists $ Unit        (fromJust $ reindexVar  (mkReindexPartial env' env) evar)
+        SRet env' vars     -> Exists $ Return      (fromJust $ reindexVars (mkReindexPartial' env' env) vars)
+        SCmp env' expr     -> Exists $ Compute     (fromJust $ reindexExp  (mkReindexPartial' env' env) expr)
+        SAlc env' shr e sh -> Exists $ Alloc shr e (fromJust $ reindexVars (mkReindexPartial' env' env) sh)
+        SUnt env' evar     -> Exists $ Unit        (fromJust $ reindexVar  (mkReindexPartial' env' env) evar)
     makeAST env (cluster:ctail) prev =
       -- TODO: use guards to fuse these two identical cases
       case makeCluster env cluster of
@@ -290,7 +297,7 @@ openReconstruct' singletons labelenv graph clusterslist mlab subclustersmap symb
                               -- the `foldr1`, the input argument will dissapear. The output argument does not:
                               -- we clean that up in the SLV pass, if this was vertical fusion. If this is diagonal fusion,
                               -- it stays.
-                              SExe' env' args op -> InitFold op l (fromJust $ reindexLabelledArgsOp (mkReindexPartial env' env) args)
+                              SExe' env' args op -> InitFold op l (fromJust $ reindexLabelledArgsOp (mkReindexPartial' env' env) args)
                               _                  -> error "avoid this next refactor" -- c -> NotFold c
                           ) ls
     makeCluster _ (NonExecL l) = NotFold $ symbols !?? l

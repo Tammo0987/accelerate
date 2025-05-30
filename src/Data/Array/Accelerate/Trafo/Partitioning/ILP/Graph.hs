@@ -1345,13 +1345,15 @@ mkInplacePaths g = g&fusionILP.inplacePaths .~ validPaths
 -- | Makes a ReindexPartial, which allows us to transform indices in @env@ into indices in @env'@.
 -- We cannot guarantee the index is present in env', so we use the partiality of ReindexPartial by
 -- returning a Maybe. Uses unsafeCoerce to re-introduce type information implied by the EnvLabels.
-mkReindexPartial :: BuffersEnv env -> BuffersEnv env' -> ReindexPartial Maybe env env'
-mkReindexPartial env env' idx = go env'
+mkReindexPartial :: Map (Label Buff) (Label Buff) -> BuffersEnv env -> BuffersEnv env' -> ReindexPartial Maybe env env'
+mkReindexPartial m env env' idx = go env'
   where
     -- The EnvLabel in the original environment
-    (e,_,_) = lookupIdxInEnv idx env
+    (e,bs,_) = lookupIdxInEnv idx env
+
+    -- Find the corresponding EnvLabel in the new environment.
     go :: forall e a. BuffersEnv e -> Maybe (Idx e a)
-    go ((e',_,_) :>>: rest) -- e' is the ELabel in the new environment
+    go ((e',bs',_) :>>: rest) -- e' is the ELabel in the new environment
       -- Here we have to convince GHC that the top element in the environment
       -- really does have the same type as the one we were searching for.
       -- Some literature does this stuff too: 'effect handlers in haskell, evidently'
@@ -1359,7 +1361,8 @@ mkReindexPartial env env' idx = go env'
       -- Basically: standard procedure if you're using Ints as a unique identifier
       -- and want to re-introduce type information. :)
       -- Type applications allow us to restrict unsafeCoerce to the return type.
-      | e == e' = Just $ unsafeCoerce @(Idx e _) @(Idx e a) ZeroIdx
+      | Just Refl <- matchTupF bs bs'
+      , bs == bs' = Just $ unsafeCoerce @(Idx e _) @(Idx e a) ZeroIdx
       -- Recurse if we did not find e' yet.
       | otherwise = SuccIdx <$> go rest
     -- If we hit the end, the Elabel was not present in the environment.

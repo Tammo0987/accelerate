@@ -182,6 +182,16 @@ tupFlike TupRunit       _ = TupFunit
 tupFlike (TupRsingle _) b = TupFsingle b
 tupFlike (TupRpair l r) b = TupFpair (tupFlike l b) (tupFlike r b)
 
+matchTupF :: TupF s a -> TupF t a -> Maybe (s :~: t)
+matchTupF TupFunit       TupFunit       = Just Refl
+matchTupF (TupFsingle _) (TupFsingle _) = Just (unsafeCoerce Refl :: s :~: t)
+matchTupF (TupFpair l1 r1) (TupFpair l2 r2) = do
+  Refl <- matchTupF l1 l2
+  Refl <- matchTupF r1 r2
+  return Refl
+matchTupF _ _ = Nothing
+
+
 instance Show a => Show (TupF t a) where
   show :: Show a => TupF t a -> String
   show = show . fromTupF
