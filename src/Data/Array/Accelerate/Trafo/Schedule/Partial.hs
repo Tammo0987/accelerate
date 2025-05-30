@@ -335,7 +335,8 @@ data Exists' (a :: (Type -> Type -> Type) -> Type) where
 combineMod :: Modifier m -> Modifier m' -> Exists' Modifier
 combineMod In  In  = Exists' In
 combineMod Out Out = Exists' Out
-combineMod _   _   = {- error "Remove this error once we add in place updates" --  -}Exists' Mut
+combineMod _   _   = Exists' Mut
+-- combineMod _   _   = error "Remove this error once we add in place updates"
 
 combineAccessGroundR :: AccessGroundR t -> AccessGroundR t -> AccessGroundR t
 combineAccessGroundR (AccessGroundRbuffer m1 tp) (AccessGroundRbuffer m2 _)
