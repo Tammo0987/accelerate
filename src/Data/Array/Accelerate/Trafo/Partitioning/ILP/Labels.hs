@@ -182,6 +182,7 @@ tupFlike TupRunit       _ = TupFunit
 tupFlike (TupRsingle _) b = TupFsingle b
 tupFlike (TupRpair l r) b = TupFpair (tupFlike l b) (tupFlike r b)
 
+-- | This function is only safe when it's used to match the shape of two 'TupF's and nothing else.
 matchTupF :: TupF s a -> TupF t a -> Maybe (s :~: t)
 matchTupF TupFunit       TupFunit       = Just Refl
 matchTupF (TupFsingle _) (TupFsingle _) = Just (unsafeCoerce Refl :: s :~: t)  -- TODO: This can probably be cleaner if we change the definition of 'Buff' and 'Comp' to be similar to 'Buffer' and (type of computation?).
