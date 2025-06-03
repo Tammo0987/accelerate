@@ -37,6 +37,7 @@ import Numeric.Optimization.MIP.Solver
 import Data.Maybe (mapMaybe)
 import Control.Monad.State ( runState )
 import Control.Monad.Reader ( Reader, asks, runReader )
+import Data.String (fromString)
 
 newtype MIP s = MIP s
 
@@ -72,7 +73,7 @@ instance (MakesILP op, MIP.IsSolver s IO) => ILPSolver (MIP s) op where
       --   MIP.Solution stat obj $ M.union solmap (M.fromSet (const 0) (vars problem))
 
 var :: Ord (Graph.Var op) => Graph.Var op -> Reader (Names op) MIP.Var
-var y = asks (toVar . (M.! y) . snd)
+var y = asks (fromString . (M.! y) . snd)
 
 -- MIP has a Num instance for expressions, but it's scary (because
 -- you can't guarantee linearity with arbitrary multiplications).
