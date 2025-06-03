@@ -54,7 +54,7 @@ data InplaceUpdatesMode
     --   3. Priority in-place update weight.
 
 inplaceUpdatesMode :: InplaceUpdatesMode
-inplaceUpdatesMode = NoInplaceUpdates
+inplaceUpdatesMode = InplaceUpdates
 
 
 -- Makes the ILP. Note that this function 'appears' to ignore the Label levels completely!
@@ -98,7 +98,7 @@ makeILP obj (FusionILP graph constraints bounds) = combine graphILP
     n :: Int
     n = 10 + 2 * S.size compN
 
-    graphILP = ILP minmax objFun allConstraints allBounds n
+    graphILP = ILP minmax objFun' allConstraints allBounds n
 
     -- Since we want all clusters to have one 'iteration size', the final objFun should
     -- take care to never reward 'fusing' disjoint clusters, and then slightly penalise it.
