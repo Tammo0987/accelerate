@@ -11,7 +11,7 @@
 module Main where
 
 import Data.Array.Accelerate.Test.NoFib
-import Data.Array.Accelerate.Interpreter
+import Data.Array.Accelerate.Interpreter.Simple
 
 import System.Environment
 
@@ -20,4 +20,3 @@ main = do
   setEnv "TASTY_INTERPRETER" "True"
   setEnv "TASTY_HEDGEHOG_TESTS" "50"
   nofib runN
-
