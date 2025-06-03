@@ -1,17 +1,13 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE UndecidableInstances #-}
-
-{-# OPTIONS_GHC -fno-warn-orphans #-} -- Shame on me!
-{-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE InstanceSigs #-}
-{-# LANGUAGE LambdaCase #-}
+{-# OPTIONS_GHC -fno-warn-orphans #-} -- Shame on me!
 
 module Data.Array.Accelerate.Trafo.Partitioning.ILP.MIP (
   -- Exports default paths to 6 solvers, as well as an instance to ILPSolver for all of them
@@ -38,6 +34,7 @@ import Data.Maybe (mapMaybe)
 import Control.Monad.State ( runState )
 import Control.Monad.Reader ( Reader, asks, runReader )
 import Data.String (fromString)
+import Data.Text (unpack)
 
 newtype MIP s = MIP s
 
@@ -46,14 +43,14 @@ instance (MakesILP op, MIP.IsSolver s IO) => ILPSolver (MIP s) op where
   solvePartial (MIP s) ilp@(ILP dir obj constr bnds n) = makeSolution names <$> MIP.solve s options problem
     where
       options = def { MIP.solveTimeLimit   = Nothing --Just 60
-                                -- , MIP.solveLogger      = putStrLn . ("AccILPSolver: "      ++)
-                                , MIP.solveErrorLogger = putStrLn . ("AccILPSolverError: " ++)
+                    -- , MIP.solveLogger      = putStrLn . ("AccILPSolver: "      ++)
+                    , MIP.solveErrorLogger = putStrLn . ("AccILPSolverError: " ++)
       } --, MIP.solveCondensedSolution = False }
       vs = allVars ilp
       ((),(names, _)) = runState (mapM_ var' vs) ((mempty, mempty),"")
 
-      readerProblem = Problem (Just "AccelerateILP")
-        <$> (mkFun dir <$> expr n obj)
+      readerProblem = Problem (Just "AccelerateILP") . mkFun dir
+        <$> expr n obj
         <*> cons n constr
         <*> pure []
         <*> pure []
@@ -119,7 +116,7 @@ makeSolution :: MakesILP op => Names op -> MIP.Solution Scientific -> Maybe (Sol
 --                                   ------- Matching on solutions with a value: If this is Nothing, the model was infeasable or unbounded.
 --                                   |    -- Instead matching on `MIP.Solution StatusOptimal _ m` often works too, but that doesn't work for
 --                                   v    -- e.g. the identity program (which has an empty ILP).
-makeSolution names (MIP.Solution _ (Just _) m) = Just . M.fromList . mapMaybe (sequence' . bimap (\v -> runReader (unvar' $ fromVar v) names) round) $ M.toList m
+makeSolution names (MIP.Solution _ (Just _) m) = Just . M.fromList . mapMaybe (sequence' . bimap (\v -> runReader (unvar' $ unpack $ varName v) names) round) $ M.toList m
 makeSolution _ _ = Nothing
 
 -- tuple's traversable instance works on the second argument, we need it on the first
