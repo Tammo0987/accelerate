@@ -40,8 +40,7 @@ data Benchmarking = GreedyUp | GreedyDown | NoFusion
 data FusionType = Fusion Objective | Benchmarking Benchmarking
 
 defaultObjective :: FusionType
--- defaultObjective = Fusion IntermediateArrays
-defaultObjective = Fusion NumInplace
+defaultObjective = Fusion IntermediateArrays
 
 -- data type that should probably be in the options
 newtype Solver = MIPSolver MIPSolver
@@ -81,9 +80,9 @@ ilpFusion' :: (MakesILP op, ILPSolver s op)
            -> x
            -> y
 ilpFusion' toGraph fromGraph s obj acc = do
-  let fullgraph = {- traceGraph $ -} toGraph acc
+  let fullgraph = traceGraph $ toGraph acc
   let ilp       = makeILP obj (fullgraph^.fusionILP)
-  let solution  = {- traceWith ppSolution $ -} fromMaybe (error "Accelerate: No ILP solution found") (unsafePerformIO $ solve s ilp)
+  let solution  = traceWith ppSolution $ fromMaybe (error "Accelerate: No ILP solution found") (unsafePerformIO $ solve s ilp)
   let symbols'  = attachBackendLabels solution (fullgraph^.symbols)
   let readDirM  = interpretReadDirs  solution
   -- let writeDirM = interpretWriteDirs solution
@@ -104,7 +103,7 @@ ppSolution solution = "solution: " ++ foldMap ppVar (toList solution)
       Pi{}                       -> "\n" ++ show k  ++ " == " ++ show v
       Fused{} | v == 0           -> "\n" ++ show k
       Manifest{}                 -> "\n" ++ show k  ++ " == " ++ show v
-      InPlace b1 b2 _ _ | v == 0 -> "\n" ++ show b1 ++ " <- " ++ show b2
+      InPlace b1 _ _ b2 | v == 0 -> "\n" ++ show b1 ++ " <- " ++ show b2
       _ -> ""
 
 ppList :: Show a => [a] -> String

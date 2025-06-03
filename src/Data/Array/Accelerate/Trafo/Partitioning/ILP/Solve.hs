@@ -41,8 +41,20 @@ data Objective
   | IntermediateArrays
   | FusedEdges
   | Everything
-  | NumInplace
   deriving (Show, Bounded, Enum)
+
+data InplaceUpdatesMode
+  = NoInplaceUpdates    -- ^ Fusion is prioritized, in-place updates are discouraged.
+  | InplaceUpdates      -- ^ Fusion is prioritized, in-place updates are encouraged.
+  | WeightedInplaceUpdates Int Int Int
+    -- ^ Fusion and in-place updates are blended with the given weights.
+    -- The weights in order are:
+    --   1. Fusion weight;
+    --   2. Regular in-place update weight;
+    --   3. Priority in-place update weight.
+
+inplaceUpdatesMode :: InplaceUpdatesMode
+inplaceUpdatesMode = NoInplaceUpdates
 
 
 -- Makes the ILP. Note that this function 'appears' to ignore the Label levels completely!
@@ -96,14 +108,19 @@ makeILP obj (FusionILP graph constraints bounds) = combine graphILP
     -- Also future: add @IVO's IPU reward here.
     objFun :: Expression op
     minmax :: OptDir
-    (minmax,objFun) = case obj of
+    (minmax, objFun) = case obj of
       NumClusters        -> (Minimise, numberOfClusters)
       ArrayReads         -> (Minimise, numberOfReads)
       ArrayReadsWrites   -> (Minimise, numberOfArrayReadsWrites)
       IntermediateArrays -> (Minimise, numberOfManifestArrays)
       FusedEdges         -> (Minimise, numberOfUnfusedEdges)
       Everything         -> (Minimise, numberOfClusters .+. numberOfArrayReadsWrites) -- arrayreadswrites already indictly includes everything else
-      NumInplace         -> (Minimise, numberOfInplaceUpdates)
+
+    -- The objective function for fusion combined with in-place updates.
+    objFun' = case inplaceUpdatesMode of
+      NoInplaceUpdates -> S.size buffN .*. objFun .-. numberOfNonInplaceUpdates
+      InplaceUpdates   -> S.size buffN .*. objFun .+. numberOfNonInplaceUpdates
+      WeightedInplaceUpdates wFusion wInplace wPrioInplace -> undefined
 
     -- objective function that maximises the number of edges we fuse, and minimises the number of array reads if you ignore horizontal fusion
     numberOfUnfusedEdges = foldMap fused fusibleE
@@ -202,7 +219,7 @@ makeILP obj (FusionILP graph constraints bounds) = combine graphILP
 
     -- For in-place updates:
 
-    numberOfInplaceUpdates = foldMap inplace inplaceP
+    numberOfNonInplaceUpdates = foldMap inplace inplaceP
 
     -- If inplace p, then c1 == c2
     acrossClusterC = flip foldMap inplaceP \case
