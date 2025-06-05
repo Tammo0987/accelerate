@@ -3,10 +3,8 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeFamilyDependencies #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE UndecidableInstances #-}
@@ -45,7 +43,7 @@ finalize ilp@(ILP dir obj constr bnds n) =
   ILP dir obj (constr <> extraconstr) (bnds <> extrabnds) n
   where
     extraconstr = foldMap (\v -> int (-5) .<=. var v) (allVars ilp)
-    extrabnds   = foldMap (Lower (-5))              (allVars ilp)
+    extrabnds   = foldMap (Lower (-5))                (allVars ilp)
 
 data OptDir = Maximise | Minimise
   deriving Show
