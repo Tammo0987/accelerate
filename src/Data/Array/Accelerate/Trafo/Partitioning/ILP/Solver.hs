@@ -21,22 +21,18 @@ import qualified Data.Set as S
 -- `BackendVar` is in the class `MakesILP`, which references `Information`,
 -- `Information` contains `Constraint` and `Bounds` from `ILPSolver`.
 -- I did not want to put them in the same module, so here we are.
--- import {-# SOURCE #-} Data.Array.Accelerate.Trafo.Partitioning.ILP.Graph ( )
+import {-# SOURCE #-} Data.Array.Accelerate.Trafo.Partitioning.ILP.Graph ( Var, MakesILP )
 import Data.Foldable
-import Data.Kind (Type)
 import Data.Array.Accelerate.Error
-
-
-data family Var (op :: Type -> Type)
 
 
 -- Currently the only instance is for MIP, which gives bindings to a couple of solvers.
 -- Still, this way we minimise the surface that has to interact with MIP, can more easily
 -- adapt if it changes, and we could easily add more bindings.
-class ILPSolver ilp op where
+class (MakesILP op) => ILPSolver ilp op where
   solvePartial :: ilp -> ILP op -> IO (Maybe (Solution op))
 
--- MakesILP op implies Ord (Var var op), but not through Graph.hs-boot
+-- MakesILP op implies Ord (Var op), but not through Graph.hs-boot
 solve :: (ILPSolver ilp op, Ord (Var op)) => ilp -> ILP op -> IO (Maybe (Solution op))
 solve x ilp = fmap (<> M.fromSet (const 0) (allVars ilp)) -- add zeroes to the ILP for missing variables
            <$> solvePartial x (finalize ilp)
@@ -49,7 +45,7 @@ finalize ilp@(ILP dir obj constr bnds n) =
   ILP dir obj (constr <> extraconstr) (bnds <> extrabnds) n
   where
     extraconstr = foldMap (\v -> int (-5) .<=. var v) (allVars ilp)
-    extrabnds   = foldMap (Lower (-5))                (allVars ilp)
+    extrabnds   = foldMap (Lower (-5))              (allVars ilp)
 
 data OptDir = Maximise | Minimise
   deriving Show
