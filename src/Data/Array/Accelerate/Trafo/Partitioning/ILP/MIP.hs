@@ -75,12 +75,12 @@ var y = asks (fromString . (M.! y) . snd)
 -- MIP has a Num instance for expressions, but it's scary (because
 -- you can't guarantee linearity with arbitrary multiplications).
 -- We use that instance here, knowing that our own Expression can only be linear.
-expr :: MakesILP op => Int -> Expression op -> Reader (Names op) (MIP.Expr Scientific)
+expr :: MakesILP op => Constants -> Expression op -> Reader (Names op) (MIP.Expr Scientific)
 expr n (Constant (Number f)) = pure $ fromIntegral (f n)
 expr n (x :+ y) = (+) <$> expr n x <*> expr n y
 expr n ((Number f) :* y) = (fromIntegral (f n) *) . varExpr <$> var y
 
-cons :: MakesILP op => Int -> Constraint op -> Reader (Names op) [MIP.Constraint Scientific]
+cons :: MakesILP op => Constants -> Constraint op -> Reader (Names op) [MIP.Constraint Scientific]
 cons n (x :>= y) = (\a b -> [a MIP..>=. b]) <$> expr n x <*> expr n y
 cons n (x :<= y) = (\a b -> [a MIP..<=. b]) <$> expr n x <*> expr n y
 cons n (x :== y) = (\a b -> [a MIP..==. b]) <$> expr n x <*> expr n y

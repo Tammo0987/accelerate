@@ -46,19 +46,43 @@ finalize ilp@(ILP dir obj constr bnds n) =
     extrabnds   = foldMap (Lower (-5))                (allVars ilp)
 
 data OptDir = Maximise | Minimise
-  deriving Show
+  deriving (Show, Eq)
 
-data ILP op = ILP OptDir (Expression op) (Constraint op) (Bounds op) Int
+data ILP op = ILP OptDir (Expression op) (Constraint op) (Bounds op) Constants
 deriving instance Show (Var op) => Show (ILP op)
 
 type Solution op = M.Map (Var op) Int
 
+data Constants = Constants
+  { nComps :: Int  -- ^ number of computations in the ILP
+  , nBuffs :: Int  -- ^ number of buffers in the ILP
+  } deriving Show
+
 -- | given `n` (for the number of nodes in the ILP), make an Int
-newtype Number = Number (Int -> Int)
+newtype Number = Number (Constants -> Int)
 
 instance Show Number where
   show :: Number -> String
-  show (Number f) = "Number {" ++ show (f 1) ++ "}"
+  show (Number f) = "Number {" ++ show (f $ Constants 1 1) ++ "}"
+
+instance Num Number where
+  (+) :: Number -> Number -> Number
+  (Number f) + (Number g) = Number (\c -> f c + g c)
+
+  (*) :: Number -> Number -> Number
+  (Number f) * (Number g) = Number (\c -> f c * g c)
+
+  negate :: Number -> Number
+  negate (Number f) = Number (negate . f)
+
+  abs :: Number -> Number
+  abs (Number f) = Number (abs . f)
+
+  signum :: Number -> Number
+  signum (Number f) = Number (signum . f)
+
+  fromInteger :: Integer -> Number
+  fromInteger i = Number (\_ -> fromInteger i)
 
 data Expression op where
   Constant :: Number -> Expression op
@@ -127,17 +151,23 @@ e1 .-. e2 = e1 .+. ((-1) .*. e2)
 infixl 8 .-.
 
 -- | Multiply an expression by a constant.
-(.*.)  :: Int -> Expression op -> Expression op
-i .*. (Constant (Number f)) = Constant $ Number $ (*i) . f
-i .*. (e1 :+ e2)            = (:+) (i .*. e1) (i .*. e2)
-i .*. (Number f :* v)       = (:*) (Number ((*i) . f)) v
+(.*.)  :: Number -> Expression op -> Expression op
+i .*. (Constant j) = Constant $ i * j
+i .*. (e1 :+ e2)   = (:+) (i .*. e1) (i .*. e2)
+i .*. (j  :* v)    = (:*) (i * j) v
 infixl 8 .*.
 
--- | Multiply by @n@ (the total number of nodes).
+-- | Multiply by one of the @Constants@.
+times :: (Constants -> Int) -> Expression op -> Expression op
+times f = (Number f .*.)
+
+-- | Multiply by @n@ (the total number of computations + some safety margine).
+--
+-- This is only here because the old definitions used timesN and not all of them
+-- have been replaced yet.
+-- TODO: Replace all occurrences of timesN with tighter bounds.
 timesN :: Expression op -> Expression op
-timesN (Constant (Number f)) = Constant (Number (\n -> n * f n))
-timesN ((:+) e1 e2)          = (:+) (timesN e1) (timesN e2)
-timesN ((:*) (Number f) v)   = (:*) (Number (\n -> n * f n)) v
+timesN = times ((+10) . (*2) . nComps)
 
 -- | Use a 'Var' in an 'Expression'.
 var :: Var op -> Expression op

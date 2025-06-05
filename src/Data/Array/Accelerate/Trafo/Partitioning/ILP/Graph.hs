@@ -39,6 +39,8 @@ import Data.Array.Accelerate.Trafo.Partitioning.ILP.Labels
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Solver
 import Data.Array.Accelerate.Type
 
+import {-# SOURCE #-} Data.Array.Accelerate.Trafo.Partitioning.ILP.Solve (FusionObjective (..), IUpdatesObjective (..))
+
 -- Data structures
 import Data.Set (Set)
 import Data.Map (Map)
@@ -477,6 +479,32 @@ class ( ShrinkArg (BackendClusterArg op), Eq (BackendVar op)
   -- | This function lets the backend define additional constraints on the ILP.
   finalize :: FusionGraph -> Constraint op
 
+  -- | The default fusion objective defined by the backend.
+  --
+  -- No defintion defaults to 'FusedEdges'.
+  defaultFusionObjective :: FusionObjective
+  defaultFusionObjective = IntermediateArrays
+
+  -- | The default in-place update mode defined by the backend.
+  --
+  -- No definition defaults to 'InplaceUpdates'.
+  defaultIUpdatesObjective :: IUpdatesObjective
+  defaultIUpdatesObjective = NumInplaceUpdates
+
+  -- | The default weight applied to the fusion objective.
+  --
+  -- No definition defaults to the number of buffers in the graph, with numInplaceUpdates <= nBuffs.
+  defaultFusionWeight :: Number
+  defaultFusionWeight = Number nBuffs
+
+  -- | The default weight applied to the in-place updates objective.
+  --
+  -- No definition defaults to -1 (prevent in-place updates).
+  defaultIUpdatesWeight :: Number
+  defaultIUpdatesWeight = 0
+
+
+
 labelLabelledArgs :: MakesILP op => Solution op -> Label Comp -> LabelledArgs env args -> LabelledArgsOp op env args
 labelLabelledArgs sol l (arg :>: args) = labelLabelledArg sol l arg :>: labelLabelledArgs sol l args
 labelLabelledArgs _ _ ArgsNil = ArgsNil
@@ -572,8 +600,8 @@ manifest :: Label Buff -> Expression op
 manifest = var . Manifest
 
 -- | Safe constructor for 'Fused' variables.
-fused :: DataflowEdge -> Expression op
-fused (w, _, r)= var $ Fused w r
+fused :: (Label Comp, Label Comp) -> Expression op
+fused = var . uncurry Fused
 
 -- | Safe constructor for 'ReadDir' variables.
 readDir :: ReadEdge -> Expression op
@@ -1347,7 +1375,7 @@ mkInplacePaths g = g&fusionILP.inplacePaths .~ validPaths
 -- We cannot guarantee the index is present in env', so we use the partiality of ReindexPartial by
 -- returning a Maybe. Uses unsafeCoerce to re-introduce type information implied by the EnvLabels.
 mkReindexPartial :: forall env env'. Map (Label Buff) (Label Buff) -> BuffersEnv env -> BuffersEnv env' -> ReindexPartial Maybe env env'
-mkReindexPartial m env env' idx = idxOf (inplaceOf $ lookupIdxInEnv idx env^._2) env'
+mkReindexPartial m env env' idx = idxOf ({- inplaceOf $ -} lookupIdxInEnv idx env^._2) env'
   where
     -- Replace the buffer with the one we will actually write the data to.
     inplaceOf :: BuffersTup a -> BuffersTup a

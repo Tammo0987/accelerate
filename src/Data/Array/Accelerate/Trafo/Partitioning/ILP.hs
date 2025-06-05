@@ -11,7 +11,7 @@ module Data.Array.Accelerate.Trafo.Partitioning.ILP where
 
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Graph
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Solve
-    ( interpretClusters, makeILP, splitExecs, ClusterLs, Objective (..), interpretReadDirs, interpretWriteDirs, interpretInplaceUpdates )
+    ( interpretClusters, makeILP, splitExecs, ClusterLs, FusionObjective (..), interpretReadDirs, interpretWriteDirs, interpretInplaceUpdates )
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Clustering
     ( reconstruct, reconstructF, ReadDirM, InplaceM )
 import Data.Array.Accelerate.AST.Partitioned
@@ -37,7 +37,7 @@ import Debug.Trace
 data Benchmarking = GreedyUp | GreedyDown | NoFusion
   deriving (Show, Eq, Bounded, Enum)
 
-data FusionType = Fusion Objective | Benchmarking Benchmarking
+data FusionType = Fusion FusionObjective | Benchmarking Benchmarking
 
 defaultObjective :: FusionType
 defaultObjective = Fusion FusedEdges
@@ -46,7 +46,7 @@ defaultObjective = Fusion FusedEdges
 newtype Solver = MIPSolver MIPSolver
 data MIPSolver = CBC | Gurobi | CPLEX | GLPSOL | LPSOLVE | SCIP
 
-ilpFusion'' :: (MakesILP op, Pretty.PrettyOp (Cluster op)) => Solver -> Objective -> OperationAcc op () a -> PartitionedAcc op () a
+ilpFusion'' :: (MakesILP op, Pretty.PrettyOp (Cluster op)) => Solver -> FusionObjective -> OperationAcc op () a -> PartitionedAcc op () a
 ilpFusion'' (MIPSolver s) = case s of
   CBC     -> ilpFusion (MIP cbc)
   Gurobi  -> ilpFusion (MIP gurobiCl)
@@ -56,7 +56,7 @@ ilpFusion'' (MIPSolver s) = case s of
   SCIP    -> ilpFusion (MIP scip)
 
 
-ilpFusionF'' :: (MakesILP op, Pretty.PrettyOp (Cluster op)) => Solver -> Objective -> OperationAfun op () a -> PartitionedAfun op () a
+ilpFusionF'' :: (MakesILP op, Pretty.PrettyOp (Cluster op)) => Solver -> FusionObjective -> OperationAfun op () a -> PartitionedAfun op () a
 ilpFusionF'' (MIPSolver s) = case s of
   CBC     -> ilpFusionF (MIP cbc)
   Gurobi  -> ilpFusionF (MIP gurobiCl)
@@ -66,23 +66,23 @@ ilpFusionF'' (MIPSolver s) = case s of
   SCIP    -> ilpFusionF (MIP scip)
 
 
-ilpFusion  :: (MakesILP op, ILPSolver s op, Pretty.PrettyOp (Cluster op)) => s -> Objective -> OperationAcc  op () a -> PartitionedAcc op () a
+ilpFusion  :: (MakesILP op, ILPSolver s op, Pretty.PrettyOp (Cluster op)) => s -> FusionObjective -> OperationAcc  op () a -> PartitionedAcc op () a
 ilpFusion solver objective acc = ilpFusion' mkFullGraph  (reconstruct (groundsR acc) False) solver objective acc
 
-ilpFusionF :: (MakesILP op, ILPSolver s op, Pretty.PrettyOp (Cluster op)) => s -> Objective -> OperationAfun op () a -> PartitionedAfun op () a
+ilpFusionF :: (MakesILP op, ILPSolver s op, Pretty.PrettyOp (Cluster op)) => s -> FusionObjective -> OperationAfun op () a -> PartitionedAfun op () a
 ilpFusionF solver objective fun = ilpFusion' mkFullGraphF (reconstructF fun False) solver objective fun
 
 ilpFusion' :: (MakesILP op, ILPSolver s op)
            => (x -> (FusionILP op, Symbols op))
            -> (FusionGraph -> [ClusterLs] -> Map (Label Comp) [ClusterLs] -> Symbols op -> ReadDirM -> InplaceM -> y)
            -> s
-           -> Objective
+           -> FusionObjective
            -> x
            -> y
 ilpFusion' toGraph fromGraph s obj acc = do
-  let fullgraph = traceGraph $ toGraph acc
+  let fullgraph = {- traceGraph $ -} toGraph acc
   let ilp       = makeILP obj (fullgraph^.fusionILP)
-  let solution  = traceWith ppSolution $ fromMaybe (error "Accelerate: No ILP solution found") (unsafePerformIO $ solve s ilp)
+  let solution  = {- traceWith ppSolution $ -} fromMaybe (error "Accelerate: No ILP solution found") (unsafePerformIO $ solve s ilp)
   let symbols'  = attachBackendLabels solution (fullgraph^.symbols)
   let readDirM  = interpretReadDirs  solution
   -- let writeDirM = interpretWriteDirs solution
@@ -121,7 +121,7 @@ noFusion' :: (MakesILP op, ILPSolver s op)
            => (x -> (FusionILP op, Symbols op))
            -> (FusionGraph -> [ClusterLs] -> Map (Label Comp) [ClusterLs] -> Symbols op -> ReadDirM -> InplaceM -> y)
            -> s
-           -> Objective
+           -> FusionObjective
            -> x
            -> y
 noFusion' = undefined
@@ -148,7 +148,7 @@ greedyFusion' :: forall s op x y. (MakesILP op, ILPSolver s op)
                     -> (FusionGraph -> [ClusterLs] -> Map (Label Comp) [ClusterLs] -> Symbols op -> ReadDirM -> InplaceM -> y)
                     -> s
                     -> Benchmarking
-                    -> Objective
+                    -> FusionObjective
                     -> x
                     -> y
 greedyFusion' = undefined
@@ -182,25 +182,25 @@ greedyFusion' = undefined
 --       Nothing -> error "Accelerate: No ILP solution found"
 --       Just y -> y
 
-bench :: (MakesILP op, Pretty.PrettyOp (Cluster op)) => Benchmarking -> Objective -> OperationAcc op () a -> PartitionedAcc op () a
+bench :: (MakesILP op, Pretty.PrettyOp (Cluster op)) => Benchmarking -> FusionObjective -> OperationAcc op () a -> PartitionedAcc op () a
 bench NoFusion = no
 bench b = greedy b
-benchF :: (MakesILP op, Pretty.PrettyOp (Cluster op)) => Benchmarking -> Objective -> OperationAfun op () a -> PartitionedAfun op () a
+benchF :: (MakesILP op, Pretty.PrettyOp (Cluster op)) => Benchmarking -> FusionObjective -> OperationAfun op () a -> PartitionedAfun op () a
 benchF NoFusion = noF
 benchF b = greedyF b
-greedy :: (MakesILP op, Pretty.PrettyOp (Cluster op)) => Benchmarking -> Objective -> OperationAcc op () a -> PartitionedAcc op () a
+greedy :: (MakesILP op, Pretty.PrettyOp (Cluster op)) => Benchmarking -> FusionObjective -> OperationAcc op () a -> PartitionedAcc op () a
 greedy = greedyFusion (MIP gurobiCl)
-no :: (MakesILP op, Pretty.PrettyOp (Cluster op)) => Objective -> OperationAcc op () a -> PartitionedAcc op () a
+no :: (MakesILP op, Pretty.PrettyOp (Cluster op)) => FusionObjective -> OperationAcc op () a -> PartitionedAcc op () a
 no = noFusion (MIP gurobiCl)
-greedyF :: (MakesILP op, Pretty.PrettyOp (Cluster op)) => Benchmarking -> Objective -> OperationAfun op () a -> PartitionedAfun op () a
+greedyF :: (MakesILP op, Pretty.PrettyOp (Cluster op)) => Benchmarking -> FusionObjective -> OperationAfun op () a -> PartitionedAfun op () a
 greedyF = greedyFusionF (MIP gurobiCl)
-noF :: (MakesILP op, Pretty.PrettyOp (Cluster op)) => Objective -> OperationAfun op () a -> PartitionedAfun op () a
+noF :: (MakesILP op, Pretty.PrettyOp (Cluster op)) => FusionObjective -> OperationAfun op () a -> PartitionedAfun op () a
 noF = noFusionF (MIP gurobiCl)
-greedyFusion  :: (MakesILP op, ILPSolver s op, Pretty.PrettyOp (Cluster op)) => s -> Benchmarking -> Objective -> OperationAcc  op () a -> PartitionedAcc op () a
+greedyFusion  :: (MakesILP op, ILPSolver s op, Pretty.PrettyOp (Cluster op)) => s -> Benchmarking -> FusionObjective -> OperationAcc  op () a -> PartitionedAcc op () a
 greedyFusion  solver b objective acc = greedyFusion' mkFullGraph  (reconstruct (groundsR acc) False) solver b objective acc
-greedyFusionF :: (MakesILP op, ILPSolver s op, Pretty.PrettyOp (Cluster op)) => s -> Benchmarking -> Objective -> OperationAfun op () a -> PartitionedAfun op () a
+greedyFusionF :: (MakesILP op, ILPSolver s op, Pretty.PrettyOp (Cluster op)) => s -> Benchmarking -> FusionObjective -> OperationAfun op () a -> PartitionedAfun op () a
 greedyFusionF solver b objective fun = greedyFusion' mkFullGraphF (reconstructF fun False) solver b objective fun
-noFusion      :: (MakesILP op, ILPSolver s op, Pretty.PrettyOp (Cluster op)) => s -> Objective -> OperationAcc  op () a -> PartitionedAcc op () a
+noFusion      :: (MakesILP op, ILPSolver s op, Pretty.PrettyOp (Cluster op)) => s -> FusionObjective -> OperationAcc  op () a -> PartitionedAcc op () a
 noFusion      solver objective acc =     noFusion' mkFullGraph  (reconstruct (groundsR acc) True) solver objective acc
-noFusionF     :: (MakesILP op, ILPSolver s op, Pretty.PrettyOp (Cluster op)) => s -> Objective -> OperationAfun op () a -> PartitionedAfun op () a
+noFusionF     :: (MakesILP op, ILPSolver s op, Pretty.PrettyOp (Cluster op)) => s -> FusionObjective -> OperationAfun op () a -> PartitionedAfun op () a
 noFusionF     solver objective fun =     noFusion' mkFullGraphF (reconstructF fun True) solver objective fun

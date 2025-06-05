@@ -7,6 +7,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE BlockArguments #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE TypeApplications #-}
 
 module Data.Array.Accelerate.Trafo.Partitioning.ILP.Solve where
 
@@ -34,35 +35,27 @@ import Control.Monad.State
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.NameGeneration (freshName)
 import Data.Foldable
 
-data Objective
-  = NumClusters
-  | ArrayReads
-  | ArrayReadsWrites
-  | IntermediateArrays
-  | FusedEdges
-  | Everything
+data FusionObjective
+  = NumClusters         -- ^ Minimise the number of clusters.
+  | ArrayReads          -- ^ Minimise the number of array reads.
+  | ArrayReadsWrites    -- ^ Minimise the number of array reads and writes.
+  | IntermediateArrays  -- ^ Minimise the number of intermediate arrays.
+  | FusedEdges          -- ^ Minimise the number of unfused edges.
+  | Everything          -- ^ Minimise the number of clusters and array reads/writes.
   deriving (Show, Bounded, Enum)
 
-data InplaceUpdatesMode
-  = NoInplaceUpdates    -- ^ Fusion is prioritized, in-place updates are discouraged.
-  | InplaceUpdates      -- ^ Fusion is prioritized, in-place updates are encouraged.
-  | WeightedInplaceUpdates Int Int Int
-    -- ^ Fusion and in-place updates are blended with the given weights.
-    -- The weights in order are:
-    --   1. Fusion weight;
-    --   2. Regular in-place update weight;
-    --   3. Priority in-place update weight.
+data IUpdatesObjective
+  = NumInplaceUpdates       -- ^ Each in-place update counts as 1.
+  | WeightedInplaceUpdates  -- ^ Use the weights and merge strategy defined by the backend.
 
-inplaceUpdatesMode :: InplaceUpdatesMode
-inplaceUpdatesMode = InplaceUpdates
-
-
+-- TODO: _obj is now obsolete
 -- Makes the ILP. Note that this function 'appears' to ignore the Label levels completely!
 -- We could add some assertions, but if all the input is well-formed (no labels, constraints, etc
 -- that reward putting non-siblings in the same cluster) this is fine: We will interpret 'cluster 3'
 -- with parents `Nothing` as a different cluster than 'cluster 3' with parents `Just 5`.
-makeILP :: forall op. MakesILP op => Objective -> FusionILP op -> ILP op
-makeILP obj (FusionILP graph constraints bounds) = combine graphILP
+makeILP :: forall op. MakesILP op => FusionObjective -> FusionILP op -> ILP op
+makeILP _obj (FusionILP graph constraints bounds) =
+  ILP minMax objFun (allConstraints <> constraints) (allBounds <> bounds) (Constants n m)
   where
     compN :: Labels Comp
     compN = graph^.computationNodes
@@ -85,20 +78,24 @@ makeILP obj (FusionILP graph constraints bounds) = combine graphILP
     fusibleE, infusibleE :: S.Set DataflowEdge
     (fusibleE, infusibleE) = graph^.fusionEdges
 
+    fusibleE', infusibleE' :: S.Set (Label Comp, Label Comp)
+    fusibleE'   = S.map (\(i,_,j) -> (i,j)) fusibleE
+    infusibleE' = S.map (\(i,_,j) -> (i,j)) infusibleE
+
     inplaceP :: S.Set InplacePath
     inplaceP = graph^.inplacePaths
 
-    combine :: ILP op -> ILP op
-    combine (ILP dir fun cons bnds _) =
-      ILP dir fun (cons <> constraints) (bnds <> bounds) n
-
-    -- n is used in some of the constraints, as an upperbound on the number of clusters.
-    -- We add a small constant to be safe, as some variables have ranges from -3 to number of nodes.
-    -- Then, we also multiply by 2, as some variables range from -n to n
     n :: Int
-    n = 10 + 2 * S.size compN
+    n = S.size compN
 
-    graphILP = ILP minmax objFun' allConstraints allBounds n
+    m :: Int
+    m = S.size buffN
+
+    -- Combine the two objective functions.
+    minMax = fusionMinMax
+    objFun = (if fusionMinMax == iupdatesMinMax then (.+.) else (.-.))
+      (defaultFusionWeight   @op .*. fusionObjFun)
+      (defaultIUpdatesWeight @op .*. iupdatesObjFun)
 
     -- Since we want all clusters to have one 'iteration size', the final objFun should
     -- take care to never reward 'fusing' disjoint clusters, and then slightly penalise it.
@@ -106,9 +103,9 @@ makeILP obj (FusionILP graph constraints bounds) = combine graphILP
     --
     -- In the future, maybe we want this to be backend-dependent (add to MakesILP).
     -- Also future: add @IVO's IPU reward here.
-    objFun :: Expression op
-    minmax :: OptDir
-    (minmax, objFun) = case obj of
+    fusionObjFun :: Expression op
+    fusionMinMax :: OptDir
+    (fusionMinMax, fusionObjFun) = case defaultFusionObjective @op of
       NumClusters        -> (Minimise, numberOfClusters)
       ArrayReads         -> (Minimise, numberOfReads)
       ArrayReadsWrites   -> (Minimise, numberOfArrayReadsWrites)
@@ -116,14 +113,10 @@ makeILP obj (FusionILP graph constraints bounds) = combine graphILP
       FusedEdges         -> (Minimise, numberOfUnfusedEdges)
       Everything         -> (Minimise, numberOfClusters .+. numberOfArrayReadsWrites) -- arrayreadswrites already indictly includes everything else
 
-    -- The objective function for fusion combined with in-place updates.
-    objFun' = case inplaceUpdatesMode of
-      NoInplaceUpdates -> S.size buffN .*. objFun .-. numberOfNonInplaceUpdates
-      InplaceUpdates   -> S.size buffN .*. objFun .+. numberOfNonInplaceUpdates
-      WeightedInplaceUpdates wFusion wInplace wPrioInplace -> undefined
-
     -- objective function that maximises the number of edges we fuse, and minimises the number of array reads if you ignore horizontal fusion
-    numberOfUnfusedEdges = foldMap fused fusibleE
+    -- numberOfUnfusedEdges = M.foldMapWithKey (\e v -> const v `times` fused e)
+    --                      $ foldl (flip \(i,_,j) -> M.insertWith (+) (i,j) 1) M.empty dataflowE
+    numberOfUnfusedEdges = foldMap fused fusibleE'
 
     -- A cost function that doesn't ignore horizontal fusion.
     -- Idea: Each node $x$ with $n$ outgoing edges gets $n$ extra variables.
@@ -174,7 +167,7 @@ makeILP obj (FusionILP graph constraints bounds) = combine graphILP
     -- To eliminate that one too, we'd need n^2 edges.
     numberOfClusters  = var (Other "maximumClusterNumber")
     -- removing this from myConstraints makes the ILP slightly smaller, but disables the use of this cost function
-    numberOfClustersC = case obj of
+    numberOfClustersC = case defaultFusionObjective @op of
       NumClusters -> foldMap (\l -> pi l .<=. numberOfClusters) compN
       Everything  -> foldMap (\l -> pi l .<=. numberOfClusters) compN
       _ -> mempty
@@ -183,13 +176,13 @@ makeILP obj (FusionILP graph constraints bounds) = combine graphILP
       <> numberOfClustersC <> readC <> orderC <> finalize graph
 
     -- x_ij <= pi_j - pi_i <= n*x_ij for all fusible edges
-    fusibleAcyclicC = foldMap (\e@(i,_,j) -> between (fused e) (pi j .-. pi i) (timesN $ fused e)) fusibleE
+    fusibleAcyclicC = foldMap (\e@(i,j) -> between (fused e) (pi j .-. pi i) (timesN $ fused e)) fusibleE'
 
     -- pi_i < pi_j for all strict edges  NEW!
     strictAcyclicC = foldMap (\(i,j) -> pi i .<. pi j) strictE
 
     -- x_ij == 1 for all infusible edges
-    infusibleC = foldMap (\e -> fused e .==. int 1) infusibleE
+    infusibleC = foldMap (\e -> fused e .==. int 1) infusibleE'
 
     -- if (i,b,j) is not fused, b has to be manifest
     -- TODO: final output is also manifest
@@ -197,12 +190,12 @@ makeILP obj (FusionILP graph constraints bounds) = combine graphILP
 
     -- forall b, iff all (w,b,r) are fused, then b is not manifest.
     manifestC = M.foldMapWithKey (\b es -> allB (map fused es) (notB $ manifest b))
-              $ foldl (flip \e@(_,b,_) -> M.insertWith (<>) b [e]) M.empty dataflowE
+              $ foldl (flip \(i,b,j) -> M.insertWith (<>) b [(i,j)]) M.empty dataflowE
 
     -- if (w,b,r) is fused, then d_wb == d_br
-    orderC = flip foldMap fusibleE $ \e@(w,b,r) ->
-                  timesN (fused e) .>=. readDir (b,r) .-. writeDir (w,b)
-      <> (-1) .*. timesN (fused e) .<=. readDir (b,r) .-. writeDir (w,b)
+    orderC = flip foldMap fusibleE $ \(w,b,r) ->
+                  timesN (fused (w,r)) .>=. readDir (b,r) .-. writeDir (w,b)
+      <> (-1) .*. timesN (fused (w,r)) .<=. readDir (b,r) .-. writeDir (w,b)
 
     fusionBounds :: Bounds op
     fusionBounds = piB <> fusedB <> manifestB <> readB
@@ -217,7 +210,15 @@ makeILP obj (FusionILP graph constraints bounds) = combine graphILP
     manifestB = foldMap (binary . Manifest) buffN
 
 
+    ----------------------------------------------------------------------------
     -- For in-place updates:
+    ----------------------------------------------------------------------------
+
+    iupdatesObjFun :: Expression op
+    iupdatesMinMax :: OptDir
+    (iupdatesMinMax, iupdatesObjFun) = case defaultIUpdatesObjective @op of
+      NumInplaceUpdates       -> (Minimise, numberOfNonInplaceUpdates)
+      WeightedInplaceUpdates  -> (Minimise, numberOfNonInplaceUpdates) -- TODO: use the weights and merge strategy defined by the backend
 
     numberOfNonInplaceUpdates = foldMap inplace inplaceP
 
