@@ -182,15 +182,11 @@ tupFlike TupRunit       _ = TupFunit
 tupFlike (TupRsingle _) b = TupFsingle b
 tupFlike (TupRpair l r) b = TupFpair (tupFlike l b) (tupFlike r b)
 
--- | This function is only safe when it's used to match the shape of two 'TupF's and nothing else.
-matchTupF :: TupF s a -> TupF t a -> Maybe (s :~: t)
-matchTupF TupFunit       TupFunit       = Just Refl
-matchTupF (TupFsingle _) (TupFsingle _) = Just (unsafeCoerce Refl :: s :~: t)  -- TODO: This can probably be cleaner if we change the definition of 'Buff' and 'Comp' to be similar to 'Buffer' and (type of computation?).
-matchTupF (TupFpair l1 r1) (TupFpair l2 r2) = do
-  Refl <- matchTupF l1 l2
-  Refl <- matchTupF r1 r2
-  return Refl
-matchTupF _ _ = Nothing
+eqTupF :: Eq a => TupF s a -> TupF t a -> Bool
+eqTupF TupFunit         TupFunit         = True
+eqTupF (TupFsingle a)   (TupFsingle b)   = a == b
+eqTupF (TupFpair l1 r1) (TupFpair l2 r2) = eqTupF l1 l2 && eqTupF r1 r2
+eqTupF _ _ = False
 
 
 instance Show a => Show (TupF t a) where

@@ -1349,7 +1349,7 @@ mkInplacePaths g = g&fusionILP.inplacePaths .~ validPaths
 mkReindexPartial :: forall env env'. Map (Label Buff) (Label Buff) -> BuffersEnv env -> BuffersEnv env' -> ReindexPartial Maybe env env'
 mkReindexPartial m env env' idx = idxOf (inplaceOf $ lookupIdxInEnv idx env^._2) env'
   where
-    --
+    -- Replace the buffer with the one we will actually write the data to.
     inplaceOf :: BuffersTup a -> BuffersTup a
     inplaceOf (TupFsingle bs) = TupFsingle $ maybe bs S.fromList (traverse (`M.lookup` m) $ S.toList bs)
     inplaceOf bs = bs
@@ -1364,8 +1364,7 @@ mkReindexPartial m env env' idx = idxOf (inplaceOf $ lookupIdxInEnv idx env^._2)
       -- Basically: standard procedure if you're using Ints as a unique identifier
       -- and want to re-introduce type information. :)
       -- Type applications allow us to restrict unsafeCoerce to the return type.
-      | Just Refl <- matchTupF bs bs'
-      , bs == bs' = Just $ unsafeCoerce @(Idx e _) @(Idx e a) ZeroIdx
+      | bs `eqTupF` bs' = Just $ unsafeCoerce @(Idx e _) @(Idx e a) ZeroIdx
       -- Recurse if we did not find e' yet.
       | otherwise = SuccIdx <$> idxOf bs rest
     -- If we hit the end, the Elabel was not present in the environment.
