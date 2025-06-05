@@ -499,9 +499,9 @@ class ( ShrinkArg (BackendClusterArg op), Eq (BackendVar op)
 
   -- | The default weight applied to the in-place updates objective.
   --
-  -- No definition defaults to -1 (prevent in-place updates).
+  -- No definition defaults to 1 (perform in-place updates where possible).
   defaultIUpdatesWeight :: Number
-  defaultIUpdatesWeight = 0
+  defaultIUpdatesWeight = 1
 
 
 
@@ -1375,7 +1375,7 @@ mkInplacePaths g = g&fusionILP.inplacePaths .~ validPaths
 -- We cannot guarantee the index is present in env', so we use the partiality of ReindexPartial by
 -- returning a Maybe. Uses unsafeCoerce to re-introduce type information implied by the EnvLabels.
 mkReindexPartial :: forall env env'. Map (Label Buff) (Label Buff) -> BuffersEnv env -> BuffersEnv env' -> ReindexPartial Maybe env env'
-mkReindexPartial m env env' idx = idxOf ({- inplaceOf $ -} lookupIdxInEnv idx env^._2) env'
+mkReindexPartial m env env' idx = idxOf (inplaceOf $ lookupIdxInEnv idx env^._2) env'
   where
     -- Replace the buffer with the one we will actually write the data to.
     inplaceOf :: BuffersTup a -> BuffersTup a
