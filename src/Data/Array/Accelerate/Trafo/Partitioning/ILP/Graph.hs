@@ -105,13 +105,13 @@ type InplacePath   = (ReadEdge, WriteEdge)
 -- @
 --
 data FusionGraph = FusionGraph   -- TODO: Use hashmaps and hashsets in production.
-  {      _bufferNodes :: Labels Buff       -- ^ Buffers in the graph.
-  , _computationNodes :: Labels Comp       -- ^ Computations in the graph.
-  ,        _readEdges :: Set ReadEdge      -- ^ Edges that represent reads.
-  ,       _writeEdges :: Set WriteEdge     -- ^ Edges that represent writes.
-  ,      _strictEdges :: Set StrictEdge    -- ^ Edges that enforce strict ordering.
-  ,    _dataflowEdges :: Set DataflowEdge  -- ^ Edges that represent data-flow.
-  ,     _inplacePaths :: Set InplacePath   -- ^ Summary paths between buffers for in-place updates.
+  {      _bufferNodes :: Labels Buff             -- ^ Buffers in the graph.
+  , _computationNodes :: Labels Comp             -- ^ Computations in the graph.
+  ,        _readEdges :: Set ReadEdge            -- ^ Edges that represent reads.
+  ,       _writeEdges :: Set WriteEdge           -- ^ Edges that represent writes.
+  ,      _strictEdges :: Set StrictEdge          -- ^ Edges that enforce strict ordering.
+  ,    _dataflowEdges :: Set DataflowEdge        -- ^ Edges that represent data-flow.
+  ,     _inplacePaths :: Map InplacePath Number  -- ^ Summary paths between buffers for in-place updates + their weight.
   }
 
 instance Semigroup FusionGraph where
@@ -148,7 +148,7 @@ class HasFusionGraph g where
   writeEdges :: Lens' g (Set WriteEdge)
   writeEdges = fusionGraph.writeEdges
 
-  inplacePaths :: Lens' g (Set InplacePath)
+  inplacePaths :: Lens' g (Map InplacePath Number)
   inplacePaths = fusionGraph.inplacePaths
 
 -- | Base instance of 'HasFusionGraph' for 'FusionGraph'.
@@ -177,7 +177,7 @@ instance HasFusionGraph FusionGraph where
   writeEdges :: Lens' FusionGraph (Set WriteEdge)
   writeEdges f s = f (_writeEdges s) <&> \es -> s{_writeEdges = es}
 
-  inplacePaths :: Lens' FusionGraph (Set InplacePath)
+  inplacePaths :: Lens' FusionGraph (Map InplacePath Number)
   inplacePaths f s = f (_inplacePaths s) <&> \ps -> s{_inplacePaths = ps}
 
 -- | Insert a buffer node into the graph.
@@ -503,8 +503,15 @@ class ( ShrinkArg (BackendClusterArg op), Eq (BackendVar op)
   defaultIUpdatesWeight :: Number
   defaultIUpdatesWeight = 1
 
+  -- | How to combine the weights of 2 in-place update paths.
+  --
+  -- No defintion defaults to discarding both weights and returning 1.
+  -- The first argument is the current path weight, the second argument is the
+  -- weight of the (unit length) path that is being added.
+  combineIUpdateWeight :: Number -> Number -> Number
+  combineIUpdateWeight _ _ = 1
 
-
+-- | Attach backend-specific information to labelled arguments.
 labelLabelledArgs :: MakesILP op => Solution op -> Label Comp -> LabelledArgs env args -> LabelledArgsOp op env args
 labelLabelledArgs sol l (arg :>: args) = labelLabelledArg sol l arg :>: labelLabelledArgs sol l args
 labelLabelledArgs _ _ ArgsNil = ArgsNil
@@ -1223,7 +1230,7 @@ mkUnitInplacePaths _ _ _ = S.empty
 
 -- | Combines the in-place update paths of length 1 (i.e. across computations)
 --   to in-place update paths of arbitrary length.
-combineInplacePaths :: FullGraph op -> FullGraph op
+combineInplacePaths :: forall op. MakesILP op => FullGraph op -> FullGraph op
 combineInplacePaths g = g&fusionILP.inplacePaths %~ stepsPaths 50
   where
     -- Keep extending the path until no more extensions are possible or the
@@ -1232,27 +1239,27 @@ combineInplacePaths g = g&fusionILP.inplacePaths %~ stepsPaths 50
     -- don't think this can happen.
     -- We could make this iteration limit an argument to the function and a
     -- global setting for the compiler later on.
-    stepsPaths :: Int -> Set InplacePath -> Set InplacePath
+    stepsPaths :: Int -> Map InplacePath Number -> Map InplacePath Number
     stepsPaths 0 ps = internalWarning "combineInplacePaths: iteration limit reached" False ps
-    stepsPaths n ps | S.null ps = ps
-                    | otherwise = ps <> stepsPaths (n-1) (foldMap stepPath ps)
+    stepsPaths n ps | M.null ps = ps
+                    | otherwise = ps <> stepsPaths (n-1) (M.foldMapWithKey stepPath ps)
 
     -- Extend the path by 1 step.
     -- This is done by looking at which computations can fuse with the end of
     -- the path, then finding any paths that start with the newly constructed
     -- read.
-    stepPath :: InplacePath -> Set InplacePath
-    stepPath (r, w@(_, b)) = case M.lookup w nextComps of
-      Nothing -> S.empty
+    stepPath :: InplacePath -> Number -> Map InplacePath Number
+    stepPath (r, w@(_, b)) n = case M.lookup w nextComps of
+      Nothing -> M.empty
       Just cs -> flip foldMap cs \c -> case M.lookup (b, c) nextPaths of
-        Nothing -> S.empty
-        Just ws -> S.map (r,) ws
+        Nothing -> M.empty
+        Just ws -> M.mapKeys (r,) $ M.map (combineIUpdateWeight @op n) ws
 
     -- For efficient lookup of extensions for paths.
     -- This maps read edges to the write edges that can be updated in-place with
     -- the read edge.
-    nextPaths :: Map ReadEdge (Set WriteEdge)
-    nextPaths = M.fromListWith S.union $ map (_2 %~ S.singleton) $ S.toList $ g^.fusionILP.inplacePaths
+    nextPaths :: Map ReadEdge (Map WriteEdge Number)
+    nextPaths = M.fromListWith M.union $ map (\((r,w),n)->(r,M.singleton w n)) $ M.toList $ g^.fusionILP.inplacePaths
 
     -- For efficient lookup of which computation the data flows into.
     -- We only consider computations that can fuse with the previous computation
@@ -1262,7 +1269,7 @@ combineInplacePaths g = g&fusionILP.inplacePaths %~ stepsPaths 50
 
 -- | Filters the in-place update paths to only include those that are valid.
 filterInplacePaths :: forall op. FullGraph op -> FullGraph op
-filterInplacePaths g = g & fusionILP.inplacePaths %~ S.filter sameElementType
+filterInplacePaths g = g & fusionILP.inplacePaths %~ filterKeys sameElementType
   where
     -- Checks if two in-place updates have the same element type.
     sameElementType :: InplacePath -> Bool
@@ -1293,7 +1300,7 @@ filterInplacePaths g = g & fusionILP.inplacePaths %~ S.filter sameElementType
       = Exists $ TupRpair tp1 tp2
 
 -- | Finalizes the in-place update paths by combining them and filtering them.
-finalizeInplacePaths :: FullGraph op -> FullGraph op
+finalizeInplacePaths :: MakesILP op => FullGraph op -> FullGraph op
 finalizeInplacePaths = filterInplacePaths . combineInplacePaths
 
 
@@ -1303,8 +1310,8 @@ mkInplacePaths :: forall op. MakesILP op => FullGraph op -> FullGraph op
 mkInplacePaths g = g&fusionILP.inplacePaths .~ validPaths
   where
     -- All valid in-place update paths in the graph.
-    validPaths :: Set InplacePath
-    validPaths = S.filter validInplaceUpdate $ foldMap go initialPaths
+    validPaths :: Map InplacePath Number
+    validPaths = M.fromSet (const 1) $ S.filter validInplaceUpdate $ foldMap go initialPaths
 
     -- Recursively extends the in-place path by looking at the next computation
     -- and its outputs.
@@ -1456,6 +1463,9 @@ traceEnv = use buffersEnv >>= traceEnv'
 tripleToLeftRec :: (a, b, c) -> ((a, b), c)
 tripleToLeftRec (x, y, z) = ((x, y), z)
 
+filterKeys :: (k -> Bool) -> Map k a -> Map k a
+filterKeys p = M.filterWithKey (\k _ -> p k)
+
 
 
 --------------------------------------------------------------------------------
@@ -1469,7 +1479,7 @@ toDOT g syms = "strict digraph {\n" ++
   concatMap (\b -> "  <" ++ show b ++ "> [shape=circle, label=\"" ++ show b ++ "\"];\n") (g^.bufferNodes) ++
   concatMap (\(b,c) -> "  <" ++ show b ++ "> -> <" ++ show c ++ "> [];\n") (g^.readEdges) ++
   concatMap (\(c,b) -> "  <" ++ show c ++ "> -> <" ++ show b ++ "> [];\n") (g^.writeEdges) ++
-  concatMap (\((b1, _), (_, b2)) -> "  <" ++ show b1 ++ "> -> <" ++ show b2 ++ "> [color=gray, style=dotted];\n") (g^.inplacePaths) ++
+  concatMap (\((b1, _), (_, b2)) -> "  <" ++ show b1 ++ "> -> <" ++ show b2 ++ "> [color=gray, style=dotted];\n") (M.keysSet $ g^.inplacePaths) ++
   concatMap (\(c1,_,c2) -> "  <" ++ show c1 ++ "> -> <" ++ show c2 ++ "> [color=green];\n") (g^.fusibleEdges) ++
   concatMap (\(c1,_,c2) -> "  <" ++ show c1 ++ "> -> <" ++ show c2 ++ "> [color=red];\n") (g^.infusibleEdges) ++
   concatMap (\(c1,c2) -> "  <" ++ show c1 ++ "> -> <" ++ show c2 ++ "> [style=dashed, color=red];\n") (g^.orderEdges) ++
