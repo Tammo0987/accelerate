@@ -82,8 +82,11 @@ makeILP _obj (FusionILP graph constraints bounds) =
     fusibleE'   = S.map (\(i,_,j) -> (i,j)) fusibleE
     infusibleE' = S.map (\(i,_,j) -> (i,j)) infusibleE
 
+    inplacePweights :: M.Map InplacePath Number
+    inplacePweights = graph^.inplacePaths
+
     inplaceP :: S.Set InplacePath
-    inplaceP = graph^.inplacePaths
+    inplaceP = M.keysSet inplacePweights
 
     n :: Int
     n = S.size compN
@@ -218,9 +221,11 @@ makeILP _obj (FusionILP graph constraints bounds) =
     iupdatesMinMax :: OptDir
     (iupdatesMinMax, iupdatesObjFun) = case defaultIUpdatesObjective @op of
       NumInplaceUpdates       -> (Minimise, numberOfNonInplaceUpdates)
-      WeightedInplaceUpdates  -> (Minimise, numberOfNonInplaceUpdates) -- TODO: use the weights and merge strategy defined by the backend
+      WeightedInplaceUpdates  -> (Minimise, weightedNumberOfNonINplaceUpdates)
 
     numberOfNonInplaceUpdates = foldMap inplace inplaceP
+
+    weightedNumberOfNonINplaceUpdates = M.foldMapWithKey (\p w -> w .*. inplace p) inplacePweights
 
     -- If inplace p, then c1 == c2
     acrossClusterC = flip foldMap inplaceP \case
