@@ -1220,13 +1220,13 @@ and the environment before some operation is executed.
 --   type of the elements here, since these will be checked later. This ensures
 --   we can still create paths that would alter the type of the elements to an
 --   incompatible type and then back to a compatible type.
-mkUnitInplacePaths :: HasCallStack => Label Comp -> ArgLabel (In sh s) -> ArgLabel (Out sh t) -> Set InplacePath
-mkUnitInplacePaths c l1 l2
+mkUnitInplacePaths :: HasCallStack => Number -> Label Comp -> ArgLabel (In sh s) -> ArgLabel (Out sh t) -> Map InplacePath Number
+mkUnitInplacePaths n c l1 l2
   | getLabelShape l1 == getLabelShape l2  -- This condition should always hold if used correctly, but we check it anyway.
   , bs1 <- getLabelUniqueArrDeps l1
   , bs2 <- getLabelUniqueArrDeps l2
-  = foldMap (\b1 -> foldMap (\b2 -> S.singleton ((b1, c), (c, b2))) bs2) bs1
-mkUnitInplacePaths _ _ _ = S.empty
+  = foldMap (\b1 -> foldMap (\b2 -> M.singleton ((b1, c), (c, b2)) n) bs2) bs1
+mkUnitInplacePaths _ _ _ _ = M.empty
 
 -- | Combines the in-place update paths of length 1 (i.e. across computations)
 --   to in-place update paths of arbitrary length.
