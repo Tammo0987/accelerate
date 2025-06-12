@@ -418,6 +418,10 @@ getLabelArrays (NotArr _) = internalError "getLabelArrays: Expected Arr but got 
 getLabelArrDeps :: ArgLabel (m sh e) -> Labels Buff
 getLabelArrDeps = fold . getLabelArrays
 
+-- | Get a single array dependency of an 'ArgLabel'.
+getLabelArrDep :: ArgLabel (m sh e) -> Label Buff
+getLabelArrDep = foldr1 const . getLabelArrDeps
+
 -- | Get the shapes of an 'ArgLabel'.
 getLabelShape :: ArgLabel (m sh e) -> BuffersTup sh
 getLabelShape (Arr (_, _, _) (_, sh, _)) = sh
@@ -647,9 +651,9 @@ traverseLArgs _ ArgsNil = pure ArgsNil
 traverseLArgs f (larg :>: largs) = (:>:) <$> f larg <*> traverseLArgs f largs
 
 -- | Flipped version of 'traverseLArgs'.
-forLArgsT :: Applicative f => LabelledArgs env t -> (forall s. LabelledArg env s -> f (LabelledArg env s)) -> f (LabelledArgs env t)
-forLArgsT largs f = traverseLArgs f largs
-{-# INLINE forLArgsT #-}
+forLArgs :: Applicative f => LabelledArgs env t -> (forall s. LabelledArg env s -> f (LabelledArg env s)) -> f (LabelledArgs env t)
+forLArgs largs f = traverseLArgs f largs
+{-# INLINE forLArgs #-}
 
 -- | Traverse over the labelled arguments and discard the result.
 traverseLArgs_ :: Applicative f => (forall s. LabelledArg env s -> f ()) -> LabelledArgs env t -> f ()

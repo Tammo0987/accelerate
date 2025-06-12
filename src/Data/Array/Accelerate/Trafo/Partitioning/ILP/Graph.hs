@@ -52,7 +52,7 @@ import Lens.Micro.Mtl
 
 import Control.Monad.State.Strict (State, runState)
 import Data.Coerce (coerce)
-import Data.Foldable (Foldable (fold, foldr'), traverse_)
+import Data.Foldable (Foldable (fold, foldr'), traverse_, toList)
 import Data.Kind (Type)
 import Debug.Trace
 import Unsafe.Coerce (unsafeCoerce)
@@ -256,7 +256,6 @@ readEdgesOf b = to (\g -> S.filter (\(b', _) -> b' == b) (g^.readEdges))
 -- | Gets the write edges of a buffer.
 writeEdgesOf :: HasFusionGraph g => Label Buff -> SimpleGetter g (Set WriteEdge)
 writeEdgesOf b = to (\g -> S.filter (\(_, b') -> b' == b) (g^.writeEdges))
-
 
 
 --------------------------------------------------------------------------------
@@ -536,10 +535,6 @@ data Var (op :: Type -> Type)
     -- ^ \-3 can't fuse with anything, -2 for 'left to right', -1 for 'right to left', n for 'unknown', see computation n (currently only backpermute).
   | WriteDir (Label Comp) (Label Buff)
     -- ^ See 'ReadDir'.
-  | InDir (Label Comp)  -- Legacy
-    -- ^ For backwards compatibility, see 'ReadDir''. For this variable to have any meaning the backend has to call 'useInDir' (or 'useInOutDir').
-  | OutDir (Label Comp)  -- Legacy
-    -- ^ For backwards compatibility, see 'WriteDir''. For this variable to have any meaning the backend has to call 'useOutDir' (or 'useInOutDir').
   | InFoldSize (Label Comp)  -- Legacy? Probably needs per-edge equivalent
     -- ^ Keeps track of the fold that's one dimension larger than this operation, and is fused in the same cluster.
     -- This prevents something like @zipWith f (fold g xs) (fold g ys)@ from illegally fusing
@@ -567,33 +562,6 @@ deriving instance Eq   (BackendVar op) => Eq   (Var op)
 deriving instance Ord  (BackendVar op) => Ord  (Var op)
 deriving instance Show (BackendVar op) => Show (Var op)
 
--- | Sets all 'ReadDir' that contain the computation @c@ to be equal to the
---   'InDir' variable of @c@. If you don't use this fuction, using 'InDir' will
---   have no effect.
---
--- This function makes it so we can write ILP's in the old style, i.e. where
--- a computation reads/writes in only one direction.
-useInDir :: HasFusionILP g op => Label Comp -> State g ()
-useInDir c = do
-  readDirs <- map (var . uncurry ReadDir) . S.toList <$> use (fusionILP.inputEdgesOf c)
-  fusionILP.constraints %= (<> equals (var (InDir c) : readDirs))
-
--- | Sets all 'WriteDir' that contain the computation @c@ to be equal to the
---   'OutDir' variable of @c@. If you don't use this fuction, using 'OutDir'
---   will have no effect.
---
--- This function makes it so we can write ILP's in the old style, i.e. where
--- a computation reads/writes in only one direction.
-useOutDir :: HasFusionILP g op => Label Comp -> State g ()
-useOutDir c = do
-  writeDirs <- map (var . uncurry WriteDir) . S.toList <$> use (fusionILP.outputEdgesOf c)
-  fusionILP.constraints %= (<> equals (var (OutDir c) : writeDirs))
-
--- | See 'useInDir' and 'useOutDir'.
-useInOutDir :: HasFusionILP g op => Label Comp -> State g ()
-useInOutDir c = useInDir c >> useOutDir c
-
-
 -- | Constructor for 'Pi' variables.
 pi :: Label Comp -> Expression op
 pi = var . Pi
@@ -614,9 +582,17 @@ fused = var . uncurry Fused
 readDir :: ReadEdge -> Expression op
 readDir = var . uncurry ReadDir
 
+-- | Convert a foldable structure of 'ReadEdge' to a list of 'Expression's.
+readDirs :: Foldable f => f ReadEdge -> [Expression op]
+readDirs = map readDir . toList
+
 -- | Safe constructor for 'WriteDir' variables.
 writeDir :: WriteEdge -> Expression op
 writeDir = var . uncurry WriteDir
+
+-- | Convert a foldable structure of 'WriteEdge' to a list of 'Expression's.
+writeDirs :: Foldable f => f WriteEdge -> [Expression op]
+writeDirs = map writeDir . toList
 
 -- | Safe constructor for 'InPlace' variables.
 inplace :: InplacePath -> Expression op

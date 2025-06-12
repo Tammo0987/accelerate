@@ -193,9 +193,9 @@ infixr 7 .<=.
 infixr 7 .==.
 
 -- | @x[0] == x[1] == ... == x[n-1]@
-equals :: [Expression op] -> Constraint op
-equals [] = TrueConstraint
-equals (x:xs) = foldMap (x .==.) xs
+allEqual :: [Expression op] -> Constraint op
+allEqual []     = TrueConstraint
+allEqual (x:xs) = foldMap (x .==.) xs
 
 -- | 'Var' is binary.
 binary :: Var op -> Bounds op
