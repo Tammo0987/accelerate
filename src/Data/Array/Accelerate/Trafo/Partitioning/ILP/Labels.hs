@@ -176,11 +176,11 @@ fromTupF TupFunit       = TupRunit
 fromTupF (TupFsingle a) = TupRsingle (C.Const a)
 fromTupF (TupFpair l r) = TupRpair (fromTupF l) (fromTupF r)
 
--- | Create a 'TupF' containing a single value in the same shape as a 'TupR'.
-tupFlike :: TupR s t -> b -> TupF t b
-tupFlike TupRunit       _ = TupFunit
-tupFlike (TupRsingle _) b = TupFsingle b
-tupFlike (TupRpair l r) b = TupFpair (tupFlike l b) (tupFlike r b)
+-- | Create a 'TupF' with the same shape as a 'TupR'.
+tupFlike :: Applicative f => TupR s t -> f b -> f (TupF t b)
+tupFlike TupRunit       _ = pure TupFunit
+tupFlike (TupRsingle _) f = TupFsingle <$> f
+tupFlike (TupRpair l r) f = TupFpair <$> tupFlike l f <*> tupFlike r f
 
 eqTupF :: Eq a => TupF s a -> TupF t a -> Bool
 eqTupF TupFunit         TupFunit         = True

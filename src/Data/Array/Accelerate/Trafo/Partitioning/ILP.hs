@@ -73,7 +73,7 @@ ilpFusionF :: (MakesILP op, ILPSolver s op, Pretty.PrettyOp (Cluster op)) => s -
 ilpFusionF solver objective fun = ilpFusion' mkFullGraphF (reconstructF fun False) solver objective fun
 
 ilpFusion' :: (MakesILP op, ILPSolver s op)
-           => (x -> (FusionILP op, Symbols op))
+           => (x -> FullGraph op)
            -> (FusionGraph -> [ClusterLs] -> Map (Label Comp) [ClusterLs] -> Symbols op -> ReadDirM -> InplaceM -> y)
            -> s
            -> FusionObjective
@@ -90,7 +90,7 @@ ilpFusion' toGraph fromGraph s obj acc = do
   let (topClusters, subClustersM) = splitExecs (interpretClusters solution) symbols'
   fromGraph (fullgraph^.fusionILP.graph) topClusters subClustersM symbols' readDirM inplaceM
 
-traceGraph :: (FusionILP op, Symbols op) -> (FusionILP op, Symbols op)
+traceGraph :: FullGraph op -> FullGraph op
 traceGraph g = unsafePerformIO $ do
   writeFile "ilp.dot" $ toDOT (g^.fusionILP.graph) (g^.symbols)
   return g
@@ -118,7 +118,7 @@ ppScopedClusters (top, sub) = "top =\n" ++ ppList top ++ foldMapWithKey (\k v ->
 -- note: does allow for horizontal fusion!
 -- more rigorous is to change 'topSort' in Clustering.hs into separating each cluster completely
 noFusion' :: (MakesILP op, ILPSolver s op)
-           => (x -> (FusionILP op, Symbols op))
+           => (x -> FullGraph op)
            -> (FusionGraph -> [ClusterLs] -> Map (Label Comp) [ClusterLs] -> Symbols op -> ReadDirM -> InplaceM -> y)
            -> s
            -> FusionObjective
@@ -144,7 +144,7 @@ noFusion' = undefined
 -- note that this is perhaps still too generous. For example, anything that can fuse into 1 loop will still be fully fused!
 -- it's perhaps more of an 'alternative' than a 'baseline'
 greedyFusion' :: forall s op x y. (MakesILP op, ILPSolver s op)
-                    => (x -> (FusionILP op, Symbols op))
+                    => (x -> FullGraph op)
                     -> (FusionGraph -> [ClusterLs] -> Map (Label Comp) [ClusterLs] -> Symbols op -> ReadDirM -> InplaceM -> y)
                     -> s
                     -> Benchmarking
