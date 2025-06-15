@@ -595,6 +595,9 @@ library
         Data.Array.Accelerate.Test.NoFib.Issues.Issue439
         Data.Array.Accelerate.Test.NoFib.Issues.Issue517
         Data.Array.Accelerate.Test.NoFib.Issues.Issue551
+        Data.Array.Accelerate.Test.NoFib.Misc
+        Data.Array.Accelerate.Test.NoFib.Misc.Cache
+        Data.Array.Accelerate.Test.NoFib.Misc.Scanl1
 
   else
     cpp-options:
