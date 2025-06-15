@@ -17,8 +17,9 @@
 module Data.Array.Accelerate.Debug.Internal (
 
   debuggingIsEnabled,
+  tracyIsEnabled,
   boundsChecksAreEnabled,
-  unsafeChecksAreEnabled,
+  -- unsafeChecksAreEnabled,
   internalChecksAreEnabled,
 
   module Debug,
@@ -42,6 +43,14 @@ debuggingIsEnabled = True
 debuggingIsEnabled = False
 #endif
 
+{-# INLINE tracyIsEnabled #-}
+tracyIsEnabled :: Bool
+#ifdef ACCELERATE_TRACY
+tracyIsEnabled = True
+#else
+tracyIsEnabled = False
+#endif
+
 {-# INLINE boundsChecksAreEnabled #-}
 boundsChecksAreEnabled :: Bool
 #ifdef ACCELERATE_BOUNDS_CHECKS
@@ -50,13 +59,13 @@ boundsChecksAreEnabled = True
 boundsChecksAreEnabled = False
 #endif
 
-{-# INLINE unsafeChecksAreEnabled #-}
-unsafeChecksAreEnabled :: Bool
-#ifdef ACCELERATE_UNSAFE_CHECKS
-unsafeChecksAreEnabled = True
-#else
-unsafeChecksAreEnabled = False
-#endif
+-- {-# INLINE unsafeChecksAreEnabled #-}
+-- unsafeChecksAreEnabled :: Bool
+-- #ifdef ACCELERATE_UNSAFE_CHECKS
+-- unsafeChecksAreEnabled = True
+-- #else
+-- unsafeChecksAreEnabled = False
+-- #endif
 
 {-# INLINE internalChecksAreEnabled #-}
 internalChecksAreEnabled :: Bool
