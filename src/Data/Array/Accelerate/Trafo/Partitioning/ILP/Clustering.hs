@@ -124,13 +124,13 @@ topSort singletons (FusionGraph strictEdges dataflowEdges _) cluster readDirM =
       . map (,[])
       . S.toList
 
-    fusibleEdges, _infusibleEdges :: S.Set (Label Comp, Label Buff, Label Comp)
-    (fusibleEdges, _infusibleEdges) = S.partition (\(c1, _, c2) -> S.notMember (c1, c2) strictEdges) dataflowEdges
+    fusibleEdges, infusibleEdges :: S.Set (Label Comp, Label Buff, Label Comp)
+    (fusibleEdges, infusibleEdges) = S.partition (\(c1, _, c2) -> S.notMember (c1, c2) strictEdges) dataflowEdges
 
 
     -- Make a graph of all these labels and their incoming edges (for horizontal fusion)...
-    fpparents =                    S.unions $ S.map (\l -> (S.\\ cluster) $ S.map (^._1) $ S.filter (\(_,  b)->l==b) strictEdges)   cluster
-    parents   = (S.\\ fpparents) $ S.unions $ S.map (\l -> (S.\\ cluster) $ S.map (^._1) $ S.filter (\(_,_,b)->l==b) dataflowEdges) cluster
+    fpparents =                    S.unions $ S.map (\l -> (S.\\ cluster) $ S.map (^._1) $ S.filter (\(_,_,b)->l==b) infusibleEdges) cluster
+    parents   = (S.\\ fpparents) $ S.unions $ S.map (\l -> (S.\\ cluster) $ S.map (^._1) $ S.filter (\(_,_,b)->l==b) fusibleEdges)   cluster
     -- fpparents: computations that produce a value for something in the cluster, but are not in the cluster themselves and cannot be fused with the thing in the cluster.
     -- parents: computations that produce a value for something in the cluster, but are not in the cluster themselves and can be fused with the thing in the cluster.
 
