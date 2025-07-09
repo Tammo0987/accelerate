@@ -176,7 +176,7 @@ makeILP _obj (FusionILP graph constraints bounds) =
       _ -> mempty
 
     fusionConstraints = fusibleAcyclicC <> strictAcyclicC <> infusibleC <> manifestC
-      <> numberOfClustersC <> readC <> orderC <> finalize graph
+      <> numberOfClustersC <> readC <> fusionOrderC <> finalize graph
 
     -- x_ij <= pi_j - pi_i <= n*x_ij for all fusible edges
     fusibleAcyclicC = foldMap (\e@(i,j) -> between (fused e) (pi j .-. pi i) (timesN $ fused e)) fusibleE'
@@ -196,7 +196,7 @@ makeILP _obj (FusionILP graph constraints bounds) =
               $ foldl (flip \(i,b,j) -> M.insertWith (<>) b [(i,j)]) M.empty dataflowE
 
     -- if (w,b,r) is fused, then d_wb == d_br
-    orderC = flip foldMap fusibleE $ \(w,b,r) ->
+    fusionOrderC = flip foldMap fusibleE $ \(w,b,r) ->
                   timesN (fused (w,r)) .>=. readDir (b,r) .-. writeDir (w,b)
       <> (-1) .*. timesN (fused (w,r)) .<=. readDir (b,r) .-. writeDir (w,b)
 
@@ -237,25 +237,33 @@ makeILP _obj (FusionILP graph constraints bounds) =
     onManifestC = foldMap (\p@((b1,_),(_,b2)) -> (inplace p `impliesB` manifest b1) <> (inplace p `impliesB` manifest b2)) inplaceP
 
     -- Forall b, at most one inplace p
-    singleUpdateC = foldMap (packB 1) $ foldl (flip \p@((b,_),_) -> M.insertWith (<>) b [inplace p]) M.empty inplaceP
+    singleReadC  = foldMap (packB 1) $ foldl (flip \p@((b,_),_) -> M.insertWith (<>) b [inplace p]) M.empty inplaceP
+    singleWriteC = foldMap (packB 1) $ foldl (flip \p@(_,(_,b)) -> M.insertWith (<>) b [inplace p]) M.empty inplaceP
 
     -- If inplace p, then pimax b1 == pi c2
     inplaceClusterC = foldMap (\p@((b1,_),(c2,_)) -> between (int 0) (pimax b1 .-. pi c2) (timesN $ inplace p)) inplaceP
 
     -- Iff     inplace p, then pi c1     <= pimax b1
     -- Iff not inplace p, then pi c1 + 1 <= pimax b1
-    finalClusterC = foldMap (\p@((b1,c1),_) -> pi c1 .+. inplace p .<=. pimax b1) inplaceP
+    -- finalClusterC = foldMap (\p@((b1,c1),_) -> pi c1 .+. inplace p .<=. pimax b1) inplaceP
+    finalClusterC = foldMap (\r@(b1,c1) -> pi c1 .+. int 1 .+. foldMap (\w -> int 1 .-. inplace (r,w)) (M.findWithDefault [] r readM) .<=. pimax b1) readE
+
+    -- Group inplace paths by read edge:
+    readM = foldl (flip \(r,w) -> M.insertWith (<>) r [w]) M.empty inplaceP
 
     -- TODO: Maybe add a constraint that c2 is the first writer to b2?
     -- This would make sense because the graph doesn't acctually enforce there is only one writer per buffer.
     -- For most cases there shouldn't be more than 2 writers, one of which is a let-binding, so no issues arise without this constraint.
     -- However, a mutable computation would create a third writer, which would be a problem.
 
-    inplaceConstraints = acrossClusterC <> onManifestC <> singleUpdateC <> inplaceClusterC <> finalClusterC
+    -- If inplace p, then d_br == d_wb
+    inplaceOrderC = foldMap (\p@(r,w) -> isEqualRangeN (readDir r) (writeDir w) (inplace p)) inplaceP
+
+    inplaceConstraints = acrossClusterC <> onManifestC <> singleReadC <> singleWriteC <> inplaceClusterC <> finalClusterC <> inplaceOrderC
 
 
     -- 0 <= pimax_b
-    pimaxB = foldMap (lower 0 . PiMax) buffN
+    pimaxB = foldMap (\b -> lowerUpper 0 (PiMax b) (n+1)) buffN
 
     -- inplace b1 b2 \in {0, 1}
     inplaceB = foldMap (\((b1,c1),(c2,b2)) -> binary $ InPlace b1 c1 c2 b2) inplaceP
