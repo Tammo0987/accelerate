@@ -431,6 +431,10 @@ getLabelShape (NotArr _) = internalError "getLabelShape: Expected Arr but got No
 getLabelShDeps :: ArgLabel (m sh e) -> Labels Buff
 getLabelShDeps = fold . getLabelShape
 
+-- | Check if two arguments use the same shape variables.
+eqLabelShape :: ArgLabel (m1 sh1 e1) -> ArgLabel (m2 sh2 e2) -> Bool
+eqLabelShape l1 l2 = eqTupF (getLabelShape l1) (getLabelShape l2)
+
 
 
 -- | The argument to a function paired with 'ArgLabels'
@@ -684,6 +688,18 @@ outputArrays = foldMapLArgs \case
 notArrays :: LabelledArgs env t -> Labels Buff
 notArrays = foldMapLArgs \case
   L _ (NotArr deps) -> deps
+  _ -> mempty
+
+-- | Fold map over all inputs.
+foldMapInputLabels :: Monoid m => (forall sh e. ArgLabel (In sh e) -> m) -> LabelledArgs env t -> m
+foldMapInputLabels f = foldMapLArgs \case
+  L (ArgArray In _ _ _) l -> f l
+  _ -> mempty
+
+-- | Fold map over all outputs.
+foldMapOutputLabels :: Monoid m => (forall sh e. ArgLabel (Out sh e) -> m) -> LabelledArgs env t -> m
+foldMapOutputLabels f = foldMapLArgs \case
+  L (ArgArray Out _ _ _) l -> f l
   _ -> mempty
 
 
