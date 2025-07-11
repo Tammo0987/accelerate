@@ -19,6 +19,7 @@
 {-# LANGUAGE ViewPatterns             #-}
 {-# LANGUAGE OverloadedStrings        #-}
 {-# OPTIONS_GHC -Wno-orphans          #-}
+{-# LANGUAGE BangPatterns #-}
 module Data.Array.Accelerate.Trafo.Partitioning.ILP.Graph where
 
 import Prelude hiding ( init, reads )
@@ -442,6 +443,7 @@ class ( ShrinkArg (BackendClusterArg op), Eq (BackendVar op)
   -- No definition defaults to the number of buffers in the graph, with numInplaceUpdates <= nBuffs.
   defaultFusionWeight :: Number
   defaultFusionWeight = Number nBuffs
+  -- defaultFusionWeight = 1
 
   -- | The default weight applied to the in-place updates objective.
   --
@@ -1188,7 +1190,7 @@ combineInplacePaths g = g&fusionILP.inplacePaths %~ stepsPaths 50
 
 -- | Filters the in-place update paths to only include those that are valid.
 filterInplacePaths :: forall op. FullGraph op -> FullGraph op
-filterInplacePaths g = g & fusionILP.inplacePaths %~ filterKeys sameElementType
+filterInplacePaths g = g&fusionILP.inplacePaths %~ filterKeys sameElementType
   where
     -- Checks if two in-place updates have the same element type.
     sameElementType :: InplacePath -> Bool
@@ -1218,15 +1220,15 @@ filterInplacePaths g = g & fusionILP.inplacePaths %~ filterKeys sameElementType
       , Exists tp2 <- groundsRtoTypeR e2
       = Exists $ TupRpair tp1 tp2
 
+
 -- | Finalizes the in-place update paths by combining them and filtering them.
 finalizeInplacePaths :: MakesILP op => FullGraph op -> FullGraph op
-finalizeInplacePaths = filterInplacePaths . combineInplacePaths
+finalizeInplacePaths = filterInplacePaths . mkInplacePathsFromClusters
 
 
-
--- | Naive approach: find in-place updates from scratch.
-mkInplacePaths :: forall op. MakesILP op => FullGraph op -> FullGraph op
-mkInplacePaths g = g&fusionILP.inplacePaths .~ validPaths
+-- | Naive approach: Work forwards from a buffer.
+mkInplacePathsFromBuffers :: forall op. MakesILP op => FullGraph op -> FullGraph op
+mkInplacePathsFromBuffers g = g&fusionILP.inplacePaths .~ validPaths
   where
     -- All valid in-place update paths in the graph.
     validPaths :: Map InplacePath Number
@@ -1290,6 +1292,48 @@ mkInplacePaths g = g&fusionILP.inplacePaths .~ validPaths
     -- because we can only perform an in-place update if the computations fuse.
     nextMap :: Map WriteEdge (Labels Comp)
     nextMap = M.fromListWith S.union $ map (tripleToLeftRec . (_3 %~ S.singleton)) $ S.toList $ g^.fusionILP.fusibleEdges
+
+
+-- | Calculate in-place update paths based on vertical clusters.
+-- This approach should be able to find many more in-place update paths than
+-- just combining the in-place paths of length 1, because it considers
+-- computations that are not directly connected by an in-place path.
+mkInplacePathsFromClusters :: forall op. MakesILP op => FullGraph op -> FullGraph op
+mkInplacePathsFromClusters g = g&fusionILP.inplacePaths <>~ go initialClusters
+  where
+    initialClusters :: Set (Label Comp, Label Comp)
+    initialClusters = S.map (\c->(c,c)) (g^.fusionILP.computationNodes)
+
+    go :: Set (Label Comp, Label Comp) -> Map InplacePath Number
+    go clusters = flip foldMap clusters $ \(r, w) -> do
+      let !selfPath    = clusterInplacePaths r w
+      let !selfStepped = S.map (r,) (next w)
+      M.union selfPath $! go selfStepped
+
+    -- Get the set of fusible consumers.
+    next :: Label Comp -> Labels Comp
+    next = flip (M.findWithDefault S.empty) nextMap
+
+    -- Map from producer to consumers.
+    nextMap :: Map (Label Comp) (Labels Comp)
+    nextMap = foldl (flip \(c1,_,c2) -> M.insertWith (<>) c1 (S.singleton c2)) M.empty (g^.fusionILP.fusibleEdges)
+
+    clusterInplacePaths :: Label Comp -> Label Comp -> Map InplacePath Number
+    clusterInplacePaths cIn cOut = case (g^.symbol cIn, g^.symbol cOut) of
+      (Just (SExe _ largsIn _), Just (SExe _ largsOut _)) ->
+        foldMapInputLabels (\lIn -> foldMapOutputLabels (mkInplacePaths 1 cIn cOut lIn) largsOut) largsIn
+      _ -> mempty
+
+
+-- | Create in-place paths from 2 computations, an input of the first and an output of the second.
+mkInplacePaths :: HasCallStack => Number -> Label Comp -> Label Comp
+               -> ArgLabel (In shIn eIn) -> ArgLabel (Out shOut eOut) -> Map InplacePath Number
+mkInplacePaths n r w lIn lOut
+  | eqLabelShape lIn lOut
+  , bsIn  <- getLabelUniqueArrDeps lIn
+  , bsOut <- getLabelUniqueArrDeps lOut
+  = foldMap (\bIn -> foldMap (\bOut -> M.singleton ((bIn, r), (w, bOut)) n) bsOut) bsIn
+mkInplacePaths _ _ _ _ _ = M.empty
 
 
 
