@@ -25,7 +25,7 @@ import Data.Array.Accelerate.Trafo.Partitioning.ILP.MIP
 
 import System.IO.Unsafe (unsafePerformIO)
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Labels (Label, LabelType(..), traceWith)
-import Data.Map (Map, toList, foldMapWithKey)
+import Data.Map (Map, toList, foldMapWithKey, filterWithKey)
 import qualified Data.Array.Accelerate.Pretty.Operation as Pretty
 import Data.Function ((&))
 import qualified Data.Set as Set
@@ -82,7 +82,7 @@ ilpFusion' :: (MakesILP op, ILPSolver s op)
 ilpFusion' toGraph fromGraph s obj acc = do
   let fullgraph = {- traceGraph $ -} toGraph acc
   let ilp       = makeILP obj (fullgraph^.fusionILP)
-  let solution  = {- traceWith ppSolution $ -} fromMaybe (error "Accelerate: No ILP solution found") (unsafePerformIO $ solve s ilp)
+  let solution  = traceWith ppNumInplace $ fromMaybe (error "Accelerate: No ILP solution found") (unsafePerformIO $ solve s ilp)
   let symbols'  = attachBackendLabels solution (fullgraph^.symbols)
   let readDirM  = interpretReadDirs  solution
   -- let writeDirM = interpretWriteDirs solution
@@ -95,16 +95,25 @@ traceGraph g = unsafePerformIO $ do
   writeFile "ilp.dot" $ toDOT (g^.fusionILP.graph) (g^.symbols)
   return g
 
+ppNumInplace :: forall op. MakesILP op => Solution op -> String
+ppNumInplace m = "Compilation performed " ++ show numInplace ++ "/" ++ show totalInplace ++ " in-place updates."
+  where
+    inplaceVars = filterWithKey (\k _ -> case k of InPlace{} -> True; _ -> False) m
+    totalInplace = length inplaceVars
+    numInplace = length $ filterWithKey (\_ v -> v == 0) inplaceVars
+
+
 ppSolution :: forall op. MakesILP op => Solution op -> String
 ppSolution solution = "solution: " ++ foldMap ppVar (toList solution)
   where
     ppVar :: (Var op, Int) -> String
-    ppVar (k, v) = case k of
-      Pi{}                       -> "\n" ++ show k  ++ " == " ++ show v
-      Fused{} | v == 0           -> "\n" ++ show k
-      Manifest{}                 -> "\n" ++ show k  ++ " == " ++ show v
-      InPlace b1 _ _ b2 | v == 0 -> "\n" ++ show b1 ++ " <- " ++ show b2
-      _ -> ""
+    ppVar (k, v) = "\n" ++ show k ++ " == " ++ show v
+    -- ppVar (k, v) = case k of
+    --   Pi{}               -> "\n" ++ show k  ++ " == " ++ show v
+    --   Fused{} | v == 0   -> "\n" ++ show k
+    --   Manifest{}         -> "\n" ++ show k  ++ " == " ++ show v
+    --   InPlace{} | v == 0 -> "\n" ++ show k
+    --   _ -> ""
 
 ppList :: Show a => [a] -> String
 ppList [] = "[]"
