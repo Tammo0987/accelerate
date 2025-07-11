@@ -669,26 +669,25 @@ forLArgs_ :: Applicative f => LabelledArgs env t -> (forall s. LabelledArg env s
 forLArgs_ largs f = traverseLArgs_ f largs
 {-# INLINE forLArgs_ #-}
 
--- | All arrays that the function reads from. This includes the shapes.
+-- | All arrays that the function reads from.
 inputArrays :: LabelledArgs env t -> Labels Buff
 inputArrays = foldMapLArgs \case
-  L (ArgArray In  _ _ _) (Arr (_,arr,_) (_,sh,_)) -> fold arr <> fold sh
-  L (ArgArray Mut _ _ _) (Arr (_,arr,_) (_,sh,_)) -> fold arr <> fold sh
-  L (ArgArray Out _ _ _) (Arr  _        (_,sh,_)) -> fold sh
+  L (ArgArray In  _ _ _) (Arr (_,arr,_) _) -> fold arr
+  L (ArgArray Mut _ _ _) (Arr (_,arr,_) _) -> fold arr
   _ -> mempty
 
--- | All arrays that the function writes to. This does not include the shapes.
+-- | All arrays that the function writes to.
 outputArrays :: LabelledArgs env t -> Labels Buff
 outputArrays = foldMapLArgs \case
   L (ArgArray Out _ _ _) (Arr (_,arr,_) _) -> fold arr
   L (ArgArray Mut _ _ _) (Arr (_,arr,_) _) -> fold arr
   _ -> mempty
 
--- | All arguments that are not arrays or their shapes. ('Var'', 'Exp'', 'Fun'')
+-- | All non-array arguments and array shapes.
 notArrays :: LabelledArgs env t -> Labels Buff
 notArrays = foldMapLArgs \case
-  L _ (NotArr deps) -> deps
-  _ -> mempty
+  L _ (Arr _ (_,sh,_)) -> fold sh
+  L _ (NotArr deps)    -> deps
 
 -- | Fold map over all inputs.
 foldMapInputLabels :: Monoid m => (forall sh e. ArgLabel (In sh e) -> m) -> LabelledArgs env t -> m
