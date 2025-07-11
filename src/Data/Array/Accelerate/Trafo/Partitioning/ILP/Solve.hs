@@ -8,7 +8,7 @@
 {-# LANGUAGE BlockArguments #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE TypeApplications #-}
-
+{-# LANGUAGE OverloadedStrings #-}
 module Data.Array.Accelerate.Trafo.Partitioning.ILP.Solve where
 
 
@@ -16,6 +16,7 @@ import Data.Array.Accelerate.Trafo.Partitioning.ILP.Graph hiding (graph, constra
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Labels
     (Label, parent, Labels, LabelType (..) )
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Solver hiding (finalize)
+import Data.Array.Accelerate.Error (internalError)
 
 import Data.List (groupBy, sortOn)
 import Prelude hiding (sum, pi, read )
@@ -42,11 +43,13 @@ data FusionObjective
   | IntermediateArrays  -- ^ Minimise the number of intermediate arrays.
   | FusedEdges          -- ^ Minimise the number of unfused edges.
   | Everything          -- ^ Minimise the number of clusters and array reads/writes.
-  deriving (Show, Bounded, Enum)
+  deriving (Show, Bounded, Enum, Eq, Ord)
 
 data IUpdatesObjective
-  = NumInplaceUpdates       -- ^ Each in-place update counts as 1.
+  = NoInplaceUpdates        -- ^ Do not use in-place updates.
+  | NumInplaceUpdates       -- ^ Each in-place update counts as 1.
   | WeightedInplaceUpdates  -- ^ Use the weights and merge strategy defined by the backend.
+  deriving (Show, Bounded, Enum, Eq, Ord)
 
 -- TODO: _obj is now obsolete
 -- Makes the ILP. Note that this function 'appears' to ignore the Label levels completely!
@@ -93,12 +96,6 @@ makeILP _obj (FusionILP graph constraints bounds) =
 
     m :: Int
     m = S.size buffN
-
-    -- Combine the two objective functions.
-    minMax = fusionMinMax
-    objFun = (if fusionMinMax == iupdatesMinMax then (.+.) else (.-.))
-      (defaultFusionWeight   @op .*. fusionObjFun)
-      (defaultIUpdatesWeight @op .*. iupdatesObjFun)
 
     -- Since we want all clusters to have one 'iteration size', the final objFun should
     -- take care to never reward 'fusing' disjoint clusters, and then slightly penalise it.
@@ -220,12 +217,15 @@ makeILP _obj (FusionILP graph constraints bounds) =
     iupdatesObjFun :: Expression op
     iupdatesMinMax :: OptDir
     (iupdatesMinMax, iupdatesObjFun) = case defaultIUpdatesObjective @op of
+      NoInplaceUpdates        -> internalError "In-place updates objective should have been discarded but was not."
       NumInplaceUpdates       -> (Minimise, numberOfNonInplaceUpdates)
-      WeightedInplaceUpdates  -> (Minimise, weightedNumberOfNonINplaceUpdates)
+      WeightedInplaceUpdates  -> (Minimise, weightedNumberOfNonInplaceUpdates)
 
+    -- Count the number of non-in-place updates.
     numberOfNonInplaceUpdates = foldMap inplace inplaceP
 
-    weightedNumberOfNonINplaceUpdates = M.foldMapWithKey (\p w -> w .*. inplace p) inplacePweights
+    -- Weighted sum of non-in-place updates.
+    weightedNumberOfNonInplaceUpdates = M.foldMapWithKey (\p w -> w .*. inplace p) inplacePweights
 
     -- If inplace p, then c1 == c2
     acrossClusterC = flip foldMap inplaceP \case
@@ -246,7 +246,7 @@ makeILP _obj (FusionILP graph constraints bounds) =
     -- Iff     inplace p, then pi c1     <= pimax b1
     -- Iff not inplace p, then pi c1 + 1 <= pimax b1
     -- finalClusterC = foldMap (\p@((b1,c1),_) -> pi c1 .+. inplace p .<=. pimax b1) inplaceP
-    finalClusterC = foldMap (\r@(b1,c1) -> pi c1 .+. int 1 .+. foldMap (\w -> int 1 .-. inplace (r,w)) (M.findWithDefault [] r readM) .<=. pimax b1) readE
+    finalClusterC = foldMap (\r@(b1,c1) -> pi c1 .+. int 1 .-. foldMap (\w -> int 1 .-. inplace (r,w)) (M.findWithDefault [] r readM) .<=. pimax b1) readE
 
     -- Group inplace paths by read edge:
     readM = foldl (flip \(r,w) -> M.insertWith (<>) r [w]) M.empty inplaceP
@@ -263,7 +263,7 @@ makeILP _obj (FusionILP graph constraints bounds) =
 
 
     -- 0 <= pimax_b
-    pimaxB = foldMap (\b -> lowerUpper 0 (PiMax b) (n+1)) buffN
+    pimaxB = foldMap (\b -> lowerUpper 0 (PiMax b) (n+5)) buffN
 
     -- inplace b1 b2 \in {0, 1}
     inplaceB = foldMap (\((b1,c1),(c2,b2)) -> binary $ InPlace b1 c1 c2 b2) inplaceP
@@ -271,8 +271,24 @@ makeILP _obj (FusionILP graph constraints bounds) =
     inplaceBounds = pimaxB <> inplaceB
 
 
-    allConstraints = fusionConstraints <> inplaceConstraints
-    allBounds      = fusionBounds <> inplaceBounds
+    ----------------------------------------------------------------------------
+    -- Combine the fusion and in-place update ILP.
+    ----------------------------------------------------------------------------
+
+    -- Combine fusion with in-place updates if in-place updates are enabled,
+    -- otherwise discard the in-place updates part.
+    withInplaceUpdates :: (a -> b -> a) -> a -> b -> a
+    withInplaceUpdates f = if defaultIUpdatesObjective @op /= NoInplaceUpdates then f else const
+
+    -- Combine the two objective functions.
+    minMax = fusionMinMax
+    objFun = withInplaceUpdates
+      (if fusionMinMax == iupdatesMinMax then (.+.) else (.-.))
+      (defaultFusionWeight   @op .*. fusionObjFun)
+      (defaultIUpdatesWeight @op .*. iupdatesObjFun)
+
+    allConstraints = withInplaceUpdates (<>) fusionConstraints inplaceConstraints
+    allBounds      = withInplaceUpdates (<>) fusionBounds      inplaceBounds
 
 
 

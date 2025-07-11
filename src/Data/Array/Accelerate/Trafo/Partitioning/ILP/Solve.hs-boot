@@ -9,5 +9,6 @@ data FusionObjective
   | Everything          -- ^ Minimise the number of clusters and array reads/writes.
 
 data IUpdatesObjective
-  = NumInplaceUpdates       -- ^ Each in-place update counts as 1.
+  = NoInplaceUpdates        -- ^ Do not use in-place updates.
+  | NumInplaceUpdates       -- ^ Each in-place update counts as 1.
   | WeightedInplaceUpdates  -- ^ Use the weights and merge strategy defined by the backend.
