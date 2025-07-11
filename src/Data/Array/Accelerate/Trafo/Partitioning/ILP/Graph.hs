@@ -1141,13 +1141,20 @@ and the environment before some operation is executed.
 --   type of the elements here, since these will be checked later. This ensures
 --   we can still create paths that would alter the type of the elements to an
 --   incompatible type and then back to a compatible type.
-mkUnitInplacePaths :: HasCallStack => Number -> Label Comp -> ArgLabel (In sh s) -> ArgLabel (Out sh t) -> Map InplacePath Number
-mkUnitInplacePaths n c l1 l2
-  | getLabelShape l1 == getLabelShape l2  -- This condition should always hold if used correctly, but we check it anyway.
-  , bs1 <- getLabelUniqueArrDeps l1
-  , bs2 <- getLabelUniqueArrDeps l2
-  = foldMap (\b1 -> foldMap (\b2 -> M.singleton ((b1, c), (c, b2)) n) bs2) bs1
-mkUnitInplacePaths _ _ _ _ = M.empty
+mkUnitInplacePaths :: HasCallStack => Number -> Label Comp -> ArgLabel (In sh e) -> ArgLabel (Out sh' e') -> Map InplacePath Number
+mkUnitInplacePaths n c = mkInplacePaths n c c
+
+
+-- | Create in-place paths from 2 computations, an input of the first and an output of the second.
+mkInplacePaths :: HasCallStack => Number -> Label Comp -> Label Comp
+               -> ArgLabel (In sh e) -> ArgLabel (Out sh' e') -> Map InplacePath Number
+mkInplacePaths n r w lIn lOut
+  | eqLabelShape lIn lOut
+  , bsIn  <- getLabelUniqueArrDeps lIn
+  , bsOut <- getLabelUniqueArrDeps lOut
+  = foldMap (\bIn -> foldMap (\bOut -> M.singleton ((bIn, r), (w, bOut)) n) bsOut) bsIn
+mkInplacePaths _ _ _ _ _ = M.empty
+
 
 -- | Combines the in-place update paths of length 1 (i.e. across computations)
 --   to in-place update paths of arbitrary length.
@@ -1323,18 +1330,6 @@ mkInplacePathsFromClusters g = g&fusionILP.inplacePaths <>~ go initialClusters
       (Just (SExe _ largsIn _), Just (SExe _ largsOut _)) ->
         foldMapInputLabels (\lIn -> foldMapOutputLabels (mkInplacePaths 1 cIn cOut lIn) largsOut) largsIn
       _ -> mempty
-
-
--- | Create in-place paths from 2 computations, an input of the first and an output of the second.
-mkInplacePaths :: HasCallStack => Number -> Label Comp -> Label Comp
-               -> ArgLabel (In shIn eIn) -> ArgLabel (Out shOut eOut) -> Map InplacePath Number
-mkInplacePaths n r w lIn lOut
-  | eqLabelShape lIn lOut
-  , bsIn  <- getLabelUniqueArrDeps lIn
-  , bsOut <- getLabelUniqueArrDeps lOut
-  = foldMap (\bIn -> foldMap (\bOut -> M.singleton ((bIn, r), (w, bOut)) n) bsOut) bsIn
-mkInplacePaths _ _ _ _ _ = M.empty
-
 
 
 --------------------------------------------------------------------------------
