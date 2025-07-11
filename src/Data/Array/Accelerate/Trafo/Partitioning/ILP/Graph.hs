@@ -442,8 +442,8 @@ class ( ShrinkArg (BackendClusterArg op), Eq (BackendVar op)
   --
   -- No definition defaults to the number of buffers in the graph, with numInplaceUpdates <= nBuffs.
   defaultFusionWeight :: Number
-  defaultFusionWeight = Number nBuffs
-  -- defaultFusionWeight = 1
+  -- defaultFusionWeight = Number nBuffs
+  defaultFusionWeight = 1
 
   -- | The default weight applied to the in-place updates objective.
   --
@@ -1195,6 +1195,41 @@ combineInplacePaths g = g&fusionILP.inplacePaths %~ stepsPaths 50
     nextComps :: Map WriteEdge (Labels Comp)
     nextComps = M.fromListWith S.union $ map (tripleToLeftRec . (_3 %~ S.singleton)) $ S.toList $ g^.fusionILP.fusibleEdges
 
+
+-- | Merges in-place update paths until no more merging is possible.
+-- A merge is possible if:
+-- 1. The start and end of the paths are the same buffer.
+-- 2. The reading and writing computations can be fused.
+-- Possibly equivalent to combineInplacePaths, but simpler.
+mergeInplacePaths :: forall op. MakesILP op => FullGraph op -> FullGraph op
+mergeInplacePaths g = g&fusionILP.inplacePaths %~ go 50
+  where
+    -- Keep merging until the size no longer changes or the iteration limit reaches 0.
+    go :: Int -> Map InplacePath Number -> Map InplacePath Number
+    go 0 ps = internalWarning "mergeInplacePaths: iteration limit reached" False ps
+    go n ps | ps' <- ps <> M.foldMapWithKey mergePath ps
+            , M.size ps /= M.size ps' = go (n-1) ps'
+            | otherwise = ps
+
+    -- Merge a path with all paths that can be merged with it.
+    mergePath :: InplacePath -> Number -> Map InplacePath Number
+    mergePath p@(_,(_,b)) n = maybe mempty (M.foldMapWithKey (mergePaths p n)) (M.lookup b pathMap)
+
+    -- Merge two paths if they can be merged.
+    mergePaths :: InplacePath -> Number -> InplacePath -> Number -> Map InplacePath Number
+    mergePaths (r,(c1,b)) n1 ((b',c2),w) n2
+      | b == b' && S.member (c1,b,c2) fusibleSet = M.singleton (r,w) (combineIUpdateWeight @op n1 n2)
+      | otherwise = M.empty
+
+    -- Set of fusible edges.
+    fusibleSet :: Set FusibleEdge
+    fusibleSet = g^.fusionILP.fusibleEdges
+
+    -- Map from input buffers to the in-place update.
+    pathMap :: Map (Label Buff) (Map InplacePath Number)
+    pathMap = groupByMap (\((b,_),_) _ -> b) (g^.fusionILP.inplacePaths)
+
+
 -- | Filters the in-place update paths to only include those that are valid.
 filterInplacePaths :: forall op. FullGraph op -> FullGraph op
 filterInplacePaths g = g&fusionILP.inplacePaths %~ filterKeys sameElementType
@@ -1229,8 +1264,14 @@ filterInplacePaths g = g&fusionILP.inplacePaths %~ filterKeys sameElementType
 
 
 -- | Finalizes the in-place update paths by combining them and filtering them.
+--
+-- Using only merging of unit-size in-place paths does not yield a lot of in-place
+-- update locations.
+-- The better approach seems to be constructing paths from scratch.
+-- It is then possible to still use the merging strategy, as it may yield some additional paths.
+-- However, in testing it seems that almost no paths are missing.
 finalizeInplacePaths :: MakesILP op => FullGraph op -> FullGraph op
-finalizeInplacePaths = filterInplacePaths . mkInplacePathsFromClusters
+finalizeInplacePaths = filterInplacePaths . mergeInplacePaths . mkInplacePathsFromClusters
 
 
 -- | Naive approach: Work forwards from a buffer.
@@ -1369,6 +1410,14 @@ mkReindexPartial m env env' idx = idxOf (inplaceOf $ lookupIdxInEnv idx env^._2)
 --------------------------------------------------------------------------------
 -- Helpers
 --------------------------------------------------------------------------------
+
+-- | Groups a map by a function.
+groupByMap :: (Ord k, Ord k') => (k -> v -> k') -> Map k v -> Map k' (Map k v)
+groupByMap f = M.foldlWithKey (\m k v -> M.insertWith M.union (f k v) (M.singleton k v) m) M.empty
+
+-- | Groups a set by a function.
+groupBySet :: (Ord k, Ord v) => (v -> k) -> Set v -> Map k (Set v)
+groupBySet f = S.foldl (\m v -> M.insertWith S.union (f v) (S.singleton v) m) M.empty
 
 -- | Lens that protects a given value from being modified.
 protected :: Lens' s a -> Lens' s s
