@@ -30,6 +30,7 @@ import Data.Array.Accelerate.AST.Partitioned
 import Data.Array.Accelerate.AST.Var
 import Data.Array.Accelerate.Representation.Type
 import Data.Array.Accelerate.Type ( scalarType )
+import Data.Array.Accelerate.Trafo.Operation.Simplify
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Graph hiding (info)
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Labels hiding (ELabels)
 import Data.Array.Accelerate.Analysis.Match
@@ -82,11 +83,11 @@ map' !?? key = case map' M.!? key of
 -- (namely, what it was before fusion), via an GroundsR.
 -- Since fusion goes via an untyped ILP, during reconstruction we need to rebuild the program and temporarily
 -- fulfill this contract: if something goes wrong during fusion or at the caller, bad things happen.
-reconstruct :: forall op a. MakesILP op => GroundsR a -> Bool -> Graph -> [ClusterLs] -> M.Map Label [ClusterLs] -> M.Map Label (Construction op) -> PreOpenAcc (Clustered op) () a
+reconstruct :: forall op a. (MakesILP op, SimplifyOperation op) => GroundsR a -> Bool -> Graph -> [ClusterLs] -> M.Map Label [ClusterLs] -> M.Map Label (Construction op) -> PreOpenAcc (Clustered op) () a
 reconstruct repr a b c d e = case openReconstruct a LabelEnvNil b c d e of
           Exists res -> expectType repr res
 
-reconstructF :: forall op a. MakesILP op => PreOpenAfun op () a -> Bool -> Graph -> [ClusterLs] -> M.Map Label [ClusterLs] -> M.Map Label (Construction op)  -> PreOpenAfun (Clustered op) () a
+reconstructF :: forall op a. (MakesILP op, SimplifyOperation op) => PreOpenAfun op () a -> Bool -> Graph -> [ClusterLs] -> M.Map Label [ClusterLs] -> M.Map Label (Construction op)  -> PreOpenAfun (Clustered op) () a
 reconstructF original a b c d e = case openReconstructF a LabelEnvNil b c (Label 1 Nothing) d e of
           Exists res -> expectFunTypeEqual original res
 
@@ -145,7 +146,7 @@ topSort singletons (Graph _ fedges fpedges) cluster construct = if singletons th
     getOrder (_ :>: args) p = getOrder args p
 
 
-openReconstruct   :: MakesILP op
+openReconstruct   :: (MakesILP op, SimplifyOperation op)
                   => Bool
                   -> LabelEnv aenv
                   -> Graph
@@ -154,7 +155,7 @@ openReconstruct   :: MakesILP op
                   -> M.Map Label (Construction op)
                   -> Exists (PreOpenAcc (Clustered op) aenv)
 openReconstruct  a b c d   e f = (\(Left x) -> x) $ openReconstruct' a b c d Nothing e f
-openReconstructF  :: MakesILP op
+openReconstructF  :: (MakesILP op, SimplifyOperation op)
                   => Bool
                   -> LabelEnv aenv
                   -> Graph
@@ -165,7 +166,7 @@ openReconstructF  :: MakesILP op
                   -> Exists (PreOpenAfun (Clustered op) aenv)
 openReconstructF a b c d l e f = (\(Right x) -> x) $ openReconstruct' a b c d (Just l) e f
 
-openReconstruct' :: forall op aenv. MakesILP op => Bool -> LabelEnv aenv -> Graph -> [ClusterLs] -> Maybe Label -> M.Map Label [ClusterLs] -> M.Map Label (Construction op)  -> Either (Exists (PreOpenAcc (Clustered op) aenv)) (Exists (PreOpenAfun (Clustered op) aenv))
+openReconstruct' :: forall op aenv. (MakesILP op, SimplifyOperation op) => Bool -> LabelEnv aenv -> Graph -> [ClusterLs] -> Maybe Label -> M.Map Label [ClusterLs] -> M.Map Label (Construction op)  -> Either (Exists (PreOpenAcc (Clustered op) aenv)) (Exists (PreOpenAfun (Clustered op) aenv))
 openReconstruct' singletons labelenv graph clusterslist mlab subclustersmap construct = 
   case mlab of
   Just l  -> Right $ makeASTF labelenv l mempty
@@ -184,6 +185,7 @@ openReconstruct' singletons labelenv graph clusterslist mlab subclustersmap cons
       InitFold o l args -> singleton l args o $
                             \c args' ->
                                 Exists $ Exec c (mapArgs (\(LOp a _ _) -> a) args')
+      EmptyFold -> Exists $ Return TupRunit
       NotFold con -> case con of
         CExe {}    -> error "should be Fold/InitFold!"
         CExe'{}    -> error "should be Fold/InitFold!"
@@ -220,11 +222,13 @@ openReconstruct' singletons labelenv graph clusterslist mlab subclustersmap cons
         _ -> let res = makeAST env [cluster] prev in case cluster of
                 ExecL _ -> case (res, makeAST env ctail prev) of
                   (Exists exec@Exec{}, Exists scp) -> Exists $ Alet LeftHandSideUnit (shared TupRunit) exec scp
+                  (Exists (Return TupRunit), Exists scp) -> Exists scp
                   _ -> error "nope"
                 NonExecL _ -> makeAST env ctail $ foldC (`M.insert` res) prev cluster
       _   -> let res = makeAST env [cluster] prev in case cluster of
                 ExecL _ -> case (res, makeAST env ctail prev) of
                   (Exists exec@Exec{}, Exists scp) -> Exists $ Alet LeftHandSideUnit (shared TupRunit) exec scp
+                  (Exists (Return TupRunit), Exists scp) -> Exists scp
                   _ -> error "nope"
                 NonExecL _ -> makeAST env ctail $ foldC (`M.insert` res) prev cluster
 
@@ -263,17 +267,28 @@ openReconstruct' singletons labelenv graph clusterslist mlab subclustersmap cons
     makeCluster env (ExecL ls) =
        foldr1 (flip fuseCluster)
                     $ map ( \l -> case construct !?? l of
-                              -- At first thought, this `fromJust` might error if we fuse an array away.
-                              -- It does not: The array will still be in the environment, but after we finish
-                              -- the `foldr1`, the input argument will dissapear. The output argument does not:
-                              -- we clean that up in the SLV pass, if this was vertical fusion. If this is diagonal fusion,
-                              -- it stays.
-                              CExe env' args op -> InitFold op l (fromJust $ reindexLabelledArgsOp (mkReindexPartial env' env) args)
+                              CExe env' args op ->
+                                -- At first thought, this `fromJust` might error if we fuse an array away.
+                                -- It does not: The array will still be in the environment, but after we finish
+                                -- the `foldr1`, the input argument will dissapear. The output argument does not:
+                                -- we clean that up in the SLV pass, if this was vertical fusion. If this is diagonal fusion,
+                                -- it stays.
+                                let args' = fromJust $ reindexLabelledArgsOp (mkReindexPartial env' env) args
+                                in
+                                  if isNoOp op (unLabelOp args') then
+                                    -- Remove operations that became a no-op by in-place updates.
+                                    -- For instance, 'map id xs ys' may become 'map id xs xs',
+                                    -- which is a no-op.
+                                    EmptyFold
+                                  else
+                                    InitFold op l args'
                               _                 -> error "avoid this next refactor" -- c -> NotFold c
                           ) ls
     makeCluster _ (NonExecL l) = NotFold $ construct !?? l
 
     fuseCluster :: FoldType op env -> FoldType op env -> FoldType op env
+    fuseCluster EmptyFold f = f
+    fuseCluster f EmptyFold = f
     fuseCluster (Fold cluster cargs) (InitFold op l largs) =
       consCluster l largs op cargs cluster Fold
     fuseCluster (InitFold op l largs) x = singleton l largs op $ \c cargs -> fuseCluster (Fold c cargs) x
@@ -289,6 +304,7 @@ weakenAcc lhs =  runIdentity . reindexAcc (weakenReindex $ weakenWithLHS lhs)
 data FoldType op env
   = forall args. Fold (Clustered op args) (LabelledArgsOp op env args)
   | forall args. InitFold (op args) Label (LabelledArgsOp op env args)
+  | EmptyFold
   | NotFold (Construction op)
 
 
