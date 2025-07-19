@@ -764,23 +764,42 @@ desugarOpenAcc env = travA
                   (LeftHandSidePair (LeftHandSideWildcard TupRunit) (LeftHandSideSingle $ GroundRscalar scalarTypeInt))
                   -- Buffer of integral type i
                   $ LeftHandSideSingle $ GroundRbuffer itp
+            lhsSegCount = LeftHandSideSingle $ GroundRscalar scalarTypeInt
             kSeg = weakenSucc $ weakenSucc weakenId
+            kSegCount = weakenSucc weakenId
 
-            sh  = mapVars GroundRscalar $ valueSh (kSeg .> kOut .> kIn)
-            sh' = valueSh kIn
+            shIn  = mapVars GroundRscalar $ valueSh (kOut .> kSegCount .> kSeg .> kIn)
+            shIn' = valueSh (kSegCount .> kSeg .> kIn)
 
-            k = kSeg .> kOut .> kIn .> kSh
+            -- Change the innermost size of the input by the number of segments
+            -- (which we compute in the let binding with lhsSegCount).
+            shOut' = case shIn' of
+              TupRpair s _ -> TupRpair s $ TupRsingle
+                $ Var scalarTypeInt ZeroIdx
+              _ -> internalError "Pair impossible"
+
+            shOut = mapTupR (\(Var t idx) -> Var (GroundRscalar t) $ weaken kOut idx) shOut'
+
+            k = kOut .> kSegCount .> kSeg .> kIn .> kSh
             argF   = ArgFun $ desugarFun (weakenBEnv k env) f
             argDef = fmap (ArgExp . desugarExp (weakenBEnv k env)) def
-            argIn  = ArgArray In (ArrayR shr tp) sh (valueIn $ kSeg .> kOut)
-            argOut = ArgArray Out (ArrayR shr tp) sh (valueOut $ kSeg)
-            argSeg = ArgArray In  (ArrayR dim1 $ TupRsingle itp) (TupRpair TupRunit $ TupRsingle $ Var (GroundRscalar scalarTypeInt) $ SuccIdx ZeroIdx) (TupRsingle $ Var (GroundRbuffer itp) ZeroIdx)
+            argIn  = ArgArray In (ArrayR shr tp) shIn (valueIn $ kOut .> kSegCount .> kSeg)
+            argOut = ArgArray Out (ArrayR shr tp) shOut (valueOut weakenId)
+            argSeg = ArgArray In  (ArrayR dim1 $ TupRsingle itp) (TupRpair TupRunit $ TupRsingle $ Var (GroundRscalar scalarTypeInt) $ weaken kOut ZeroIdx) (TupRsingle $ Var (GroundRbuffer itp) $ weaken kOut $ SuccIdx ZeroIdx)
           in
             alet (LeftHandSidePair (mapLeftHandSide GroundRscalar lhsSh) lhsIn) (travA a)
-              $ aletUnique lhsOut (desugarAlloc (ArrayR shr tp) sh')
-              $ alet lhsSeg (desugarOpenAcc (weakenBEnv (kOut .> kIn .> kSh) env) segments)
+              $ alet lhsSeg (desugarOpenAcc (weakenBEnv (kIn .> kSh) env) segments)
+              -- The array of segment descriptors is one longer than the number
+              -- of segments. Subtract its length by one to compute the number
+              -- of segments (which is also the output size).
+              $ alet lhsSegCount
+                (Compute $ mkBinary (PrimSub numType)
+                  (ArrayInstr (Parameter (Var scalarTypeInt $ SuccIdx ZeroIdx)) Nil)
+                  (mkConstant (TupRsingle scalarTypeInt) 1)
+                )
+              $ aletUnique lhsOut (desugarAlloc (ArrayR shr tp) shOut')
               $ alet (LeftHandSideWildcard TupRunit) (mkFoldSeg i argF argDef argIn argSeg argOut)
-              $ Return (sh `TupRpair` valueOut kSeg)
+              $ Return (shOut `TupRpair` valueOut weakenId)
 
       -- scan1
       Named.Scan dir f Nothing a
