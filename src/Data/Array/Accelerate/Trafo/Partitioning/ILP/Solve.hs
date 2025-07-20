@@ -63,7 +63,7 @@ makeILP _obj (FusionILP graph constraints bounds) =
     compN :: Labels Comp
     compN = graph^.computationNodes
 
-    buffN :: Labels Buff
+    buffN :: Labels GVal
     buffN = graph^.bufferNodes
 
     readE :: S.Set ReadEdge
@@ -337,17 +337,17 @@ interpretClusters sol = do
 partition :: Ord b => (a -> b) -> [a] -> [[a]]
 partition f = groupBy ((==) `on` f) . sortOn f
 
-interpretInplaceUpdates :: Solution op -> M.Map (Label Buff) (Label Buff)
+interpretInplaceUpdates :: Solution op -> M.Map (Label GVal) (Label GVal)
 interpretInplaceUpdates sol = M.map firstInChain inplaceM
   where
     -- Map from buffer to the buffer that will replace it.
     inplaceM = M.fromList $ mapMaybe fromInPlace $ M.toList sol
 
-    fromInPlace :: (Var op, Int) -> Maybe (Label Buff, Label Buff)
+    fromInPlace :: (Var op, Int) -> Maybe (Label GVal, Label GVal)
     fromInPlace (InPlace b1 _ _ b2, v) | v == 0 = Just (b2, b1)
     fromInPlace _ = Nothing
 
-    firstInChain :: Label Buff -> Label Buff
+    firstInChain :: Label GVal -> Label GVal
     firstInChain b = maybe b firstInChain (M.lookup b inplaceM)
 
 -- | Cluster labels, distinguishing between execute and non-execute labels.

@@ -108,7 +108,7 @@ foldC f x (ExecL ls) = foldr f x ls
 foldC f x (NonExecL l) = f l x
 
 type ReadDirM = M.Map ReadEdge Int
-type InplaceM = M.Map (Label Buff) (Label Buff)
+type InplaceM = M.Map (Label GVal) (Label GVal)
 
 topSort :: Bool -> FusionGraph -> Labels Comp -> ReadDirM -> [ClusterL]
 topSort _ _ (S.toList -> [l]) _ = [ExecL [l]]  -- If the cluster is empty.
@@ -124,7 +124,7 @@ topSort singletons (FusionGraph strictEdges dataflowEdges _) cluster readDirM =
       . map (,[])
       . S.toList
 
-    fusibleEdges, infusibleEdges :: S.Set (Label Comp, Label Buff, Label Comp)
+    fusibleEdges, infusibleEdges :: S.Set (Label Comp, Label GVal, Label Comp)
     (fusibleEdges, infusibleEdges) = S.partition (\(c1, _, c2) -> S.notMember (c1, c2) strictEdges) dataflowEdges
 
 
@@ -161,12 +161,12 @@ topSort singletons (FusionGraph strictEdges dataflowEdges _) cluster readDirM =
     defaultBAop = 0
 
     -- Old readOrderOf (depended on Symbols instead of ReadDirM):
-    -- readOrderOf :: HasCallStack => (Label Comp, Label Buff, Label Comp) -> BackendArg op
+    -- readOrderOf :: HasCallStack => (Label Comp, Label GVal, Label Comp) -> BackendArg op
     -- readOrderOf (_,b,l) = case symbols M.!? l of
     --   Just (SExe' _ args _) -> getOrder args b
     --   _ -> error "can't get readorder"
 
-    -- getOrder :: HasCallStack => LabelledArgsOp op env args -> Label Buff -> BackendArg op
+    -- getOrder :: HasCallStack => LabelledArgsOp op env args -> Label GVal -> BackendArg op
     -- getOrder ArgsNil b = error $ "can't get readorder " ++ show b
     -- getOrder (LOp (ArgArray In _ _ _) (_,deps,_) b :>: args) buff
     --   | buff `S.member` deps = b

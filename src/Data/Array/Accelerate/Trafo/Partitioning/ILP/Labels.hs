@@ -64,7 +64,9 @@ import Data.Array.Accelerate.Error
 --------------------------------------------------------------------------------
 
 -- | The types a label can have.
-data LabelType = Comp | Buff
+data LabelType
+  = Comp  -- ^ Label for computations.
+  | GVal  -- ^ Label for ground values (buffers/scalars).
 
 -- | Labels for referencing nodes.
 --
@@ -102,15 +104,15 @@ asComp :: Lens' (Label t) (Label Comp)
 asComp f l = coerce <$> f (coerce l)
 
 -- | Lens for interpreting any label as a buffer label.
-asBuff :: Lens' (Label t) (Label Buff)
+asBuff :: Lens' (Label t) (Label GVal)
 asBuff f l = coerce <$> f (coerce l)
 
 instance Show (Label Comp) where
   show :: Label Comp -> String
   show c = "C" ++ intercalate "." (map show . reverse $ labelIds c)
 
-instance Show (Label Buff) where
-  show :: Label Buff -> String
+instance Show (Label GVal) where
+  show :: Label GVal -> String
   show b = "B" ++ intercalate "." (map show . reverse $ labelIds b)
 
 labelIds :: Label t -> [Int]
@@ -226,8 +228,8 @@ instance Semigroup a => Semigroup (TupF t a) where
   (<>) (TupFpair l1 r1) (TupFpair l2 r2) = TupFpair (l1 <> l2) (r1 <> r2)
   (<>) _ _ = internalError "Inaccessible left-hand side"
 
--- | Tuple of 'Labels' of type 'Buff'.
-type BuffersTup t = TupF t (Labels Buff)
+-- | Tuple of 'Labels' of type 'GVal'.
+type BuffersTup t = TupF t (Labels GVal)
 
 
 
@@ -386,23 +388,23 @@ data ArgLabel t where
           -> EnvVals sh  -- ^ The shape values.
           -> ArgLabel (m sh e)
   -- | The argument is a scalar 'Var'', 'Exp'' or 'Fun''.
-  NotArr  :: Labels Buff -- ^ The dependencies of the argument.
+  NotArr  :: Labels GVal -- ^ The dependencies of the argument.
           -> ArgLabel (t e)
 
 deriving instance Show (ArgLabel t)
 
 -- | Get the set of dependent buffers of an 'ArgLabel'.
-getLabelDeps :: ArgLabel t -> Labels Buff
+getLabelDeps :: ArgLabel t -> Labels GVal
 getLabelDeps (Arr (_, arr, _) (_, sh, _)) = fold arr <> fold sh
 getLabelDeps (NotArr deps) = deps
 
 -- | Get the set of unique array dependencies of an 'ArgLabel'.
-getLabelUniqueArrDeps :: ArgLabel t -> Labels Buff
+getLabelUniqueArrDeps :: ArgLabel t -> Labels GVal
 getLabelUniqueArrDeps (Arr (_, arr, u) _) = uniqueLabels u arr
 getLabelUniqueArrDeps (NotArr _) = internalError "getLabelUniqueArrDeps: Expected Arr but got NotArr"
 
 -- | Given 'Uniquenesses', get the unique labels from 'BuffersTup'.
-uniqueLabels :: Uniquenesses e -> BuffersTup e -> Labels Buff
+uniqueLabels :: Uniquenesses e -> BuffersTup e -> Labels GVal
 uniqueLabels TupRunit TupFunit      = mempty
 uniqueLabels (TupRsingle Shared) _  = mempty
 uniqueLabels (TupRsingle Unique) bs = fold bs
@@ -415,11 +417,11 @@ getLabelArrays (Arr (_, arr, _) (_, _, _)) = arr
 getLabelArrays (NotArr _) = internalError "getLabelArrays: Expected Arr but got NotArr"
 
 -- | Get the array dependencies of an 'ArgLabel'.
-getLabelArrDeps :: ArgLabel (m sh e) -> Labels Buff
+getLabelArrDeps :: ArgLabel (m sh e) -> Labels GVal
 getLabelArrDeps = fold . getLabelArrays
 
 -- | Get a single array dependency of an 'ArgLabel'.
-getLabelArrDep :: ArgLabel (m sh e) -> Label Buff
+getLabelArrDep :: ArgLabel (m sh e) -> Label GVal
 getLabelArrDep = foldr1 const . getLabelArrDeps
 
 -- | Get the shapes of an 'ArgLabel'.
@@ -428,7 +430,7 @@ getLabelShape (Arr (_, _, _) (_, sh, _)) = sh
 getLabelShape (NotArr _) = internalError "getLabelShape: Expected Arr but got NotArr"
 
 -- | Get the shape dependencies of an 'ArgLabel'.
-getLabelShDeps :: ArgLabel (m sh e) -> Labels Buff
+getLabelShDeps :: ArgLabel (m sh e) -> Labels GVal
 getLabelShDeps = fold . getLabelShape
 
 -- | Check if two arguments use the same shape variables.
@@ -483,15 +485,15 @@ lookupIdxInEnv ZeroIdx       (bs :>>: _)   = bs
 lookupIdxInEnv (SuccIdx idx) (_  :>>: env) = lookupIdxInEnv idx env
 
 -- | Get the dependencies of a tuple of variables.
-getVarsDeps :: Vars s env t -> BuffersEnv env -> Labels Buff
+getVarsDeps :: Vars s env t -> BuffersEnv env -> Labels GVal
 getVarsDeps vars = fold . (^._2) . getVarsFromEnv vars
 
 -- | Get the dependencies of a tuple of variables.
-getVarDeps :: Var s env t -> BuffersEnv env -> Labels Buff
+getVarDeps :: Var s env t -> BuffersEnv env -> Labels GVal
 getVarDeps var = fold . (^._2) . getVarFromEnv var
 
 -- | Get the dependencies of an expression.
-getExpDeps :: OpenExp x env y -> BuffersEnv env -> Labels Buff
+getExpDeps :: OpenExp x env y -> BuffersEnv env -> Labels GVal
 getExpDeps (ArrayInstr (Index     var) poe) env = getVarDeps var  env <> getExpDeps poe  env
 getExpDeps (ArrayInstr (Parameter var) poe) env = getVarDeps var  env <> getExpDeps poe  env
 getExpDeps (Let _ poe1 poe2)                env = getExpDeps poe1 env <> getExpDeps poe2 env
@@ -522,7 +524,7 @@ getExpDeps (Undef _)                        _   = mempty
 getExpDeps  Coerce{}                        _   = mempty
 
 -- | Get the dependencies of a function.
-getFunDeps :: OpenFun x env y -> BuffersEnv env -> Labels Buff
+getFunDeps :: OpenFun x env y -> BuffersEnv env -> Labels GVal
 getFunDeps (Body  poe) env = getExpDeps poe env
 getFunDeps (Lam _ fun) env = getFunDeps fun env
 
@@ -670,21 +672,21 @@ forLArgs_ largs f = traverseLArgs_ f largs
 {-# INLINE forLArgs_ #-}
 
 -- | All arrays that the function reads from.
-inputArrays :: LabelledArgs env t -> Labels Buff
+inputArrays :: LabelledArgs env t -> Labels GVal
 inputArrays = foldMapLArgs \case
   L (ArgArray In  _ _ _) (Arr (_,arr,_) _) -> fold arr
   L (ArgArray Mut _ _ _) (Arr (_,arr,_) _) -> fold arr
   _ -> mempty
 
 -- | All arrays that the function writes to.
-outputArrays :: LabelledArgs env t -> Labels Buff
+outputArrays :: LabelledArgs env t -> Labels GVal
 outputArrays = foldMapLArgs \case
   L (ArgArray Out _ _ _) (Arr (_,arr,_) _) -> fold arr
   L (ArgArray Mut _ _ _) (Arr (_,arr,_) _) -> fold arr
   _ -> mempty
 
 -- | All non-array arguments and array shapes.
-notArrays :: LabelledArgs env t -> Labels Buff
+notArrays :: LabelledArgs env t -> Labels GVal
 notArrays = foldMapLArgs \case
   L _ (Arr _ (_,sh,_)) -> fold sh
   L _ (NotArr deps)    -> deps

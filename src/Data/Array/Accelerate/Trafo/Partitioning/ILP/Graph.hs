@@ -66,10 +66,10 @@ import GHC.IO (unsafePerformIO)
 -- Fusion Graph
 --------------------------------------------------------------------------------
 
-type ReadEdge      = (Label Buff, Label Comp)
-type WriteEdge     = (Label Comp, Label Buff)
+type ReadEdge      = (Label GVal, Label Comp)
+type WriteEdge     = (Label Comp, Label GVal)
 type StrictEdge    = (Label Comp, Label Comp)
-type DataflowEdge  = (Label Comp, Label Buff, Label Comp)
+type DataflowEdge  = (Label Comp, Label GVal, Label Comp)
 type FusibleEdge   = DataflowEdge
 type InfusibleEdge = DataflowEdge
 type InplacePath   = (ReadEdge, WriteEdge)
@@ -210,11 +210,11 @@ outputEdgesOf :: HasFusionGraph g => Label Comp -> SimpleGetter g (Set WriteEdge
 outputEdgesOf c = to (\g -> S.filter (\(w, _) -> w == c) (g^.writeEdges))
 
 -- | Gets the read edges of a buffer.
-readEdgesOf :: HasFusionGraph g => Label Buff -> SimpleGetter g (Set ReadEdge)
+readEdgesOf :: HasFusionGraph g => Label GVal -> SimpleGetter g (Set ReadEdge)
 readEdgesOf b = to (\g -> S.filter (\(b',_) -> b' == b) (g^.readEdges))
 
 -- | Gets the write edges of a buffer.
-writeEdgesOf :: HasFusionGraph g => Label Buff -> SimpleGetter g (Set WriteEdge)
+writeEdgesOf :: HasFusionGraph g => Label GVal -> SimpleGetter g (Set WriteEdge)
 writeEdgesOf b = to (\g -> S.filter (\(_,b') -> b' == b) (g^.writeEdges))
 
 computationNodes :: HasFusionGraph g => SimpleGetter g (Set (Label Comp))
@@ -222,7 +222,7 @@ computationNodes = to (\g -> S.foldr (\(w,_,r)       -> S.insert w . S.insert r)
                           <> S.foldr (\(w,r)         -> S.insert w . S.insert r) S.empty (g^.strictEdges)
                           <> S.foldr (\((_,r),(w,_)) -> S.insert w . S.insert r) S.empty (M.keysSet $ g^.inplacePaths))
 
-bufferNodes :: HasFusionGraph g => SimpleGetter g (Set (Label Buff))
+bufferNodes :: HasFusionGraph g => SimpleGetter g (Set (Label GVal))
 bufferNodes = to (\g -> S.map (\(_,b,_) -> b) (g^.dataflowEdges)
                      <> S.foldr (\((b1,_),(_,b2)) -> S.insert b1 . S.insert b2) S.empty (M.keysSet $ g^.inplacePaths))
 
@@ -295,7 +295,7 @@ before c1 c2
 --
 -- If the computations share the same parent, add a fusible edge, otherwise add
 -- an infusible edge.
-fusible :: HasCallStack => Label Comp -> Label Buff -> Label Comp -> FusionILP op -> FusionILP op
+fusible :: HasCallStack => Label Comp -> Label GVal -> Label Comp -> FusionILP op -> FusionILP op
 fusible prod buff cons = if prod^.parent == cons^.parent
   then fusionGraph %~ insertFusible (prod, buff, cons)
   else infusible prod buff cons
@@ -304,7 +304,7 @@ fusible prod buff cons = if prod^.parent == cons^.parent
 --
 -- We add an infusible edge between the producer and consumer. We also add a
 -- strict edge between them using the rules described in 'before'.
-infusible :: HasCallStack => Label Comp -> Label Buff -> Label Comp -> FusionILP op -> FusionILP op
+infusible :: HasCallStack => Label Comp -> Label GVal -> Label Comp -> FusionILP op -> FusionILP op
 infusible prod buff cons = before prod cons . (fusionGraph %~ insertInfusible (prod, buff, cons))
 
 -- | Safely add strict ordering between multiple computations and another computation.
@@ -312,11 +312,11 @@ allBefore :: HasCallStack => Labels Comp -> Label Comp -> FusionILP op -> Fusion
 allBefore cs1 c2 ilp = foldr' (`before` c2) ilp cs1
 
 -- | Safely add fusible edges from all producers to the consumer.
-allFusible :: HasCallStack => Labels Comp -> Label Buff -> Label Comp -> FusionILP op -> FusionILP op
+allFusible :: HasCallStack => Labels Comp -> Label GVal -> Label Comp -> FusionILP op -> FusionILP op
 allFusible prods buff cons ilp = foldr' (\prod -> fusible prod buff cons) ilp prods
 
 -- | Safely add infusible edges from all producers to the consumer.
-allInfusible :: HasCallStack => Labels Comp -> Label Buff -> Label Comp -> FusionILP op -> FusionILP op
+allInfusible :: HasCallStack => Labels Comp -> Label GVal -> Label Comp -> FusionILP op -> FusionILP op
 allInfusible prods buff cons ilp = foldr' (\prod -> infusible prod buff cons) ilp prods
 
 -- | Infix synonym for 'before'.
@@ -324,11 +324,11 @@ allInfusible prods buff cons ilp = foldr' (\prod -> infusible prod buff cons) il
 (==|-|=>) = before
 
 -- | Infix synonym for 'fusible'.
-(--|) :: HasCallStack => Label Comp -> Label Buff -> Label Comp -> FusionILP op -> FusionILP op
+(--|) :: HasCallStack => Label Comp -> Label GVal -> Label Comp -> FusionILP op -> FusionILP op
 (--|) = fusible
 
 -- | Infix synonym for 'infusible'.
-(==|) :: HasCallStack => Label Comp -> Label Buff -> Label Comp -> FusionILP op -> FusionILP op
+(==|) :: HasCallStack => Label Comp -> Label GVal -> Label Comp -> FusionILP op -> FusionILP op
 (==|) = infusible
 
 -- | Infix synonym for 'allBefore'.
@@ -336,11 +336,11 @@ allInfusible prods buff cons ilp = foldr' (\prod -> infusible prod buff cons) il
 (>=|-|=>) = allBefore
 
 -- | Infix synonym for 'allFusible'.
-(>-|) :: HasCallStack => Labels Comp -> Label Buff -> Label Comp -> FusionILP op -> FusionILP op
+(>-|) :: HasCallStack => Labels Comp -> Label GVal -> Label Comp -> FusionILP op -> FusionILP op
 (>-|) = allFusible
 
 -- | Infix synonym for 'allInfusible'.
-(>=|) :: HasCallStack => Labels Comp -> Label Buff -> Label Comp -> FusionILP op -> FusionILP op
+(>=|) :: HasCallStack => Labels Comp -> Label GVal -> Label Comp -> FusionILP op -> FusionILP op
 (>=|) = allInfusible
 
 -- | Arrow heads to complete '(--|)', '(>-|)', '(==|)' and '(>=|)'.
@@ -477,12 +477,12 @@ data Var (op :: Type -> Type)
     -- ^ 0 is fused (same cluster), 1 is unfused. We do *not* have one of these for all pairs, only the ones we need for constraints and/or costs!
     -- Invariant: Like edges, both labels have to have the same parent: Either on top (Label _ Nothing) or as sub-computation of the same label (Label _ (Just x)).
     -- In fact, this is the Var-equivalent to Edge: an infusible edge has a constraint (== 1).
-  | Manifest (Label Buff)
+  | Manifest (Label GVal)
     -- ^ 0 means manifest, 1 is like a `delayed array`.
     -- Binary variable; will we write the output to a manifest array, or is it fused away (i.e. all uses are in its cluster)?
-  | ReadDir (Label Buff) (Label Comp)
+  | ReadDir (Label GVal) (Label Comp)
     -- ^ \-3 can't fuse with anything, -2 for 'left to right', -1 for 'right to left', n for 'unknown', see computation n (currently only backpermute).
-  | WriteDir (Label Comp) (Label Buff)
+  | WriteDir (Label Comp) (Label GVal)
     -- ^ See 'ReadDir'.
   | InFoldSize (Label Comp)  -- Legacy? Probably needs per-edge equivalent
     -- ^ Keeps track of the fold that's one dimension larger than this operation, and is fused in the same cluster.
@@ -499,12 +499,12 @@ data Var (op :: Type -> Type)
     -- This is what allows backends to specify how each of the operations can fuse.
 
   -- Variables introduced for in-place updates:
-  | InPlace (Label Buff) (Label Comp) (Label Comp) (Label Buff)
+  | InPlace (Label GVal) (Label Comp) (Label Comp) (Label GVal)
     -- ^ 0 means in-place, 1 means not in-place. The first label is an input of a cluster, the second label is an output of a cluster.
     -- All 'InPlace' variables need to be unique, so we can't omit the computation labels. Taking one path through a cluster is different from taking another.
-  | PiMax (Label Buff)
+  | PiMax (Label GVal)
     -- ^ The cluster number of the largest reader of the buffer, since in-place updates are only allowed on the final consumer of an array/buffer.
-  -- | WriteDirPiMax (Label Buff)
+  -- | WriteDirPiMax (Label GVal)
   --   -- ^ The write direction of the largest reader of the buffer. This is used to check that all reads of the buffer are in the same direction as the write.
 
 deriving instance Eq   (BackendVar op) => Eq   (Var op)
@@ -516,11 +516,11 @@ pi :: Label Comp -> Expression op
 pi = var . Pi
 
 -- | No clue what this is for.
-delayed :: Label Buff -> Expression op
+delayed :: Label GVal -> Expression op
 delayed = notB . manifest
 
 -- | Constructor for 'Manifest' variables.
-manifest :: Label Buff -> Expression op
+manifest :: Label GVal -> Expression op
 manifest = var . Manifest
 
 -- | Safe constructor for 'Fused' variables.
@@ -548,7 +548,7 @@ inplace :: InplacePath -> Expression op
 inplace ((b1,c1),(c2,b2)) = var $ InPlace b1 c1 c2 b2
 
 -- | Safe constructor for 'PiMax' variables.
-pimax :: Label Buff -> Expression op
+pimax :: Label GVal -> Expression op
 pimax = var . PiMax
 
 
@@ -666,9 +666,9 @@ data FusionGraphState op env = FusionGraphState
   , _currEnvL   :: EnvLabel        -- ^ The current environment label.
   }
 
-type ReadersEnv = Map (Label Buff) (Labels Comp)
-type WritersEnv = Map (Label Buff) (Labels Comp)
-type Allocators = Map (Label Buff) (Label  Comp)
+type ReadersEnv = Map (Label GVal) (Labels Comp)
+type WritersEnv = Map (Label GVal) (Labels Comp)
+type Allocators = Map (Label GVal) (Label  Comp)
 
 initialFusionGraphState :: FusionGraphState op ()
 initialFusionGraphState = FusionGraphState mempty EnvNil mempty mempty mempty mempty (Label 0 Nothing) 0
@@ -739,22 +739,22 @@ backendGraphState renv wenv f s = f (BackendGraphState (s^.fusionILP) (s^.buffer
 
 -- | Lens for getting and setting the writers of a buffer.
 -- By default we throw an error if the buffer is not found in the environment.
-writers :: HasWritersEnv s => Label Buff -> Lens' s (Labels Comp)
+writers :: HasWritersEnv s => Label GVal -> Lens' s (Labels Comp)
 writers b f s = f (M.findWithDefault msg b (s^.writersEnv)) <&> \cs -> s & writersEnv %~ M.insert b cs
   where msg = internalError "writers: buffer not found"
 
 -- | Lens for getting all writers of buffers.
-allWriters :: (Foldable f, HasWritersEnv s) => f (Label Buff) -> SimpleGetter s (Labels Comp)
+allWriters :: (Foldable f, HasWritersEnv s) => f (Label GVal) -> SimpleGetter s (Labels Comp)
 allWriters bs = to (\s -> foldMap (\b -> s^.writers b) bs)
 -- allWriters bs = to (\s -> traverse (\b -> s^.writers b) bs)
 
 -- | Lens for getting and setting the readers of a buffer.
 -- By default the set of readers is empty.
-readers :: HasReadersEnv s => Label Buff -> Lens' s (Labels Comp)
+readers :: HasReadersEnv s => Label GVal -> Lens' s (Labels Comp)
 readers b f s = f (M.findWithDefault S.empty b (s^.readersEnv)) <&> \cs -> s & readersEnv %~ M.insert b cs
 
 -- | Lens for getting all readers of buffers.
-allReaders :: (Foldable f, HasReadersEnv s) => f (Label Buff) -> SimpleGetter s (Labels Comp)
+allReaders :: (Foldable f, HasReadersEnv s) => f (Label GVal) -> SimpleGetter s (Labels Comp)
 allReaders bs = to (\s -> foldMap (\b -> s^.readers b) bs)
 
 -- | Lens for getting and setting symbol of a computation.
@@ -763,7 +763,7 @@ symbol c = symbols.(`M.alterF` c)
 
 -- | Lens for getting and setting the allocator of a buffer. 'symbol' but for
 --   buffers.
-allocator :: HasAllocators s => Label Buff -> Lens' s (Maybe (Label Comp))
+allocator :: HasAllocators s => Label GVal -> Lens' s (Maybe (Label Comp))
 allocator b = allocators.(`M.alterF` b)
 
 -- | Lens for working under the scope of a computation.
@@ -788,7 +788,7 @@ freshComp = zoom currComp freshL'
 -- by the computation that allocates it. This is possible because they have the
 -- same label just, just different types. We still need to add the read edge to
 -- the graph though.
-freshBuff :: Label Comp -> State (FusionGraphState op env) (Label Buff)
+freshBuff :: Label Comp -> State (FusionGraphState op env) (Label GVal)
 freshBuff comp = do
   buff <- zoom (currComp.asBuff) freshL'
   writers   buff .= S.singleton comp
@@ -796,14 +796,15 @@ freshBuff comp = do
   return buff
 
 -- | Read from a buffer.
-readsBuffers :: HasCallStack => Label Comp -> Labels Buff -> State (FusionGraphState op env) ()
+readsBuffers :: HasCallStack => Label Comp -> Labels GVal -> State (FusionGraphState op env) ()
 readsBuffers c = traverse_ \b -> do
   ws <- use $ writers b
   fusionILP %= ws >-|b|-> c
   readers b %= S.insert c
 
 -- | Require a buffer (i.e. to index into it or pass it to a function).
-requiresBuffers :: HasCallStack => Label Comp -> Labels Buff -> State (FusionGraphState op env) ()
+-- TODO: Rename requires -> reads, reads -> input.
+requiresBuffers :: HasCallStack => Label Comp -> Labels GVal -> State (FusionGraphState op env) ()
 requiresBuffers c = traverse_ \b -> do
   ws <- use $ writers b
   fusionILP %= ws >=|b|=> c
@@ -817,7 +818,7 @@ requiresBuffers c = traverse_ \b -> do
 -- 2. All writers run before the computation.
 -- 3. We become the sole writer of the buffer.
 -- 4. We clear the readers of the buffer.
-writesBuffers :: HasCallStack => Label Comp -> Labels Buff -> State (FusionGraphState op env) ()
+writesBuffers :: HasCallStack => Label Comp -> Labels GVal -> State (FusionGraphState op env) ()
 writesBuffers c = traverse_ \b -> do
   rs <- use $ readers b
   ws <- use $ writers b
@@ -833,7 +834,7 @@ writesBuffers c = traverse_ \b -> do
 -- 2. All writers are infusible with this computation.
 -- 3. We become the sole writer of the buffer.
 -- 4. We clear the readers of the buffer.
-mutatesBuffers :: HasCallStack => Label Comp -> Labels Buff -> State (FusionGraphState op env) ()
+mutatesBuffers :: HasCallStack => Label Comp -> Labels GVal -> State (FusionGraphState op env) ()
 mutatesBuffers c = traverse_ \b -> do
   rs <- use $ readers b
   ws <- use $ writers b
@@ -847,7 +848,7 @@ mutatesBuffers c = traverse_ \b -> do
 -- This can be interpreted as mutation with the identity function (i.e. no-op).
 -- Since we don't actually change the contents of the buffer, we don't need to
 -- enforce 1 and 4.
-returnsBuffers :: HasCallStack => Label Comp -> Labels Buff -> State (FusionGraphState op env) ()
+returnsBuffers :: HasCallStack => Label Comp -> Labels GVal -> State (FusionGraphState op env) ()
 returnsBuffers c = traverse_ \b -> do
   ws <- use $ writers b
   fusionILP %= ws >=|b|=> c
@@ -860,7 +861,7 @@ returnsBuffers c = traverse_ \b -> do
 -- enforce 1 and 4. We also don't enforce 2, because doing so would prevent all
 -- buffers from being non-manifest. (All buffers are bound to a let and
 -- infusible edges force manifestation, so all buffers would be manifest.)
-bindsBuffers :: HasCallStack => Label Comp -> Labels Buff -> State (FusionGraphState op env) ()
+bindsBuffers :: HasCallStack => Label Comp -> Labels GVal -> State (FusionGraphState op env) ()
 bindsBuffers c = traverse_ \b -> do
   ws <- use $ writers b
   fusionILP %= ws >-|b|-> c
@@ -873,7 +874,7 @@ bindsBuffers c = traverse_ \b -> do
 -- it would try to generate a let-binding without a body.
 -- TODO: This is ugly and should be removed, but for that the reconstruction
 --       algorithm needs to be changed. It should be able to handle this case.
-producesBuffers :: HasCallStack => Label Comp -> Labels Buff -> State (FusionGraphState op env) ()
+producesBuffers :: HasCallStack => Label Comp -> Labels GVal -> State (FusionGraphState op env) ()
 producesBuffers c = traverse_ \b -> do
   ws <- use $ writers b
   fusionILP %= flip (foldr' (c==|-|=>)) ws
@@ -911,7 +912,7 @@ mkFullGraphF acc = finalizeInplacePaths (s^.fusionILP, s^.symbols, s^.allocators
   where (_, s) = runState (mkFusionGraphF acc) initialFusionGraphState
 
 -- | Make the supplied buffers manifest.
-manifestBuffers :: HasFusionILP g op => Set (Label Buff) -> g -> g
+manifestBuffers :: HasFusionILP g op => Set (Label GVal) -> g -> g
 manifestBuffers bs = fusionILP.constraints <>~ foldMap (\b -> manifest b .==. int 0) bs
 
 
@@ -1226,7 +1227,7 @@ mergeInplacePaths g = g&fusionILP.inplacePaths %~ go 50
     fusibleSet = g^.fusionILP.fusibleEdges
 
     -- Map from input buffers to the in-place update.
-    pathMap :: Map (Label Buff) (Map InplacePath Number)
+    pathMap :: Map (Label GVal) (Map InplacePath Number)
     pathMap = groupByMap (\((b,_),_) _ -> b) (g^.fusionILP.inplacePaths)
 
 
@@ -1243,7 +1244,7 @@ filterInplacePaths g = g&fusionILP.inplacePaths %~ filterKeys sameElementType
       | otherwise                        = False
 
     -- Gets the element size of a buffer.
-    getElt :: Label Buff -> Exists TypeR
+    getElt :: Label GVal -> Exists TypeR
     getElt b = case (g^.allocator b) >>= (\c -> g^.symbol c) of
       Just (SAlc _ _ e _) -> Exists $ TupRsingle e
       Just (SUnt _ v)     -> Exists $ TupRsingle $ varType v
@@ -1312,7 +1313,7 @@ mkInplacePathsFromBuffers g = g&fusionILP.inplacePaths .~ validPaths
           -> bytes (varType v1) == bytes (varType v2)
         _ -> False
       where
-        getAlloc :: Label Buff -> Symbol op
+        getAlloc :: Label GVal -> Symbol op
         getAlloc b = case (g^.allocator b) >>= (\c -> g^.symbol c) of
           Just x@SAlc{} -> x
           Just x@SUnt{} -> x
@@ -1332,7 +1333,7 @@ mkInplacePathsFromBuffers g = g&fusionILP.inplacePaths .~ validPaths
         Just bs -> S.map ((r,).(c,)) bs
 
     -- For efficient lookup of outputs of computations.
-    outputMap :: Map (Label Comp) (Labels Buff)
+    outputMap :: Map (Label Comp) (Labels GVal)
     outputMap = M.fromListWith S.union $ map (_2 %~ S.singleton) $ S.toList $ g^.fusionILP.writeEdges
 
     -- For efficient lookup of which computation the data flows into.
@@ -1380,7 +1381,7 @@ mkInplacePathsFromClusters g = g&fusionILP.inplacePaths <>~ go initialClusters
 -- | Makes a ReindexPartial, which allows us to transform indices in @env@ into indices in @env'@.
 -- We cannot guarantee the index is present in env', so we use the partiality of ReindexPartial by
 -- returning a Maybe. Uses unsafeCoerce to re-introduce type information implied by the EnvLabels.
-mkReindexPartial :: forall env env'. Map (Label Buff) (Label Buff) -> BuffersEnv env -> BuffersEnv env' -> ReindexPartial Maybe env env'
+mkReindexPartial :: forall env env'. Map (Label GVal) (Label GVal) -> BuffersEnv env -> BuffersEnv env' -> ReindexPartial Maybe env env'
 mkReindexPartial m env env' idx = idxOf (inplaceOf $ lookupIdxInEnv idx env^._2) env'
   where
     -- Replace the buffer with the one we will actually write the data to.
@@ -1440,7 +1441,7 @@ fromSingletonSet (S.toList -> [x]) = x
 fromSingletonSet _ = internalError "fromSingletonSet: Set is not singleton."
 
 -- | Print out information about the given buffer.
-traceBuff :: Label Buff -> State (FusionGraphState op env) ()
+traceBuff :: Label GVal -> State (FusionGraphState op env) ()
 traceBuff b = do
   c_alloc   <- use $ allocator b
   c_readers <- use $ readers b
