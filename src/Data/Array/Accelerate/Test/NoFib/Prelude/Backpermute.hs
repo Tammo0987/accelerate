@@ -152,7 +152,7 @@ takeRef
     -> Array (sh:.Int) e
 takeRef n arr =
   let sh :. m = S.shape arr
-  in  fromFunction (sh :. P.min m n) (arr S.!)
+  in  fromFunction (sh :. P.min m (P.max 0 n)) (arr S.!)
 
 dropRef
     :: (Shape sh, Slice sh, Elt e)
