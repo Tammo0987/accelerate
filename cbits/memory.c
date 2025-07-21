@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdatomic.h>
+#include <pthread.h>
 
 #include "align.h"
 #include "flags.h"
@@ -15,6 +16,34 @@ struct ObjectHeader {
   uint64_t byte_size; // Size of the array. Does not include the header, and is not necessarily a multiple of the alignment.
 } CACHE_ALIGNED;
 
+// For memory counting:
+pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+uint64_t total_allocated = 0;
+uint64_t current_allocated = 0;
+uint64_t max_allocated = 0;
+
+void accelerate_memory_counter_reset() {
+  pthread_mutex_lock(&mutex);
+  total_allocated = 0;
+  max_allocated = current_allocated;
+  pthread_mutex_unlock(&mutex);
+}
+
+uint64_t accelerate_memory_counter_total() {
+  pthread_mutex_lock(&mutex);
+  uint64_t ret = total_allocated;
+  pthread_mutex_unlock(&mutex);
+  return ret;
+}
+
+uint64_t accelerate_memory_counter_max() {
+  pthread_mutex_lock(&mutex);
+  uint64_t ret = max_allocated;
+  pthread_mutex_unlock(&mutex);
+  return ret;
+}
+
+
 void* accelerate_buffer_alloc(uint64_t byte_size) {
   uint64_t size = byte_size + sizeof(struct ObjectHeader);
   // Align size to the next multiple of CACHE_LINE_SIZE
@@ -24,6 +53,14 @@ void* accelerate_buffer_alloc(uint64_t byte_size) {
   void *ptr = accelerate_raw_alloc(size, CACHE_LINE_SIZE);
 
   // TODO: call ___tracy_emit_memory_alloc
+
+  // For benchmarking memory usage:
+  pthread_mutex_lock(&mutex);
+  total_allocated += size;
+  current_allocated += size;
+  if (current_allocated > max_allocated)
+    max_allocated = current_allocated;
+  pthread_mutex_unlock(&mutex);
 
   struct ObjectHeader* header = (struct ObjectHeader*) ptr;
   header->reference_count = 1;
@@ -55,7 +92,10 @@ void accelerate_buffer_release_by(void* interior, uint64_t amount) {
   uint64_t old = atomic_fetch_add_explicit(&header->reference_count, -amount, memory_order_acq_rel);
   if (old == amount) {
     // TODO: call ___tracy_emit_memory_free
+    pthread_mutex_lock(&mutex);
+    current_allocated -= header->byte_size;
     accelerate_raw_free(header);
+    pthread_mutex_unlock(&mutex);
   }
   if (old < amount) {
     printf("Reference count underflow\n");

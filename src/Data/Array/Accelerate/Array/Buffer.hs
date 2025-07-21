@@ -51,6 +51,9 @@ module Data.Array.Accelerate.Array.Buffer (
 
   -- * TemplateHaskell
   liftBuffers, liftBuffer,
+
+  -- * Memory tracking
+  memoryCounterReset, memoryCounterReport,
 ) where
 
 import Data.Array.Accelerate.Error
@@ -114,6 +117,11 @@ foreign import ccall unsafe "accelerate_buffer_retain" memoryRetain :: Ptr () ->
 foreign import ccall unsafe "accelerate_buffer_release" memoryRelease :: Ptr () -> IO ()
 foreign import ccall unsafe "&accelerate_buffer_release" memoryReleaseRef :: FunPtr (Ptr () -> IO ())
 
+-- For benchmarking memory usage:
+foreign import ccall unsafe "accelerate_memory_counter_reset" memoryCounterReset :: IO ()
+foreign import ccall unsafe "accelerate_memory_counter_total" memoryCounterTotal :: IO Word64
+foreign import ccall unsafe "accelerate_memory_counter_max" memoryCounterMax :: IO Word64
+
 #else
 
 memoryAlloc :: Word64 -> IO (Ptr ())
@@ -131,8 +139,27 @@ memoryRelease = undefined
 memoryReleaseRef :: FunPtr (Ptr () -> IO ())
 memoryReleaseRef = undefined
 
+-- For benchmarking memory usage:
+memoryCounterReset :: IO ()
+memoryCounterReset = return ()
+
+memoryCounterTotal :: IO Word64
+memoryCounterTotal = return 0
+
+memoryCounterMax :: IO Word64
+memoryCounterMax = return 0
+
 #endif
 
+
+memoryCounterReport :: IO ()
+memoryCounterReport = do
+  totalAlloc <- memoryCounterTotal
+  maxAlloc   <- memoryCounterMax
+  putStrLn $ "Total memory allocated:   " ++ show totalAlloc ++ " bytes"
+  putStrLn $ "Maximum memory allocated: " ++ show maxAlloc ++ " bytes"
+
+--
 -- SEE: [linking to .c files]
 --
 runQ $ do
