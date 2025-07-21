@@ -2235,7 +2235,7 @@ takeOn dim n xs =
       sh = shape xs
       m  = sh ^. dim
   in
-  backpermute (sh & dim .~ min m n) id xs
+  backpermute (sh & dim .~ min m (max 0 n)) id xs
 
 
 -- | Generalised version of 'drop' where the argument 'Lens'' specifies which

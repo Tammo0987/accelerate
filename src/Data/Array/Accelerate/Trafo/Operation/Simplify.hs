@@ -22,7 +22,7 @@
 --
 
 module Data.Array.Accelerate.Trafo.Operation.Simplify (
-  simplify, simplifyFun, SimplifyOperation(..), CopyOperation(..),
+  simplify, simplifyFun, SimplifyOperation(..), CopyOperation(..), isNoOp,
   copyOperationsForArray, detectMapCopies, detectBackpermuteCopies
 ) where
 
@@ -59,6 +59,18 @@ data CopyOperation env where
     :: Idx env (Buffer t) -- input
     -> Idx env (Buffer t) -- output
     -> CopyOperation env
+
+isNoOp :: SimplifyOperation op => op f -> Args env f -> Bool
+-- An operation is a no-op if all outputs are copies of themselves.
+-- For instance, 'map id xs xs' is a no-op.
+-- This pattern is created by in-place updates, on the copy of the defaults
+-- array of a permute.
+isNoOp op args = all (\(Exists idx) -> idx `IdxSet.member` copied) $ argsOutputs args
+  where
+    copied = IdxSet.fromList
+      $ map (\(CopyOperation idx _) -> Exists idx)
+      $ filter (\(CopyOperation i o) -> i == o)
+      $ detectCopy op args
 
 copyOperationsForArray :: forall env sh sh' t. Arg env (In sh t) -> Arg env (Out sh' t) -> [CopyOperation env]
 copyOperationsForArray (ArgArray _ (ArrayR _ tp) _ input) (ArgArray _ _ _ output) = go tp input output []

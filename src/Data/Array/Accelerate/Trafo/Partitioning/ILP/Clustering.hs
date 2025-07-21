@@ -34,6 +34,7 @@ import Data.Array.Accelerate.AST.Var
 import Data.Array.Accelerate.AST.Operation ( ReindexPartial )
 import Data.Array.Accelerate.Representation.Type
 import Data.Array.Accelerate.Type ( scalarType )
+import Data.Array.Accelerate.Trafo.Operation.Simplify
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Graph hiding (readEdges, writeEdges, strictEdges, dataflowEdges, symbols, graph)
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Labels hiding (EnvLabelTupF)
 import Data.Array.Accelerate.Analysis.Match
@@ -90,11 +91,11 @@ map' !?? key = case map' M.!? key of
 -- (namely, what it was before fusion), via an GroundsR.
 -- Since fusion goes via an untyped ILP, during reconstruction we need to rebuild the program and temporarily
 -- fulfill this contract: if something goes wrong during fusion or at the caller, bad things happen.
-reconstruct :: forall op a. MakesILP op => GroundsR a -> Bool -> FusionGraph -> [ClusterLs] -> M.Map (Label Comp) [ClusterLs] -> Symbols op -> ReadDirM -> InplaceM -> PreOpenAcc (Clustered op) () a
+reconstruct :: forall op a. (MakesILP op, SimplifyOperation op) => GroundsR a -> Bool -> FusionGraph -> [ClusterLs] -> M.Map (Label Comp) [ClusterLs] -> Symbols op -> ReadDirM -> InplaceM -> PreOpenAcc (Clustered op) () a
 reconstruct repr a b c d e f g = case openReconstruct a EnvNil b c d e f g of
           Exists res -> expectType repr res
 
-reconstructF :: forall op a. (HasCallStack, MakesILP op) => PreOpenAfun op () a -> Bool -> FusionGraph -> [ClusterLs] -> M.Map (Label Comp) [ClusterLs] -> Symbols op -> ReadDirM -> InplaceM -> PreOpenAfun (Clustered op) () a
+reconstructF :: forall op a. (MakesILP op, SimplifyOperation op) => PreOpenAfun op () a -> Bool -> FusionGraph -> [ClusterLs] -> M.Map (Label Comp) [ClusterLs] -> Symbols op -> ReadDirM -> InplaceM -> PreOpenAfun (Clustered op) () a
 reconstructF original a b c d e f g = case openReconstructF a EnvNil b c (Label 1 Nothing) d e f g of
           Exists res -> expectFunTypeEqual original res
 
@@ -174,7 +175,7 @@ topSort singletons (FusionGraph strictEdges dataflowEdges _) cluster readDirM =
     -- getOrder (_ :>: args) buff = getOrder args buff
 
 
-openReconstruct   :: MakesILP op
+openReconstruct   :: (MakesILP op, SimplifyOperation op)
                   => Bool
                   -> BuffersEnv aenv
                   -> FusionGraph
@@ -185,7 +186,7 @@ openReconstruct   :: MakesILP op
                   -> InplaceM
                   -> Exists (PreOpenAcc (Clustered op) aenv)
 openReconstruct  a b c d   e f g h = (\(Left x) -> x) $ openReconstruct' a b c d Nothing e f g h
-openReconstructF  :: (HasCallStack, MakesILP op)
+openReconstructF  :: (MakesILP op, SimplifyOperation op)
                   => Bool
                   -> BuffersEnv aenv
                   -> FusionGraph
@@ -198,7 +199,7 @@ openReconstructF  :: (HasCallStack, MakesILP op)
                   -> Exists (PreOpenAfun (Clustered op) aenv)
 openReconstructF a b c d l e f g h = (\(Right x) -> x) $ openReconstruct' a b c d (Just l) e f g h
 
-openReconstruct' :: forall op aenv. (HasCallStack, MakesILP op) => Bool -> BuffersEnv aenv -> FusionGraph -> [ClusterLs] -> Maybe (Label Comp) -> M.Map (Label Comp) [ClusterLs] -> Symbols op -> ReadDirM -> InplaceM -> Either (Exists (PreOpenAcc (Clustered op) aenv)) (Exists (PreOpenAfun (Clustered op) aenv))
+openReconstruct' :: forall op aenv. (MakesILP op, SimplifyOperation op) => Bool -> BuffersEnv aenv -> FusionGraph -> [ClusterLs] -> Maybe (Label Comp) -> M.Map (Label Comp) [ClusterLs] -> Symbols op -> ReadDirM -> InplaceM -> Either (Exists (PreOpenAcc (Clustered op) aenv)) (Exists (PreOpenAfun (Clustered op) aenv))
 openReconstruct' singletons labelenv graph clusterslist mlab subclustersmap symbols readDirM inplaceM =
   case mlab of
   Just l  -> Right $ makeASTF labelenv l mempty
@@ -220,6 +221,7 @@ openReconstruct' singletons labelenv graph clusterslist mlab subclustersmap symb
       InitFold o l args -> singleton l args o $
                             \c args' ->
                                 Exists $ Exec c (mapArgs (\(LOp a _ _) -> a) args')
+      EmptyFold -> Exists $ Return TupRunit
       NotFold con -> case con of
         SExe {}    -> error "should be Fold/InitFold!"
         SExe'{}    -> error "should be Fold/InitFold!"
@@ -249,11 +251,13 @@ openReconstruct' singletons labelenv graph clusterslist mlab subclustersmap symb
         _ -> let res = makeAST env [cluster] prev in case cluster of
                 ExecL _ -> case (res, makeAST env ctail prev) of
                   (Exists exec@Exec{}, Exists scp) -> Exists $ Alet LeftHandSideUnit (shared TupRunit) exec scp
+                  (Exists (Return TupRunit), Exists scp) -> Exists scp
                   _ -> error "nope"
                 NonExecL _ -> makeAST env ctail $ foldC (`M.insert` res) prev cluster
       _   -> let res = makeAST env [cluster] prev in case cluster of
                 ExecL _ -> case (res, makeAST env ctail prev) of
                   (Exists exec@Exec{}, Exists scp) -> Exists $ Alet LeftHandSideUnit (shared TupRunit) exec scp
+                  (Exists (Return TupRunit), Exists scp) -> Exists scp
                   _ -> error "nope"
                 NonExecL _ -> makeAST env ctail $ foldC (`M.insert` res) prev cluster
 
@@ -292,17 +296,28 @@ openReconstruct' singletons labelenv graph clusterslist mlab subclustersmap symb
     makeCluster env (ExecL ls) =
        foldr1 (flip fuseCluster)
                     $ map ( \l -> case symbols !?? l of
-                              -- At first thought, this `fromJust` might error if we fuse an array away.
-                              -- It does not: The array will still be in the environment, but after we finish
-                              -- the `foldr1`, the input argument will dissapear. The output argument does not:
-                              -- we clean that up in the SLV pass, if this was vertical fusion. If this is diagonal fusion,
-                              -- it stays.
-                              SExe' env' args op -> InitFold op l (fromJust $ reindexLabelledArgsOp (mkReindexPartial' env' env) args)
-                              _                  -> error "avoid this next refactor" -- c -> NotFold c
+                              SExe' env' args op ->
+                                -- At first thought, this `fromJust` might error if we fuse an array away.
+                                -- It does not: The array will still be in the environment, but after we finish
+                                -- the `foldr1`, the input argument will dissapear. The output argument does not:
+                                -- we clean that up in the SLV pass, if this was vertical fusion. If this is diagonal fusion,
+                                -- it stays.
+                                let args' = fromJust $ reindexLabelledArgsOp (mkReindexPartial inplaceM env' env) args
+                                in
+                                  if isNoOp op (unlabelop args') then
+                                    -- Remove operations that became a no-op by in-place updates.
+                                    -- For instance, 'map id xs ys' may become 'map id xs xs',
+                                    -- which is a no-op.
+                                    EmptyFold
+                                  else
+                                    InitFold op l args'
+                              _                 -> error "avoid this next refactor" -- c -> NotFold c
                           ) ls
     makeCluster _ (NonExecL l) = NotFold $ symbols !?? l
 
     fuseCluster :: FoldType op env -> FoldType op env -> FoldType op env
+    fuseCluster EmptyFold f = f
+    fuseCluster f EmptyFold = f
     fuseCluster (Fold cluster cargs) (InitFold op l largs) =
       consCluster l largs op cargs cluster Fold
     fuseCluster (InitFold op l largs) x = singleton l largs op $ \c cargs -> fuseCluster (Fold c cargs) x
@@ -318,6 +333,7 @@ weakenAcc lhs =  runIdentity . reindexAcc (weakenReindex $ weakenWithLHS lhs)
 data FoldType op env
   = forall args. Fold (Clustered op args) (LabelledArgsOp op env args)
   | forall args. InitFold (op args) (Label Comp) (LabelledArgsOp op env args)
+  | EmptyFold
   | NotFold (Symbol op)
 
 

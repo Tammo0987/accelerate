@@ -52,7 +52,7 @@ module Data.Array.Accelerate.AST.Operation (
 
   ReindexPartial, reindexArg, reindexArgs, reindexExp, reindexPreArgs, reindexVar, reindexVars,
   weakenReindex,
-  argVars, argsVars, AccessGroundR(..),
+  argVars, argsVars, argsInputs, argsOutputs, AccessGroundR(..),
 
   mapAccExecutable, mapAfunExecutable,
 
@@ -78,6 +78,7 @@ import Data.Array.Accelerate.Trafo.Exp.Shrink
 import Data.Array.Accelerate.Type
 import Data.Array.Accelerate.Error
 import Data.Typeable                                                ( (:~:)(..) )
+import Data.Maybe
 
 import Language.Haskell.TH.Extra                                    ( CodeQ )
 import Data.Kind (Type)
@@ -541,6 +542,21 @@ argVars (ArgArray m _ sh buffers) = go buffers $ map readonlyGroundRToAccessGrou
 argsVars :: Args env t -> [Exists (Var AccessGroundR env)]
 argsVars (a :>: as) = argVars a ++ argsVars as
 argsVars ArgsNil    = []
+
+argsInputs :: Args env t -> [Exists (Idx env)]
+argsInputs = mapMaybe input . argsVars
+  where
+    input :: Exists (Var AccessGroundR env) -> Maybe (Exists (Idx env))
+    input (Exists (Var (AccessGroundRbuffer Out _) _)) = Nothing
+    input (Exists (Var _ idx)) = Just $ Exists idx
+
+argsOutputs :: Args env t -> [Exists (Idx env)]
+argsOutputs = mapMaybe output . argsVars
+  where
+    output :: Exists (Var AccessGroundR env) -> Maybe (Exists (Idx env))
+    output (Exists (Var (AccessGroundRbuffer Out _) idx)) = Just $ Exists idx
+    output (Exists (Var (AccessGroundRbuffer Mut _) idx)) = Just $ Exists idx
+    output _ = Nothing
 
 expGroundVars :: OpenExp env benv t -> [Exists (GroundVar benv)]
 expGroundVars = map arrayInstrGroundVars . arrayInstrsInExp
