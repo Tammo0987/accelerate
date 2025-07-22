@@ -1157,44 +1157,44 @@ mkInplacePaths n r w lIn lOut
 mkInplacePaths _ _ _ _ _ = M.empty
 
 
--- | Combines the in-place update paths of length 1 (i.e. across computations)
---   to in-place update paths of arbitrary length.
-combineInplacePaths :: forall op. MakesILP op => FullGraph op -> FullGraph op
-combineInplacePaths g = g&fusionILP.inplacePaths %~ stepsPaths 50
-  where
-    -- Keep extending the path until no more extensions are possible or the
-    -- iteration limit reaches 0.
-    -- The iteration limit is only there to prevent infinite loops, although I
-    -- don't think this can happen.
-    -- We could make this iteration limit an argument to the function and a
-    -- global setting for the compiler later on.
-    stepsPaths :: Int -> Map InplacePath Number -> Map InplacePath Number
-    stepsPaths 0 ps = internalWarning "combineInplacePaths: iteration limit reached" False ps
-    stepsPaths n ps | M.null ps = ps
-                    | otherwise = ps <> stepsPaths (n-1) (M.foldMapWithKey stepPath ps)
+-- -- | Combines the in-place update paths of length 1 (i.e. across computations)
+-- --   to in-place update paths of arbitrary length.
+-- combineInplacePaths :: forall op. MakesILP op => FullGraph op -> FullGraph op
+-- combineInplacePaths g = g&fusionILP.inplacePaths %~ stepsPaths 50
+--   where
+--     -- Keep extending the path until no more extensions are possible or the
+--     -- iteration limit reaches 0.
+--     -- The iteration limit is only there to prevent infinite loops, although I
+--     -- don't think this can happen.
+--     -- We could make this iteration limit an argument to the function and a
+--     -- global setting for the compiler later on.
+--     stepsPaths :: Int -> Map InplacePath Number -> Map InplacePath Number
+--     stepsPaths 0 ps = internalWarning "combineInplacePaths: iteration limit reached" False ps
+--     stepsPaths n ps | M.null ps = ps
+--                     | otherwise = ps <> stepsPaths (n-1) (M.foldMapWithKey stepPath ps)
 
-    -- Extend the path by 1 step.
-    -- This is done by looking at which computations can fuse with the end of
-    -- the path, then finding any paths that start with the newly constructed
-    -- read.
-    stepPath :: InplacePath -> Number -> Map InplacePath Number
-    stepPath (r, w@(_, b)) n = case M.lookup w nextComps of
-      Nothing -> M.empty
-      Just cs -> flip foldMap cs \c -> case M.lookup (b, c) nextPaths of
-        Nothing -> M.empty
-        Just ws -> M.mapKeys (r,) $ M.map (combineIUpdateWeight @op n) ws
+--     -- Extend the path by 1 step.
+--     -- This is done by looking at which computations can fuse with the end of
+--     -- the path, then finding any paths that start with the newly constructed
+--     -- read.
+--     stepPath :: InplacePath -> Number -> Map InplacePath Number
+--     stepPath (r, w@(_, b)) n = case M.lookup w nextComps of
+--       Nothing -> M.empty
+--       Just cs -> flip foldMap cs \c -> case M.lookup (b, c) nextPaths of
+--         Nothing -> M.empty
+--         Just ws -> M.mapKeys (r,) $ M.map (combineIUpdateWeight @op n) ws
 
-    -- For efficient lookup of extensions for paths.
-    -- This maps read edges to the write edges that can be updated in-place with
-    -- the read edge.
-    nextPaths :: Map ReadEdge (Map WriteEdge Number)
-    nextPaths = M.fromListWith M.union $ map (\((r,w),n)->(r,M.singleton w n)) $ M.toList $ g^.fusionILP.inplacePaths
+--     -- For efficient lookup of extensions for paths.
+--     -- This maps read edges to the write edges that can be updated in-place with
+--     -- the read edge.
+--     nextPaths :: Map ReadEdge (Map WriteEdge Number)
+--     nextPaths = M.fromListWith M.union $ map (\((r,w),n)->(r,M.singleton w n)) $ M.toList $ g^.fusionILP.inplacePaths
 
-    -- For efficient lookup of which computation the data flows into.
-    -- We only consider computations that can fuse with the previous computation
-    -- because we can only perform an in-place update if the computations fuse.
-    nextComps :: Map WriteEdge (Labels Comp)
-    nextComps = M.fromListWith S.union $ map (tripleToLeftRec . (_3 %~ S.singleton)) $ S.toList $ g^.fusionILP.fusibleEdges
+--     -- For efficient lookup of which computation the data flows into.
+--     -- We only consider computations that can fuse with the previous computation
+--     -- because we can only perform an in-place update if the computations fuse.
+--     nextComps :: Map WriteEdge (Labels Comp)
+--     nextComps = M.fromListWith S.union $ map (tripleToLeftRec . (_3 %~ S.singleton)) $ S.toList $ g^.fusionILP.fusibleEdges
 
 
 -- | Merges in-place update paths until no more merging is possible.
