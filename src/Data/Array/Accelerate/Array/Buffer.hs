@@ -120,6 +120,7 @@ foreign import ccall unsafe "&accelerate_buffer_release" memoryReleaseRef :: Fun
 -- For benchmarking memory usage:
 foreign import ccall unsafe "accelerate_memory_counter_reset" memoryCounterReset :: IO ()
 foreign import ccall unsafe "accelerate_memory_counter_total" memoryCounterTotal :: IO Word64
+foreign import ccall unsafe "accelerate_memory_counter_init" memoryCounterInit :: IO Word64
 foreign import ccall unsafe "accelerate_memory_counter_max" memoryCounterMax :: IO Word64
 
 #else
@@ -146,6 +147,9 @@ memoryCounterReset = return ()
 memoryCounterTotal :: IO Word64
 memoryCounterTotal = return 0
 
+memoryCounterInit :: IO Word64
+memoryCounterInit = return 0
+
 memoryCounterMax :: IO Word64
 memoryCounterMax = return 0
 
@@ -155,8 +159,10 @@ memoryCounterMax = return 0
 memoryCounterReport :: IO ()
 memoryCounterReport = do
   totalAlloc <- memoryCounterTotal
+  initAlloc  <- memoryCounterInit
   maxAlloc   <- memoryCounterMax
   putStrLn $ "Total memory allocated:   " ++ show totalAlloc ++ " bytes"
+  putStrLn $ "Initial memory allocated: " ++ show initAlloc ++ " bytes"
   putStrLn $ "Maximum memory allocated: " ++ show maxAlloc ++ " bytes"
 
 --

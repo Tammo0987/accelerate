@@ -20,11 +20,13 @@ struct ObjectHeader {
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 uint64_t total_allocated = 0;
 uint64_t current_allocated = 0;
+uint64_t init_allocated = 0;
 uint64_t max_allocated = 0;
 
 void accelerate_memory_counter_reset() {
   pthread_mutex_lock(&mutex);
   total_allocated = 0;
+  init_allocated = current_allocated;
   max_allocated = current_allocated;
   pthread_mutex_unlock(&mutex);
 }
@@ -32,6 +34,13 @@ void accelerate_memory_counter_reset() {
 uint64_t accelerate_memory_counter_total() {
   pthread_mutex_lock(&mutex);
   uint64_t ret = total_allocated;
+  pthread_mutex_unlock(&mutex);
+  return ret;
+}
+
+uint64_t accelerate_memory_counter_init() {
+  pthread_mutex_lock(&mutex);
+  uint64_t ret = init_allocated;
   pthread_mutex_unlock(&mutex);
   return ret;
 }
@@ -56,8 +65,8 @@ void* accelerate_buffer_alloc(uint64_t byte_size) {
 
   // For benchmarking memory usage:
   pthread_mutex_lock(&mutex);
-  total_allocated += size;
-  current_allocated += size;
+  total_allocated += byte_size;
+  current_allocated += byte_size;
   if (current_allocated > max_allocated)
     max_allocated = current_allocated;
   pthread_mutex_unlock(&mutex);
