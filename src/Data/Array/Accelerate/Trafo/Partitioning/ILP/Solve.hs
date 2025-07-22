@@ -238,18 +238,29 @@ data ClusterLs = Execs Labels | NonExec Label
 -- I think that only `let`s can still be in the same cluster as `exec`s, 
 -- and their bodies should all be in earlier clusters already.
 -- Simply make one cluster per let, before the cluster with execs.
--- TODO: split the cluster of Execs into connected components
 splitExecs :: ([Labels], M.Map Label [Labels]) -> M.Map Label (Construction op) -> ([ClusterLs], M.Map Label [ClusterLs])
 splitExecs (xs, xM) constrM = (f xs, M.map f xM)
   where
     f :: [Labels] -> [ClusterLs]
-    f = concatMap (\ls -> filter (/= Execs mempty) $ map NonExec (S.toList $ S.filter isNonExec ls) ++ [Execs (S.filter isExec ls)])
+    f = concatMap (\ls -> filter (/= Execs mempty) $ map NonExec (S.toList $ S.filter isBeforeExec ls) ++ [Execs (S.filter isExec ls)] ++ afterexecs ls)
 
     isExec l = case constrM M.!? l of
       Just CExe{}  -> True
       Just CExe'{} -> True
       _ -> False
-    isNonExec l = not $ isExec l
+    isBeforeExec l = case constrM M.!? l of
+      Just CLHS{} -> True
+      _ -> False
+    isAfterExec l = case constrM M.!? l of
+      Just CExe{} -> False
+      Just CExe'{} -> False
+      Just CLHS{} -> False
+      Nothing -> False
+      _ -> True
+    -- Tests say that this happens, and that it's correct anyway, but I'm unsure why.
+    -- The reason I doubt is because if multiple non-exec, non-lhs nodes are here, the current reconstruction code
+    -- (I think) ignores all but the last one.
+    afterexecs ls = let xs = map NonExec (S.toList $ S.filter isAfterExec ls) in if length xs > 1 then xs {-error "dunno what this means"-} else xs
 
 -- Only needs Applicative
 newtype MonadMonoid f m = MonadMonoid { getMonadMonoid :: f m }

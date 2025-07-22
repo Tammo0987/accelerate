@@ -169,8 +169,8 @@ openReconstructF a b c d l e f = (\(Right x) -> x) $ openReconstruct' a b c d (J
 openReconstruct' :: forall op aenv. (MakesILP op, SimplifyOperation op) => Bool -> LabelEnv aenv -> Graph -> [ClusterLs] -> Maybe Label -> M.Map Label [ClusterLs] -> M.Map Label (Construction op)  -> Either (Exists (PreOpenAcc (Clustered op) aenv)) (Exists (PreOpenAfun (Clustered op) aenv))
 openReconstruct' singletons labelenv graph clusterslist mlab subclustersmap construct = 
   case mlab of
-  Just l  -> Right $ makeASTF labelenv l mempty
-  Nothing -> Left $ makeAST labelenv clusters mempty
+  Just l  -> Right $ makeASTF labelenv l
+  Nothing -> Left $ makeAST labelenv clusters
   where
     -- Make a tree of let bindings
 
@@ -178,9 +178,9 @@ openReconstruct' singletons labelenv graph clusterslist mlab subclustersmap cons
     -- Those are stored in the 'prev' argument.
     -- Note also that we currently assume that the final cluster is the return argument: If all computations are relevant
     -- and our analysis is sound, the return argument should always appear last. If not.. oops
-    makeAST :: forall env. LabelEnv env -> [ClusterL] -> M.Map Label (Exists (PreOpenAcc (Clustered op) env)) -> Exists (PreOpenAcc (Clustered op) env)
-    makeAST _ [] _ = error "empty AST"
-    makeAST env [cluster] prev = case makeCluster env cluster of
+    makeAST :: forall env. LabelEnv env -> [ClusterL] -> Exists (PreOpenAcc (Clustered op) env)
+    makeAST _ [] = error "empty AST"
+    makeAST env [cluster] = case makeCluster env cluster of
       Fold c args -> Exists $ Exec c $ unLabelOp args
       InitFold o l args -> singleton l args o $
                             \c args' ->
@@ -190,13 +190,13 @@ openReconstruct' singletons labelenv graph clusterslist mlab subclustersmap cons
         CExe {}    -> error "should be Fold/InitFold!"
         CExe'{}    -> error "should be Fold/InitFold!"
         CUse se  n be             -> Exists $ Use se n be
-        CITE env' c t f   -> case (makeAST env (subcluster t) prev, makeAST env (subcluster f) prev) of
+        CITE env' c t f   -> case (makeAST env (subcluster t), makeAST env (subcluster f)) of
           (Exists tacc, Exists facc) -> Exists $ tryBuildAcond
             (fromJust $ reindexVar (mkReindexPartial env' env) c)
             tacc
             facc
         CWhl env' c b i u -> case (subcluster c, subcluster b) of
-          (findTopOfF -> c', findTopOfF -> b') -> case (makeASTF env c' prev, makeASTF env b' prev) of
+          (findTopOfF -> c', findTopOfF -> b') -> case (makeASTF env c', makeASTF env b') of
             (Exists cfun, Exists bfun) -> Exists $ tryBuildAwhile
               u
               cfun
@@ -209,36 +209,29 @@ openReconstruct' singletons labelenv graph clusterslist mlab subclustersmap cons
         CCmp env' expr     -> Exists $ Compute     (fromJust $ reindexExp  (mkReindexPartial env' env) expr)
         CAlc env' shr e sh -> Exists $ Alloc shr e (fromJust $ reindexVars (mkReindexPartial env' env) sh)
         CUnt env' evar     -> Exists $ Unit        (fromJust $ reindexVar  (mkReindexPartial env' env) evar)
-    makeAST env (cluster:ctail) prev = 
+    makeAST env (cluster:ctail) = 
       -- TODO: use guards to fuse these two identical cases
       case makeCluster env cluster of
-      NotFold con -> case con of
-        CLHS (mylhs :: MyGLHS a) b u -> case makeAST env [NonExecL b] prev of
-          -- case prev !?? b of
-          Exists bnd -> createLHS mylhs env $ \env' lhs ->
-            case makeAST env' ctail (M.map (\(Exists acc) -> Exists $ weakenAcc lhs acc) $ M.insert b (Exists bnd) prev) of
-              Exists scp
-                 -> Exists $ tryBuildAlet lhs u bnd scp
-        _ -> let res = makeAST env [cluster] prev in case cluster of
-                ExecL _ -> case (res, makeAST env ctail prev) of
-                  (Exists exec@Exec{}, Exists scp) -> Exists $ Alet LeftHandSideUnit (shared TupRunit) exec scp
-                  (Exists (Return TupRunit), Exists scp) -> Exists scp
-                  _ -> error "nope"
-                NonExecL _ -> makeAST env ctail $ foldC (`M.insert` res) prev cluster
-      _   -> let res = makeAST env [cluster] prev in case cluster of
-                ExecL _ -> case (res, makeAST env ctail prev) of
-                  (Exists exec@Exec{}, Exists scp) -> Exists $ Alet LeftHandSideUnit (shared TupRunit) exec scp
-                  (Exists (Return TupRunit), Exists scp) -> Exists scp
-                  _ -> error "nope"
-                NonExecL _ -> makeAST env ctail $ foldC (`M.insert` res) prev cluster
+        NotFold con
+          | CLHS (mylhs :: MyGLHS a) b u <- con ->
+            case makeAST env [NonExecL b] of
+              Exists bnd -> createLHS mylhs env $ \env' lhs ->
+                case makeAST env' ctail of
+                  Exists scp
+                    -> Exists $ tryBuildAlet lhs u bnd scp
+        _ -> let res = makeAST env [cluster] in case cluster of
+              ExecL _ -> case (res, makeAST env ctail) of
+                (Exists exec@Exec{}, Exists scp) -> Exists $ Alet LeftHandSideUnit (shared TupRunit) exec scp
+                (Exists (Return TupRunit), Exists scp) -> Exists scp
+                _ -> error "nope"
+              NonExecL _ -> makeAST env ctail
 
-    makeASTF :: forall env. LabelEnv env -> Label -> M.Map Label (Exists (PreOpenAcc (Clustered op) env)) -> Exists (PreOpenAfun (Clustered op) env)
-    makeASTF env l prev = case makeCluster env (NonExecL l) of
-      NotFold (CBod l') -> case makeAST env (subcluster l) prev of
-        --  fromJust $ l' ^. parent) prev of 
+    makeASTF :: forall env. LabelEnv env -> Label -> Exists (PreOpenAfun (Clustered op) env)
+    makeASTF env l = case makeCluster env (NonExecL l) of
+      NotFold (CBod l') -> case makeAST env (subcluster l) of
           Exists acc -> Exists $ Abody acc
       NotFold (CFun lhs l') -> createLHS lhs env $ \env' lhs' -> 
-        case makeASTF env' l' (M.map (\(Exists acc) -> Exists $ weakenAcc lhs' acc) $ M.insertWith (flip const) l' (Exists undefined) prev) of
+        case makeASTF env' l' of
           Exists fun -> Exists $ Alam lhs' fun
       NotFold {} -> error "wrong type: acc"
       _ -> error "not a notfold"
@@ -339,11 +332,6 @@ consCluster l lop op lcluster cluster k = singleton l lop op $ \c lop' ->
     cluster 
     fuseVertically 
     $ flip k
-
-foo :: M.Map Edge Int -> Label -> ALabels a -> Int
-foo orderinfo l (_, ls)
-  | S.null ls = 0
-  | otherwise = orderinfo M.! (S.findMin ls :-> l)
 
 fuseVertically :: LabelledArgOp op env (Out sh e) -> LabelledArgOp op env (In sh e) -> LabelledArgOp op env (Var' sh)
 fuseVertically
