@@ -1386,8 +1386,10 @@ mkReindexPartial m env env' idx = idxOf (inplaceOf $ lookupIdxInEnv idx env^._2)
   where
     -- Replace the buffer with the one we will actually write the data to.
     inplaceOf :: BuffersTup a -> BuffersTup a
-    inplaceOf (TupFsingle bs) = TupFsingle $ maybe bs S.fromList (traverse (`M.lookup` m) $ S.toList bs)
-    inplaceOf bs = bs
+    -- inplaceOf (TupFsingle bs) = TupFsingle $ maybe bs S.fromList (traverse (`M.lookup` m) $ S.toList bs)
+    inplaceOf (TupFsingle bs) = TupFsingle $ S.map (\b -> M.findWithDefault b b m) bs
+    inplaceOf (TupFpair bs1 bs2) = TupFpair (inplaceOf bs1) (inplaceOf bs2)
+    inplaceOf TupFunit = TupFunit
 
     -- Find the corresponding EnvLabel in the new environment.
     idxOf :: forall e a. BuffersTup a -> BuffersEnv e -> Maybe (Idx e a)
