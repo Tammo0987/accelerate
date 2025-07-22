@@ -202,6 +202,10 @@ makeILP obj (FusionILP graph constraints bounds) =
     -- In-place updates:
     ----------------------------------------------------------------------------
 
+    -- NOTE: Here we need to use the number of non-inplace updates, because using 1 - x is not liked by the solver.
+    -- TODO: Either make the internal structure more robust by only allowing variables to appear once per expression/constraint,
+    -- or add a simplification step to ensure this is the case.
+
     -- Number of in-place updates:
     numberOfNonInplaceUpdates = foldMap inplace inplaceP
 
@@ -278,7 +282,6 @@ makeILP obj (FusionILP graph constraints bounds) =
       FusedEdges'         -> (True,  Minimise, (int m .*. numberOfUnfusedEdges)     .+. numberOfNonInplaceUpdates)
       MemoryUsage         -> (True,  Minimise, numberOfManifestArrays .+. numberOfNonInplaceUpdates)
       MemoryUsage'        -> (True,  Minimise, (int (n+1) .*. numberOfManifestArrays) .+. (int n .*. numberOfNonInplaceUpdates))  -- We want to prioritise solutions that use fusion, so the weight of fusion is increased by a small factor.
-
 
 
 -- | Extract the read directions from the ILP solution.
