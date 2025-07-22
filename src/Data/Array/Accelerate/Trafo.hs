@@ -77,7 +77,7 @@ import qualified Data.Array.Accelerate.AST.Operation as Operation
 import qualified Data.Array.Accelerate.Trafo.Partitioning.ILP.Graph as Graph
 import Data.Array.Accelerate.Pretty.Print (configPlain, Val (Empty))
 
-import Data.Array.Accelerate.Trafo.Partitioning.ILP.Solve (FusionObjective(..))
+import Data.Array.Accelerate.Trafo.Partitioning.ILP.Solve (Objective(..))
 import Data.Array.Accelerate.Trafo.NewNewFusion (Benchmarking)
 import Data.Array.Accelerate.Trafo.Partitioning.ILP (FusionType(..), defaultObjective)
 import Control.Monad.Trans.Writer (runWriter, Writer, writer)
@@ -96,7 +96,7 @@ test = snd . convertAfunFullOptions @sched @kernel defaultOptions defaultObjecti
 -- TODO: simplifications commented out, because they REMOVE PERMUTE
 testWithObjective
   :: forall sched kernel f. (Afunction f, DesugarAcc (KernelOperation kernel), Operation.SimplifyOperation (KernelOperation kernel), Operation.SLVOperation (KernelOperation kernel), Partitioning.MakesILP (KernelOperation kernel), Partitioned.SetOpIndices (KernelOperation kernel), Pretty.PrettyOp (KernelOperation kernel), Pretty.PrettyKernel kernel, IsSchedule sched, IsKernel kernel, Pretty.PrettySchedule sched, Operation.ShrinkArg (Partitioning.BackendClusterArg (KernelOperation kernel)), Operation.NFData' (Graph.BackendClusterArg (KernelOperation kernel)),  Operation.ShrinkArg (Partitioning.BackendClusterArg (KernelOperation kernel)))
-  => FusionObjective
+  => Objective
   -> f
   -> String
 testWithObjective obj = snd . convertAfunFullOptions @sched @kernel defaultOptions (Fusion obj) Pretty.renderForTerminal
@@ -153,7 +153,7 @@ convertAfunBench b = fst . convertAfunFullOptions defaultOptions (Benchmarking b
 convertAccWithObj
   :: forall sched kernel arrs.
      (DesugarAcc (KernelOperation kernel), Operation.SLVOperation (KernelOperation kernel), Operation.SimplifyOperation (KernelOperation kernel), Partitioning.MakesILP (KernelOperation kernel), Partitioned.SetOpIndices (KernelOperation kernel), Pretty.PrettyOp (KernelOperation kernel), IsSchedule sched, IsKernel kernel, Operation.NFData' (Graph.BackendClusterArg (KernelOperation kernel)),  Operation.ShrinkArg (Partitioning.BackendClusterArg (KernelOperation kernel)), Pretty.PrettySchedule sched, Pretty.PrettyKernel kernel)
-  => FusionObjective
+  => Objective
   -> Acc arrs
   -> sched kernel () (ScheduleOutput sched (DesugaredArrays (ArraysR arrs)) -> ())
 convertAccWithObj obj = fst . convertAccFullOptions defaultOptions (Fusion obj) (const ())
@@ -180,7 +180,7 @@ convertAfunWith config = fst . convertAfunFullOptions config defaultObjective (c
 convertAfunWithObj
   :: forall sched kernel f.
      (Afunction f, DesugarAcc (KernelOperation kernel), Operation.SLVOperation (KernelOperation kernel), Operation.SimplifyOperation (KernelOperation kernel), Partitioning.MakesILP (KernelOperation kernel), Partitioned.SetOpIndices (KernelOperation kernel), Pretty.PrettyOp (KernelOperation kernel), IsSchedule sched, IsKernel kernel, Operation.NFData' (Graph.BackendClusterArg (KernelOperation kernel)),  Operation.ShrinkArg (Partitioning.BackendClusterArg (KernelOperation kernel)), Pretty.PrettySchedule sched, Pretty.PrettyKernel kernel)
-  => FusionObjective
+  => Objective
   -> f
   -> sched kernel () (Scheduled sched (DesugaredAfun (ArraysFunctionR f)))
 convertAfunWithObj obj = fst . convertAfunFullOptions defaultOptions (Fusion obj) (const ())

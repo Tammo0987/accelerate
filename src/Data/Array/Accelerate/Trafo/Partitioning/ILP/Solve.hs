@@ -9,6 +9,7 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 module Data.Array.Accelerate.Trafo.Partitioning.ILP.Solve where
 
 
@@ -36,19 +37,22 @@ import Control.Monad.State
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.NameGeneration (freshName)
 import Data.Foldable
 
-data FusionObjective
-  = NumClusters         -- ^ Minimise the number of clusters.
-  | ArrayReads          -- ^ Minimise the number of array reads.
-  | ArrayReadsWrites    -- ^ Minimise the number of array reads and writes.
-  | IntermediateArrays  -- ^ Minimise the number of intermediate arrays.
-  | FusedEdges          -- ^ Minimise the number of unfused edges.
-  | Everything          -- ^ Minimise the number of clusters and array reads/writes.
-  deriving (Show, Bounded, Enum, Eq, Ord)
-
-data IUpdatesObjective
-  = NoInplaceUpdates        -- ^ Do not use in-place updates.
-  | NumInplaceUpdates       -- ^ Each in-place update counts as 1.
-  | WeightedInplaceUpdates  -- ^ Use the weights and merge strategy defined by the backend.
+data Objective
+  -- Old fusion only objectives:
+  = NumClusters          -- ^ Minimise the number of clusters.
+  | ArrayReads           -- ^ Minimise the number of array reads.
+  | ArrayReadsWrites     -- ^ Minimise the number of array reads and writes.
+  | IntermediateArrays   -- ^ Minimise the number of intermediate arrays.
+  | FusedEdges           -- ^ Minimise the number of unfused edges.
+  | Everything           -- ^ Minimise the number of clusters and array reads/writes.
+  -- Old fusion objectives with in-place updates as secondary objective:
+  | ArrayReads'          -- ^ Minimise the number of array reads, then maximise the number of in-place updates.
+  | ArrayReadsWrites'    -- ^ Minimise the number of array reads and writes, then maximise the number of in-place updates.
+  | IntermediateArrays'  -- ^ Minimise the number of intermediate arrays, then maximise the number of in-place updates.
+  | FusedEdges'          -- ^ Minimise the number of unfused edges, then maximise the number of in-place updates.
+  -- Custom objectives:
+  | MemoryUsage          -- ^ Minimise the number of distinct intermediate arrays.
+  | MemoryUsage'         -- ^ Version of `MemoryUsage` that prioritizes fusion when two solutions would otherwise have the same costs.
   deriving (Show, Bounded, Enum, Eq, Ord)
 
 -- TODO: _obj is now obsolete
@@ -56,9 +60,9 @@ data IUpdatesObjective
 -- We could add some assertions, but if all the input is well-formed (no labels, constraints, etc
 -- that reward putting non-siblings in the same cluster) this is fine: We will interpret 'cluster 3'
 -- with parents `Nothing` as a different cluster than 'cluster 3' with parents `Just 5`.
-makeILP :: forall op. MakesILP op => FusionObjective -> FusionILP op -> ILP op
-makeILP _obj (FusionILP graph constraints bounds) =
-  ILP minMax objFun (allConstraints <> constraints) (allBounds <> bounds) (Constants n m)
+makeILP :: forall op. MakesILP op => Objective -> FusionILP op -> ILP op
+makeILP obj (FusionILP graph constraints bounds) =
+  ILP minMax objFun (graphConstraints <> constraints) (graphBounds <> bounds) (Constants n m)
   where
     compN :: Labels Comp
     compN = graph^.computationNodes
@@ -97,21 +101,10 @@ makeILP _obj (FusionILP graph constraints bounds) =
     m :: Int
     m = S.size buffN
 
-    -- Since we want all clusters to have one 'iteration size', the final objFun should
-    -- take care to never reward 'fusing' disjoint clusters, and then slightly penalise it.
-    -- The alternative is O(n^2) edges, so this is worth the trouble!
-    --
-    -- In the future, maybe we want this to be backend-dependent (add to MakesILP).
-    -- Also future: add @IVO's IPU reward here.
-    fusionObjFun :: Expression op
-    fusionMinMax :: OptDir
-    (fusionMinMax, fusionObjFun) = case defaultFusionObjective @op of
-      NumClusters        -> (Minimise, numberOfClusters)
-      ArrayReads         -> (Minimise, numberOfReads)
-      ArrayReadsWrites   -> (Minimise, numberOfArrayReadsWrites)
-      IntermediateArrays -> (Minimise, numberOfManifestArrays)
-      FusedEdges         -> (Minimise, numberOfUnfusedEdges)
-      Everything         -> (Minimise, numberOfClusters .+. numberOfArrayReadsWrites) -- arrayreadswrites already indictly includes everything else
+
+    ----------------------------------------------------------------------------
+    -- Fusion:
+    ----------------------------------------------------------------------------
 
     -- objective function that maximises the number of edges we fuse, and minimises the number of array reads if you ignore horizontal fusion
     -- numberOfUnfusedEdges = M.foldMapWithKey (\e v -> const v `times` fused e)
@@ -167,7 +160,7 @@ makeILP _obj (FusionILP graph constraints bounds) =
     -- To eliminate that one too, we'd need n^2 edges.
     numberOfClusters  = var (Other "maximumClusterNumber")
     -- removing this from myConstraints makes the ILP slightly smaller, but disables the use of this cost function
-    numberOfClustersC = case defaultFusionObjective @op of
+    numberOfClustersC = case obj of
       NumClusters -> foldMap (\l -> pi l .<=. numberOfClusters) compN
       Everything  -> foldMap (\l -> pi l .<=. numberOfClusters) compN
       _ -> mempty
@@ -211,21 +204,15 @@ makeILP _obj (FusionILP graph constraints bounds) =
 
 
     ----------------------------------------------------------------------------
-    -- For in-place updates:
+    -- In-place updates:
     ----------------------------------------------------------------------------
 
-    iupdatesObjFun :: Expression op
-    iupdatesMinMax :: OptDir
-    (iupdatesMinMax, iupdatesObjFun) = case defaultIUpdatesObjective @op of
-      NoInplaceUpdates        -> internalError "In-place updates objective should have been discarded but was not."
-      NumInplaceUpdates       -> (Minimise, numberOfNonInplaceUpdates)
-      WeightedInplaceUpdates  -> (Minimise, weightedNumberOfNonInplaceUpdates)
-
-    -- Count the number of non-in-place updates.
+    -- Number of in-place updates:
+    numberOfInplaceUpdates = foldMap (notB . inplace) inplaceP
     numberOfNonInplaceUpdates = foldMap inplace inplaceP
 
-    -- Weighted sum of non-in-place updates.
-    weightedNumberOfNonInplaceUpdates = M.foldMapWithKey (\p w -> w .*. inplace p) inplacePweights
+    -- Weighted sum of in-place updates:
+    weightedNumberOfInplaceUpdates = M.foldMapWithKey (\p w -> w .*. notB (inplace p)) inplacePweights :: Expression op
 
     -- If inplace p, then c1 == c2
     acrossClusterC = flip foldMap inplaceP \case
@@ -272,28 +259,31 @@ makeILP _obj (FusionILP graph constraints bounds) =
 
 
     ----------------------------------------------------------------------------
-    -- Combine the fusion and in-place update ILP.
+    -- Objective function
     ----------------------------------------------------------------------------
 
-    -- Combine fusion with in-place updates if in-place updates are enabled,
-    -- otherwise discard the in-place updates part.
-    withInplaceUpdates :: (a -> b -> a) -> a -> b -> a
-    withInplaceUpdates f = if defaultIUpdatesObjective @op /= NoInplaceUpdates then f else const
+    graphConstraints = if enableIU then fusionConstraints <> inplaceConstraints else fusionConstraints
+    graphBounds      = if enableIU then fusionBounds      <> inplaceBounds      else fusionBounds
 
-    -- Combine the two objective functions.
-    minMax = fusionMinMax
-    objFun = withInplaceUpdates
-      (if fusionMinMax == iupdatesMinMax then (.+.) else (.-.))
-      (defaultFusionWeight   @op .*. fusionObjFun)
-      (defaultIUpdatesWeight @op .*. iupdatesObjFun)
-
-    allConstraints = withInplaceUpdates (<>) fusionConstraints inplaceConstraints
-    allBounds      = withInplaceUpdates (<>) fusionBounds      inplaceBounds
-
-
-
-
-
+    -- Since we want all clusters to have one 'iteration size', the final objFun should
+    -- take care to never reward 'fusing' disjoint clusters, and then slightly penalise it.
+    -- The alternative is O(n^2) edges, so this is worth the trouble!
+    --
+    -- In the future, maybe we want this to be backend-dependent (add to MakesILP).
+    -- Also future: add @IVO's IPU reward here.
+    (enableIU, minMax, objFun) = case obj of
+      NumClusters         -> (False, Minimise, numberOfClusters)
+      ArrayReads          -> (False, Minimise, numberOfReads)
+      ArrayReadsWrites    -> (False, Minimise, numberOfArrayReadsWrites)
+      IntermediateArrays  -> (False, Minimise, numberOfManifestArrays)
+      FusedEdges          -> (False, Minimise, numberOfUnfusedEdges)
+      Everything          -> (False, Minimise, numberOfClusters .+. numberOfArrayReadsWrites) -- arrayreadswrites already indictly includes everything else
+      ArrayReads'         -> (True,  Minimise, (int m .*. numberOfReads)            .+. numberOfNonInplaceUpdates)
+      ArrayReadsWrites'   -> (True,  Minimise, (int m .*. numberOfArrayReadsWrites) .+. numberOfNonInplaceUpdates)
+      IntermediateArrays' -> (True,  Minimise, (int m .*. numberOfManifestArrays)   .+. numberOfNonInplaceUpdates)
+      FusedEdges'         -> (True,  Minimise, (int m .*. numberOfUnfusedEdges)     .+. numberOfNonInplaceUpdates)
+      MemoryUsage         -> (True,  Minimise, numberOfManifestArrays .+. numberOfNonInplaceUpdates)
+      MemoryUsage'        -> (True,  Minimise, (int (n+1) .*. numberOfManifestArrays) .+. (int n .*. numberOfNonInplaceUpdates))  -- We want to prioritise solutions that use fusion, so the weight of fusion is increased by a small factor.
 
 
 

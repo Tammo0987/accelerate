@@ -40,8 +40,6 @@ import Data.Array.Accelerate.Trafo.Partitioning.ILP.Labels
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Solver
 import Data.Array.Accelerate.Type
 
-import {-# SOURCE #-} Data.Array.Accelerate.Trafo.Partitioning.ILP.Solve (FusionObjective (..), IUpdatesObjective (..))
-
 -- Data structures
 import Data.Set (Set)
 import Data.Map (Map)
@@ -426,39 +424,6 @@ class ( ShrinkArg (BackendClusterArg op), Eq (BackendVar op)
   -- | This function lets the backend define additional constraints on the ILP.
   finalize :: FusionGraph -> Constraint op
 
-  -- | The default fusion objective defined by the backend.
-  --
-  -- No defintion defaults to 'FusedEdges'.
-  defaultFusionObjective :: FusionObjective
-  defaultFusionObjective = IntermediateArrays
-
-  -- | The default in-place update mode defined by the backend.
-  --
-  -- No definition defaults to 'InplaceUpdates'.
-  defaultIUpdatesObjective :: IUpdatesObjective
-  defaultIUpdatesObjective = NumInplaceUpdates
-
-  -- | The default weight applied to the fusion objective.
-  --
-  -- No definition defaults to the number of buffers in the graph, with numInplaceUpdates <= nBuffs.
-  defaultFusionWeight :: Number
-  -- defaultFusionWeight = Number nBuffs
-  defaultFusionWeight = 1
-
-  -- | The default weight applied to the in-place updates objective.
-  --
-  -- No definition defaults to 1 (perform in-place updates where possible).
-  defaultIUpdatesWeight :: Number
-  defaultIUpdatesWeight = 1
-
-  -- | How to combine the weights of 2 in-place update paths.
-  --
-  -- No defintion defaults to discarding both weights and returning 1.
-  -- The first argument is the current path weight, the second argument is the
-  -- weight of the (unit length) path that is being added.
-  combineIUpdateWeight :: Number -> Number -> Number
-  combineIUpdateWeight _ _ = 1
-
 -- | Attach backend-specific information to labelled arguments.
 labelLabelledArgs :: MakesILP op => Solution op -> Label Comp -> LabelledArgs env args -> LabelledArgsOp op env args
 labelLabelledArgs sol l (arg :>: args) = labelLabelledArg sol l arg :>: labelLabelledArgs sol l args
@@ -516,7 +481,7 @@ pi :: Label Comp -> Expression op
 pi = var . Pi
 
 -- | No clue what this is for.
-delayed :: Label GVal -> Expression op
+delayed :: MakesILP op => Label GVal -> Expression op
 delayed = notB . manifest
 
 -- | Constructor for 'Manifest' variables.
@@ -912,7 +877,7 @@ mkFullGraphF acc = finalizeInplacePaths (s^.fusionILP, s^.symbols, s^.allocators
   where (_, s) = runState (mkFusionGraphF acc) initialFusionGraphState
 
 -- | Make the supplied buffers manifest.
-manifestBuffers :: HasFusionILP g op => Set (Label GVal) -> g -> g
+manifestBuffers :: (MakesILP op, HasFusionILP g op) => Set (Label GVal) -> g -> g
 manifestBuffers bs = fusionILP.constraints <>~ foldMap (\b -> manifest b .==. int 0) bs
 
 
@@ -1137,11 +1102,7 @@ and the environment before some operation is executed.
 -- In-place update path extension
 --------------------------------------------------------------------------------
 
--- | Creates unit-sized in-place update paths. Should be used by the backend to
---   create in-place update paths where applicable. We do not need to check the
---   type of the elements here, since these will be checked later. This ensures
---   we can still create paths that would alter the type of the elements to an
---   incompatible type and then back to a compatible type.
+-- | Create in-place paths from a computation, one of its inputs and one of its outputs.
 mkUnitInplacePaths :: HasCallStack => Number -> Label Comp -> ArgLabel (In sh e) -> ArgLabel (Out sh' e') -> Map InplacePath Number
 mkUnitInplacePaths n c = mkInplacePaths n c c
 
@@ -1155,80 +1116,6 @@ mkInplacePaths n r w lIn lOut
   , bsOut <- getLabelUniqueArrDeps lOut
   = foldMap (\bIn -> foldMap (\bOut -> M.singleton ((bIn, r), (w, bOut)) n) bsOut) bsIn
 mkInplacePaths _ _ _ _ _ = M.empty
-
-
--- -- | Combines the in-place update paths of length 1 (i.e. across computations)
--- --   to in-place update paths of arbitrary length.
--- combineInplacePaths :: forall op. MakesILP op => FullGraph op -> FullGraph op
--- combineInplacePaths g = g&fusionILP.inplacePaths %~ stepsPaths 50
---   where
---     -- Keep extending the path until no more extensions are possible or the
---     -- iteration limit reaches 0.
---     -- The iteration limit is only there to prevent infinite loops, although I
---     -- don't think this can happen.
---     -- We could make this iteration limit an argument to the function and a
---     -- global setting for the compiler later on.
---     stepsPaths :: Int -> Map InplacePath Number -> Map InplacePath Number
---     stepsPaths 0 ps = internalWarning "combineInplacePaths: iteration limit reached" False ps
---     stepsPaths n ps | M.null ps = ps
---                     | otherwise = ps <> stepsPaths (n-1) (M.foldMapWithKey stepPath ps)
-
---     -- Extend the path by 1 step.
---     -- This is done by looking at which computations can fuse with the end of
---     -- the path, then finding any paths that start with the newly constructed
---     -- read.
---     stepPath :: InplacePath -> Number -> Map InplacePath Number
---     stepPath (r, w@(_, b)) n = case M.lookup w nextComps of
---       Nothing -> M.empty
---       Just cs -> flip foldMap cs \c -> case M.lookup (b, c) nextPaths of
---         Nothing -> M.empty
---         Just ws -> M.mapKeys (r,) $ M.map (combineIUpdateWeight @op n) ws
-
---     -- For efficient lookup of extensions for paths.
---     -- This maps read edges to the write edges that can be updated in-place with
---     -- the read edge.
---     nextPaths :: Map ReadEdge (Map WriteEdge Number)
---     nextPaths = M.fromListWith M.union $ map (\((r,w),n)->(r,M.singleton w n)) $ M.toList $ g^.fusionILP.inplacePaths
-
---     -- For efficient lookup of which computation the data flows into.
---     -- We only consider computations that can fuse with the previous computation
---     -- because we can only perform an in-place update if the computations fuse.
---     nextComps :: Map WriteEdge (Labels Comp)
---     nextComps = M.fromListWith S.union $ map (tripleToLeftRec . (_3 %~ S.singleton)) $ S.toList $ g^.fusionILP.fusibleEdges
-
-
--- | Merges in-place update paths until no more merging is possible.
--- A merge is possible if:
--- 1. The start and end of the paths are the same buffer.
--- 2. The reading and writing computations can be fused.
--- Possibly equivalent to combineInplacePaths, but simpler.
-mergeInplacePaths :: forall op. MakesILP op => FullGraph op -> FullGraph op
-mergeInplacePaths g = g&fusionILP.inplacePaths %~ go 50
-  where
-    -- Keep merging until the size no longer changes or the iteration limit reaches 0.
-    go :: Int -> Map InplacePath Number -> Map InplacePath Number
-    go 0 ps = internalWarning "mergeInplacePaths: iteration limit reached" False ps
-    go n ps | ps' <- ps <> M.foldMapWithKey mergePath ps
-            , M.size ps /= M.size ps' = go (n-1) ps'
-            | otherwise = ps
-
-    -- Merge a path with all paths that can be merged with it.
-    mergePath :: InplacePath -> Number -> Map InplacePath Number
-    mergePath p@(_,(_,b)) n = maybe mempty (M.foldMapWithKey (mergePaths p n)) (M.lookup b pathMap)
-
-    -- Merge two paths if they can be merged.
-    mergePaths :: InplacePath -> Number -> InplacePath -> Number -> Map InplacePath Number
-    mergePaths (r,(c1,b)) n1 ((b',c2),w) n2
-      | b == b' && S.member (c1,b,c2) fusibleSet = M.singleton (r,w) (combineIUpdateWeight @op n1 n2)
-      | otherwise = M.empty
-
-    -- Set of fusible edges.
-    fusibleSet :: Set FusibleEdge
-    fusibleSet = g^.fusionILP.fusibleEdges
-
-    -- Map from input buffers to the in-place update.
-    pathMap :: Map (Label GVal) (Map InplacePath Number)
-    pathMap = groupByMap (\((b,_),_) _ -> b) (g^.fusionILP.inplacePaths)
 
 
 -- | Filters the in-place update paths to only include those that are valid.
@@ -1272,75 +1159,7 @@ filterInplacePaths g = g&fusionILP.inplacePaths %~ filterKeys sameElementType
 -- It is then possible to still use the merging strategy, as it may yield some additional paths.
 -- However, in testing it seems that almost no paths are missing.
 finalizeInplacePaths :: MakesILP op => FullGraph op -> FullGraph op
-finalizeInplacePaths = filterInplacePaths . mergeInplacePaths . mkInplacePathsFromClusters
-
-
--- | Naive approach: Work forwards from a buffer.
-mkInplacePathsFromBuffers :: forall op. MakesILP op => FullGraph op -> FullGraph op
-mkInplacePathsFromBuffers g = g&fusionILP.inplacePaths .~ validPaths
-  where
-    -- All valid in-place update paths in the graph.
-    validPaths :: Map InplacePath Number
-    validPaths = M.fromSet (const 1) $ S.filter validInplaceUpdate $ foldMap go initialPaths
-
-    -- Recursively extends the in-place path by looking at the next computation
-    -- and its outputs.
-    go :: InplacePath -> Set InplacePath
-    go (r, w) = extendedPaths <> foldMap go extendedPaths
-      where
-        -- All paths that can be formed by extending the current path.
-        extendedPaths :: Set InplacePath
-        extendedPaths = case M.lookup w nextMap of
-          Nothing -> S.empty
-          Just cs -> flip foldMap cs \c -> case M.lookup c outputMap of
-              Nothing -> S.empty
-              Just bs -> S.map ((r,).(c,)) bs
-
-    -- | Checks if the in-place update path is a valid one.
-    --
-    -- An in-place update path is valid if:
-    -- 1. We have sole ownership of both buffers. (Alloc, Unit)
-    -- 2. The buffers are of the same shape.
-    -- 3. The elements in the buffers are of the same size.
-    validInplaceUpdate :: InplacePath -> Bool
-    validInplaceUpdate ((b1, _), (_, b2)) = case (getAlloc b1, getAlloc b2) of
-        (SAlc env1 shr1 e1 sh1, SAlc env2 shr2 e2 sh2)
-          | Just Refl <- matchShapeR shr1 shr2
-          , (_, shVars1, _) <- getVarsFromEnv sh1 env1
-          , (_, shVars2, _) <- getVarsFromEnv sh2 env2
-          -> shVars1 == shVars2 && bytes e1 == bytes e2
-        (SUnt _ v1, SUnt _ v2)
-          -> bytes (varType v1) == bytes (varType v2)
-        _ -> False
-      where
-        getAlloc :: Label GVal -> Symbol op
-        getAlloc b = case (g^.allocator b) >>= (\c -> g^.symbol c) of
-          Just x@SAlc{} -> x
-          Just x@SUnt{} -> x
-          Just x@SUse{} -> x
-          Just x@SFun{} -> x
-          Just _  -> internalError "getAlloc: not an array allocator"
-          Nothing -> internalError "getAlloc: no allocator found"
-
-        bytes :: ScalarType e -> Int
-        bytes = bytesElt . TupRsingle
-
-    -- The initial, length-1 paths that are formed from computations and all
-    -- their inputs and outputs.
-    initialPaths :: Set InplacePath
-    initialPaths = flip foldMap (g^.fusionILP.readEdges) \r@(_,c) -> case M.lookup c outputMap of
-        Nothing -> S.empty
-        Just bs -> S.map ((r,).(c,)) bs
-
-    -- For efficient lookup of outputs of computations.
-    outputMap :: Map (Label Comp) (Labels GVal)
-    outputMap = M.fromListWith S.union $ map (_2 %~ S.singleton) $ S.toList $ g^.fusionILP.writeEdges
-
-    -- For efficient lookup of which computation the data flows into.
-    -- We only consider computations that can fuse with the previous computation
-    -- because we can only perform an in-place update if the computations fuse.
-    nextMap :: Map WriteEdge (Labels Comp)
-    nextMap = M.fromListWith S.union $ map (tripleToLeftRec . (_3 %~ S.singleton)) $ S.toList $ g^.fusionILP.fusibleEdges
+finalizeInplacePaths = filterInplacePaths . mkInplacePathsFromClusters
 
 
 -- | Calculate in-place update paths based on vertical clusters.
@@ -1372,6 +1191,7 @@ mkInplacePathsFromClusters g = g&fusionILP.inplacePaths <>~ go initialClusters
       (Just (SExe _ largsIn _), Just (SExe _ largsOut _)) ->
         foldMapInputLabels (\lIn -> foldMapOutputLabels (mkInplacePaths 1 cIn cOut lIn) largsOut) largsIn
       _ -> mempty
+
 
 
 --------------------------------------------------------------------------------

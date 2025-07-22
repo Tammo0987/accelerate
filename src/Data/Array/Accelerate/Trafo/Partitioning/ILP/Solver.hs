@@ -173,9 +173,17 @@ timesN = times ((+10) . (*2) . nComps)
 var :: Var op -> Expression op
 var = (Number (const 1) :*)
 
--- | Use a constant in an 'Expression'.
-int :: Int -> Expression op
-int = Constant . Number . const
+
+class IsNumber a where
+  -- | Use an `Int` as `Expression` or `Number`.
+  int :: Int -> a
+
+instance IsNumber Number where
+  int = Number . const
+
+instance IsNumber (Expression op) where
+  int = Constant . Number . const
+
 
 -- | @x >= y@
 (.>=.) :: Expression op -> Expression op -> Constraint op
