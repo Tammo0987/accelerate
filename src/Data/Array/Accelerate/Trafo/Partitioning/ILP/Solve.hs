@@ -1,13 +1,9 @@
 {-# LANGUAGE AllowAmbiguousTypes #-}
-{-# LANGUAGE ScopedTypeVariables #-}
+
 {-# LANGUAGE DataKinds #-}
-{-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE GADTs #-}
-{-# LANGUAGE RecordWildCards #-}
-{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE BlockArguments #-}
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 module Data.Array.Accelerate.Trafo.Partitioning.ILP.Solve where
@@ -17,7 +13,6 @@ import Data.Array.Accelerate.Trafo.Partitioning.ILP.Graph hiding (graph, constra
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Labels
     (Label, parent, Labels, LabelType (..) )
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Solver hiding (finalize)
-import Data.Array.Accelerate.Error (internalError)
 
 import Data.List (groupBy, sortOn)
 import Prelude hiding (sum, pi, read )
@@ -208,11 +203,10 @@ makeILP obj (FusionILP graph constraints bounds) =
     ----------------------------------------------------------------------------
 
     -- Number of in-place updates:
-    numberOfInplaceUpdates = foldMap (notB . inplace) inplaceP
     numberOfNonInplaceUpdates = foldMap inplace inplaceP
 
     -- Weighted sum of in-place updates:
-    weightedNumberOfInplaceUpdates = M.foldMapWithKey (\p w -> w .*. notB (inplace p)) inplacePweights :: Expression op
+    weightedNumberOfNonInplaceUpdates = M.foldMapWithKey (\p w -> w .*. inplace p) inplacePweights
 
     -- If inplace p, then c1 == c2
     acrossClusterC = flip foldMap inplaceP \case
