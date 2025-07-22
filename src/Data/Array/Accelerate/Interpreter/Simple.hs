@@ -86,14 +86,7 @@ import Prelude                                                      hiding ( (!!
 -- | Run a complete embedded array program using the reference interpreter.
 --
 run :: (HasCallStack, Sugar.Arrays a) => Smart.Acc a -> a
-run a = unsafePerformIO execute
-  where
-    !acc    = Sharing.convertAcc a
-    execute = do
-      -- Debug.dumpGraph $!! acc
-      Debug.dumpSimplStats
-      res <- phase "execute" Debug.elapsed $ evaluate $ evalOpenAcc acc Empty
-      return $ Sugar.toArr $ snd res
+run = runN
 
 -- | This is 'runN' specialised to an array program of one argument.
 --

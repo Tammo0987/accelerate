@@ -21,7 +21,6 @@
 
 module Data.Array.Accelerate.Trafo.NewNewFusion (
 
-  convertAcc,  convertAccWith,
   convertAfun, convertAfunWith,
 
   Benchmarking(..)
@@ -49,20 +48,6 @@ import Data.Array.Accelerate.Trafo.Partitioning.ILP.Solve (Objective (..))
 defaultSolver :: Solver
 defaultSolver =
   MIPSolver CBC
-
--- | Apply the fusion transformation to a de Bruijn AST
---
-convertAccWith
-    :: (HasCallStack, MakesILP op, SimplifyOperation op, Pretty.PrettyOp (Cluster op))
-    => Config
-    -> FusionType
-    -> OperationAcc op () a
-    -> PartitionedAcc op () a
-convertAccWith _ (Fusion o)       = withSimplStats (ilpFusion'' defaultSolver o)
-convertAccWith _ (Benchmarking b) = withSimplStats (bench b FusedEdges)
-
-convertAcc :: (HasCallStack, MakesILP op, SimplifyOperation op, Pretty.PrettyOp (Cluster op)) => FusionType -> OperationAcc op () a -> PartitionedAcc op () a
-convertAcc = convertAccWith defaultOptions
 
 -- | Apply the fusion transformation to a function of array arguments
 --
