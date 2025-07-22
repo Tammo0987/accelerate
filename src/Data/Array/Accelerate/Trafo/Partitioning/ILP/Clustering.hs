@@ -112,7 +112,7 @@ topSort singletons (Graph _ fedges fpedges) cluster construct = if singletons th
           . M.fromList
           . map (,[])
           . S.toList
-          
+
 
     -- Make a graph of all these labels and their incoming edges (for horizontal fusion)...
     fpparents =                    S.unions $ S.map (\l -> (S.\\ cluster) $ S.map (\(a:->_)->a) $ S.filter (\(_:->b)->l==b) fpedges) cluster
@@ -120,6 +120,7 @@ topSort singletons (Graph _ fedges fpedges) cluster construct = if singletons th
     parentsPlusEdges :: S.Set (Label, BackendArg op, Label) -- (Parent, Order, Target)
     parentsPlusEdges = S.unions $ S.unions $ S.map (\l -> let relevantEdges = S.filter (\(a:->b)->l==a && b `S.member` cluster) (fedges S.\\ fpedges)
                                                               orders :: S.Set (BackendArg op)
+                                                              -- TODO: why not just `ordersWithEdges = S.map (\e@(_ :->b) -> (l,readOrderOf e,b)) relevantEdges`?
                                                               orders = S.map readOrderOf relevantEdges
                                                               ordersWithEdges = S.map (\o -> S.map (\(_:->b) -> (l,o,b)) $ S.filter (\e-> readOrderOf e == o) relevantEdges) orders
                                                           in ordersWithEdges) parents
