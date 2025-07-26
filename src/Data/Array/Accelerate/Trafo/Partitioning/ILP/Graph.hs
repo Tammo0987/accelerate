@@ -1207,7 +1207,16 @@ mkInplacePathsFromClusters g = g&fusionILP.inplacePaths <>~ go initialClusters
 -- We cannot guarantee the index is present in env', so we use the partiality of ReindexPartial by
 -- returning a Maybe. Uses unsafeCoerce to re-introduce type information implied by the EnvLabels.
 mkReindexPartial :: forall env env'. Map (Label GVal) (Label GVal) -> BuffersEnv env -> BuffersEnv env' -> ReindexPartial Maybe env env'
-mkReindexPartial m env env' idx = idxOf (inplaceOf $ lookupIdxInEnv idx env^._2) env'
+mkReindexPartial m env env' idx = let val = lookupIdxInEnv idx env^._2 in case idxOf (inplaceOf val) env' of
+    Just idx' -> Just idx'
+    -- Gracefully fall back to using the original value instead of the one defined by an in-place update.
+    -- This is a bit unsafe, because there is no guarantee anything has been written to this value, or even that it exists at all.
+    -- That said, the only time this occurs is when the in-place update value is not in the new environment, which I think only happens
+    -- when the value was returned and thus the in-place update value became out-of-scope.
+    -- In the newly constructed program the in-place update value will be returned instead of the original value,
+    -- so at this point it shouldn't matter that we use the original value, as it will point to the in-place updated value.
+    -- WARNING: The following line might cause issues, check if problems arise.
+    Nothing   -> idxOf val env'
   where
     -- Replace the buffer with the one we will actually write the data to.
     inplaceOf :: BuffersTup a -> BuffersTup a
