@@ -225,8 +225,8 @@ makeILP obj (FusionILP graph constraints bounds) =
     singleReadC  = foldMap (packB 1) $ foldl (flip \p@((b,_),_) -> M.insertWith (<>) b [inplace p]) M.empty inplaceP
     singleWriteC = foldMap (packB 1) $ foldl (flip \p@(_,(_,b)) -> M.insertWith (<>) b [inplace p]) M.empty inplaceP
 
-    -- If inplace p, then pimax b1 == pi c2
-    inplaceClusterC = foldMap (\p@((b1,_),(c2,_)) -> between (int 0) (pimax b1 .-. pi c2) (timesN $ inplace p)) inplaceP
+    -- If inplace p, then pimax b1 >= pi c2
+    inplaceClusterC = foldMap (\p@((b1,_),(c2,_)) -> (pimax b1 .-. pi c2) .<=. timesN (inplace p)) inplaceP
 
     -- Iff     inplace p, then pi c1     <= pimax b1
     -- Iff not inplace p, then pi c1 + 1 <= pimax b1
@@ -281,7 +281,7 @@ makeILP obj (FusionILP graph constraints bounds) =
       IntermediateArrays' -> (True,  Minimise, (int m .*. numberOfManifestArrays)   .+. numberOfNonInplaceUpdates)
       FusedEdges'         -> (True,  Minimise, (int m .*. numberOfUnfusedEdges)     .+. numberOfNonInplaceUpdates)
       MemoryUsage         -> (True,  Minimise, numberOfManifestArrays .+. numberOfNonInplaceUpdates)
-      MemoryUsage'        -> (True,  Minimise, (int (n+1) .*. numberOfManifestArrays) .+. (int n .*. numberOfNonInplaceUpdates))  -- We want to prioritise solutions that use fusion, so the weight of fusion is increased by a small factor.
+      MemoryUsage'        -> (True,  Minimise, (int (m+1) .*. numberOfManifestArrays) .+. (int m .*. numberOfNonInplaceUpdates))  -- We want to prioritise solutions that use fusion, so the weight of fusion is increased by a small factor.
 
 
 -- | Extract the read directions from the ILP solution.
