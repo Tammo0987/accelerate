@@ -1295,7 +1295,7 @@ getOpsLoopDirections flatOps = partialEnvFromList join $ map (uncurry EnvBinding
     join LoopMonotone d = d
     join d LoopMonotone = d
     join LoopAscending LoopAscending = LoopAscending
-    join LoopAscending LoopDescending = LoopDescending
+    join LoopDescending LoopDescending = LoopDescending
     join _ _ = internalError "Illegal cluster: an ascending (left-to-right) operation like scanl was fused with a descending (right-to-left) operation like scanr"
 
     go
