@@ -1211,12 +1211,10 @@ mkReindexPartial m env env' idx = let val = lookupIdxInEnv idx env^._2 in case i
     Just idx' -> Just idx'
     -- Gracefully fall back to using the original value instead of the one defined by an in-place update.
     -- This is a bit unsafe, because there is no guarantee anything has been written to this value, or even that it exists at all.
-    -- That said, the only time this occurs is when the in-place update value is not in the new environment, which I think only happens
-    -- when the value was returned and thus the in-place update value became out-of-scope.
-    -- In the newly constructed program the in-place update value will be returned instead of the original value,
-    -- so at this point it shouldn't matter that we use the original value, as it will point to the in-place updated value.
-    -- WARNING: The following line might cause issues, check if problems arise.
-    Nothing   -> idxOf val env'
+    -- That said, I think this can only happen when a value is returned, thus causing both the original value and the in-place updated value to be out-of-scope.
+    -- The returned value is then stored in another scope, so if the return statement properly replaces the original value with the in-place updated value, then the resulting program should bind the in-place updated value instead of the original.
+    -- WARNING: No guarantee that this will always work, check if there are any issues.
+    Nothing -> internalWarning "mkReindexPartial: Fallback to non-in-place value." False $ idxOf val env'
   where
     -- Replace the buffer with the one we will actually write the data to.
     inplaceOf :: BuffersTup a -> BuffersTup a
