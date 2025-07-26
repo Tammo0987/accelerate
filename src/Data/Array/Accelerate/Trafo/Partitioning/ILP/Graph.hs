@@ -20,6 +20,7 @@
 {-# LANGUAGE OverloadedStrings        #-}
 {-# OPTIONS_GHC -Wno-orphans          #-}
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE PatternSynonyms #-}
 module Data.Array.Accelerate.Trafo.Partitioning.ILP.Graph where
 
 import Prelude hiding ( init, reads )
@@ -71,6 +72,10 @@ type DataflowEdge  = (Label Comp, Label GVal, Label Comp)
 type FusibleEdge   = DataflowEdge
 type InfusibleEdge = DataflowEdge
 type InplacePath   = (ReadEdge, WriteEdge)
+
+-- For backwards compatitibility:
+pattern (:->) :: Label Comp -> Label Comp -> DataflowEdge
+pattern w :-> r <- (w,_,r)
 
 -- | Program graph.
 --
@@ -563,9 +568,9 @@ instance Show (LabelledArgOp op env a) where
   show :: LabelledArgOp op env a -> String
   show (LOp _ bs _) = show bs
 
-unlabelop :: LabelledArgsOp op env a -> Args env a
-unlabelop ArgsNil = ArgsNil
-unlabelop ((LOp arg _ _) :>: args) = arg :>: unlabelop args
+unLabelOp :: LabelledArgsOp op env a -> Args env a
+unLabelOp ArgsNil = ArgsNil
+unLabelOp ((LOp arg _ _) :>: args) = arg :>: unLabelOp args
 
 reindexLabelledArgOp :: Applicative f => ReindexPartial f env env' -> LabelledArgOp op env t -> f (LabelledArgOp op env' t)
 reindexLabelledArgOp k (LOp (ArgVar vars               ) l o) = (\x -> LOp x l o)  .   ArgVar          <$> reindexVars k vars

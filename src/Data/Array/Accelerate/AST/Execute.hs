@@ -22,7 +22,6 @@
 module Data.Array.Accelerate.AST.Execute (
   Execute(..),
   executeAfun,
-  executeAcc,
   GFunctionR(..)
 ) where
 
@@ -44,8 +43,3 @@ class Execute sched kernel where
 
 executeAfun :: forall sched kernel t. (IsSchedule sched, Execute sched kernel) => GFunctionR t -> Linked sched kernel (Scheduled sched t) -> IOFun t
 executeAfun repr sched = flattenIOFun repr $ callScheduledFun @sched repr $ executeAfunSchedule @sched @kernel repr sched
-
-executeAcc :: forall sched kernel t. (IsSchedule sched, Execute sched kernel) => GroundsR t -> Linked sched kernel (ScheduleOutput sched t -> ()) -> IO t
-executeAcc repr sched
-  | Refl <- reprIsBody @sched repr
-  = executeAfun @sched @kernel (GFunctionRbody repr) sched

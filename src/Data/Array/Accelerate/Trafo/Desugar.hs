@@ -1122,19 +1122,41 @@ desugarBuffers (TupRsingle tp)  n buffer
 
 desugarBoundaryToFunction :: forall benv sh e. Boundary benv (Array sh e) -> Arg benv (In sh e) -> Fun benv (sh -> e)
 desugarBoundaryToFunction boundary (ArgArray _ repr@(ArrayR shr tp) sh buffers) = case boundary of
-  Function f -> f
-  Constant e -> Lam (LeftHandSideWildcard $ shapeType shr) $ Body $ mkConstant tp e
+  Function f
+    | DeclareVars lhs _ value <- declareVars $ shapeType shr
+    , value' <- value weakenId
+    -> Lam lhs $ Body $ Cond
+      (inbounds shr value' sh)
+      (index repr sh buffers $ expVars value')
+      (apply1 tp f $ expVars value')
+  Constant e
+    | DeclareVars lhs _ value <- declareVars $ shapeType shr
+    , value' <- value weakenId
+    -> Lam lhs $ Body $ Cond
+      (inbounds shr value' sh)
+      (index repr sh buffers $ expVars value')
+      (mkConstant tp e)
   Clamp      -> reindex clamp
   Mirror     -> reindex mirror
   Wrap       -> reindex wrap
   where
+    inbounds :: ShapeR sh' -> ExpVars env sh' -> GroundVars benv sh' -> OpenExp env benv PrimBool
+    inbounds ShapeRz _ _ = Const scalarTypeWord8 1
+    inbounds (ShapeRsnoc shr') (TupRpair ixs (TupRsingle ix)) (TupRpair szs (TupRsingle sz)) =
+      mkBinary PrimLAnd
+        (mkBinary PrimLAnd
+          (mkBinary (PrimGtEq singleType) (Evar ix) $ Const scalarTypeInt 0)
+          (mkBinary (PrimLt singleType) (Evar ix) $ paramIn scalarTypeInt sz)
+        )
+        (inbounds shr' ixs szs)
+    inbounds _ _ _ = internalError "Illegal tuple for shape"
 
     -- Note: the expressions passed as argument may be duplicated in the resulting code.
     -- This doesn't explode the code size as they are always an Evar or a Parameter.
     --
     clamp, mirror, wrap :: OpenExp env benv Int -> OpenExp env benv Int -> OpenExp env benv Int
     -- clamp ix sz = max(0, min(ix, sz - 1))
-    clamp ix sz = mkBinary (PrimMax singleType) (Const scalarTypeInt 0) $ mkBinary (PrimMin singleType) ix $ sub sz $ Const scalarTypeInt 0
+    clamp ix sz = mkBinary (PrimMax singleType) (Const scalarTypeInt 0) $ mkBinary (PrimMin singleType) ix $ sub sz $ Const scalarTypeInt 1
 
     -- if ix < 0 then -ix
     mirror ix sz = Cond (mkBinary (PrimLt singleType) ix (Const scalarTypeInt 0)) (PrimApp (PrimNeg numType) ix)

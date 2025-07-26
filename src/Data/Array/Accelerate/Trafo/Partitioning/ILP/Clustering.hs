@@ -116,40 +116,36 @@ topSort _ _ (S.toList -> [l]) _ = [ExecL [l]]  -- If the cluster is empty.
 topSort singletons (FusionGraph strictEdges dataflowEdges _) cluster readDirM =
   if singletons then concatMap (map (ExecL . pure)) topsorteds else map ExecL topsorteds
   where
-    buildGraph
-      = G.graphFromEdges
-      . map (\(a,b) -> (a,a,b))
-      . M.toList
-      . flip (S.fold (\(x,i,y) -> M.adjust ((y,defaultBAop):) (x,i))) edges
-      . M.fromList
-      . map (,[])
-      . S.toList
+    buildGraph =
+            G.graphFromEdges
+          . map (\(a,b) -> (a,a,b))
+          . M.toList
+          . flip (S.fold (\(x,i,y) -> M.adjust ((y,defaultDir):) (x,i))) edges
+          . M.fromList
+          . map (,[])
+          . S.toList
 
-    fusibleEdges, infusibleEdges :: S.Set (Label Comp, Label GVal, Label Comp)
-    (fusibleEdges, infusibleEdges) = S.partition (\(c1, _, c2) -> S.notMember (c1, c2) strictEdges) dataflowEdges
-
+    fedges, fpedges :: S.Set (Label Comp, Label GVal, Label Comp)
+    (fedges, fpedges) = S.partition (\(c1, _, c2) -> S.notMember (c1, c2) strictEdges) dataflowEdges
 
     -- Make a graph of all these labels and their incoming edges (for horizontal fusion)...
-    fpparents =                    S.unions $ S.map (\l -> (S.\\ cluster) $ S.map (^._1) $ S.filter (\(_,_,b)->l==b) infusibleEdges) cluster
-    parents   = (S.\\ fpparents) $ S.unions $ S.map (\l -> (S.\\ cluster) $ S.map (^._1) $ S.filter (\(_,_,b)->l==b) fusibleEdges)   cluster
-    -- fpparents: computations that produce a value for something in the cluster, but are not in the cluster themselves and cannot be fused with the thing in the cluster.
-    -- parents: computations that produce a value for something in the cluster, but are not in the cluster themselves and can be fused with the thing in the cluster.
-
-
+    fpparents =                    S.unions $ S.map (\l -> (S.\\ cluster) $ S.map (\(a:->_)->a) $ S.filter (\(_:->b)->l==b) fpedges) cluster
+    parents   = (S.\\ fpparents) $ S.unions $ S.map (\l -> (S.\\ cluster) $ S.map (\(a:->_)->a) $ S.filter (\(_:->b)->l==b) fedges ) cluster
     parentsPlusEdges :: S.Set (Label Comp, Int, Label Comp) -- (Parent, Order, Target)
-    parentsPlusEdges = S.unions $ S.unions $ S.map (\l -> let relevantEdges   = S.filter (\(a,_,b)->l==a && b `S.member` cluster) fusibleEdges
-                                                              orders          = S.map readOrderOf relevantEdges
-                                                              ordersWithEdges = S.map (\o -> S.map (\(_,_,b) -> (l,o,b)) $ S.filter (\e-> readOrderOf e == o) relevantEdges) orders
+    parentsPlusEdges = S.unions $ S.unions $ S.map (\l -> let relevantEdges = S.filter (\(a:->b)->l==a && b `S.member` cluster) (fedges S.\\ fpedges)
+                                                              -- TODO: why not just `ordersWithEdges = S.map (\e@(_ :->b) -> (l,readOrderOf e,b)) relevantEdges`?
+                                                              orders = S.map readOrderOf relevantEdges
+                                                              ordersWithEdges = S.map (\o -> S.map (\(_:->b) -> (l,o,b)) $ S.filter (\e-> readOrderOf e == o) relevantEdges) orders
                                                           in ordersWithEdges) parents
 
-    nodes = S.map (,defaultBAop) cluster <> S.map (\(x,y,_)-> (x,y)) parentsPlusEdges
-    edges = S.union parentsPlusEdges $ S.map (\(a,_,b) -> (a,defaultBAop,b)) dataflowEdges
+    nodes = S.map (,defaultDir) cluster <> S.map (\(x,y,_)-> (x,y)) parentsPlusEdges
+    edges = S.union parentsPlusEdges $ S.map (\(a,_,b) -> (a,defaultDir,b)) dataflowEdges
     (graph, getAdj, _) = buildGraph nodes
 
     -- .. split it into connected components and remove those parents from last step,
     components = map (S.filter (\(l,_)->l `S.member` cluster) . S.fromList . map ((^._1) . getAdj) . T.flatten) $ G.components graph
     -- and make a graph of each of them...
-    graphs = if singletons then [buildGraph $ S.map (,defaultBAop) cluster] else map buildGraph components
+    graphs = if singletons then [buildGraph $ S.map (,defaultDir) cluster] else map buildGraph components
     -- .. and finally, topologically sort each of those to get the labels per cluster sorted on dependencies
     topsorteds = map (\(graph', getAdj', _) -> map (view (_1 . _1) . getAdj') $ G.topSort graph') graphs
 
@@ -158,8 +154,7 @@ topSort singletons (FusionGraph strictEdges dataflowEdges _) cluster readDirM =
       Just i  -> i
       Nothing -> error $ "can't get readorder " ++ show (b,r)
 
-    defaultBAop :: Int
-    defaultBAop = 0
+    defaultDir = 0
 
     -- Old readOrderOf (depended on Symbols instead of ReadDirM):
     -- readOrderOf :: HasCallStack => (Label Comp, Label GVal, Label Comp) -> BackendArg op
@@ -202,8 +197,8 @@ openReconstructF a b c d l e f g h = (\(Right x) -> x) $ openReconstruct' a b c 
 openReconstruct' :: forall op aenv. (MakesILP op, SimplifyOperation op) => Bool -> BuffersEnv aenv -> FusionGraph -> [ClusterLs] -> Maybe (Label Comp) -> M.Map (Label Comp) [ClusterLs] -> Symbols op -> ReadDirM -> InplaceM -> Either (Exists (PreOpenAcc (Clustered op) aenv)) (Exists (PreOpenAfun (Clustered op) aenv))
 openReconstruct' singletons labelenv graph clusterslist mlab subclustersmap symbols readDirM inplaceM =
   case mlab of
-  Just l  -> Right $ makeASTF labelenv l mempty
-  Nothing -> Left $ makeAST labelenv clusters mempty
+  Just l  -> Right $ makeASTF labelenv l
+  Nothing -> Left $ makeAST labelenv clusters
   where
     mkReindexPartial' :: BuffersEnv env -> BuffersEnv env' -> ReindexPartial Maybe env env'
     mkReindexPartial' = mkReindexPartial inplaceM
@@ -214,10 +209,10 @@ openReconstruct' singletons labelenv graph clusterslist mlab subclustersmap symb
     -- Those are stored in the 'prev' argument.
     -- Note also that we currently assume that the final cluster is the return argument: If all computations are relevant
     -- and our analysis is sound, the return argument should always appear last. If not.. oops
-    makeAST :: forall env. HasCallStack => BuffersEnv env -> [ClusterL] -> M.Map (Label Comp) (Exists (PreOpenAcc (Clustered op) env)) -> Exists (PreOpenAcc (Clustered op) env)
-    makeAST _ [] _ = error "empty AST"
-    makeAST env [cluster] prev = case makeCluster env cluster of
-      Fold c args -> Exists $ Exec c $ unlabelop args
+    makeAST :: forall env. BuffersEnv env -> [ClusterL] -> Exists (PreOpenAcc (Clustered op) env)
+    makeAST _ [] = error "empty AST"
+    makeAST env [cluster] = case makeCluster env cluster of
+      Fold c args -> Exists $ Exec c $ unLabelOp args
       InitFold o l args -> singleton l args o $
                             \c args' ->
                                 Exists $ Exec c (mapArgs (\(LOp a _ _) -> a) args')
@@ -226,48 +221,49 @@ openReconstruct' singletons labelenv graph clusterslist mlab subclustersmap symb
         SExe {}    -> error "should be Fold/InitFold!"
         SExe'{}    -> error "should be Fold/InitFold!"
         SUse se  n be             -> Exists $ Use se n be
-        SITE env' c t f   -> case (makeAST env (subcluster t) prev, makeAST env (subcluster f) prev) of
-          (Exists tacc, Exists facc) -> Exists $ tryBuildAcond (fromJust $ reindexVar (mkReindexPartial' env' env) c) tacc facc
+        SITE env' c t f   -> case (makeAST env (subcluster t), makeAST env (subcluster f)) of
+          (Exists tacc, Exists facc) -> Exists $ tryBuildAcond
+            (fromJust $ reindexVar (mkReindexPartial' env' env) c)
+            tacc
+            facc
         SWhl env' c b i u -> case (subcluster c, subcluster b) of
-          (findTopOfF -> c', findTopOfF -> b') -> case (makeASTF env c' prev, makeASTF env b' prev) of
-            (Exists cfun, Exists bfun) -> Exists $ tryBuildAwhile u cfun bfun (fromJust $ reindexVars (mkReindexPartial' env' env) i)
-        SLet {} -> error $ "let without scope " ++ show cluster
+          (findTopOfF -> c', findTopOfF -> b') -> case (makeASTF env c', makeASTF env b') of
+            (Exists cfun, Exists bfun) -> Exists $ tryBuildAwhile
+              u
+              cfun
+              bfun
+              (fromJust $ reindexVars (mkReindexPartial' env' env) i)
+        SLet {} -> error "let without scope"
         SFun {} -> error "wrong type: function"
         SBod {} -> error "wrong type: function"
+        SBlk {} -> error "wrong type: block"
         SRet env' vars     -> Exists $ Return      (fromJust $ reindexVars (mkReindexPartial' env' env) vars)
         SCmp env' expr     -> Exists $ Compute     (fromJust $ reindexExp  (mkReindexPartial' env' env) expr)
         SAlc env' shr e sh -> Exists $ Alloc shr e (fromJust $ reindexVars (mkReindexPartial' env' env) sh)
         SUnt env' evar     -> Exists $ Unit        (fromJust $ reindexVar  (mkReindexPartial' env' env) evar)
-    makeAST env (cluster:ctail) prev =
+    makeAST env (cluster:ctail) =
       -- TODO: use guards to fuse these two identical cases
       case makeCluster env cluster of
-      NotFold con -> case con of
-        SLet mylhs b u -> case makeAST env [NonExecL b] prev of
-          -- case prev !?? b of
-          Exists bnd -> createLHS mylhs env $ \env' lhs ->
-            case makeAST env' ctail (M.map (\(Exists acc) -> Exists $ weakenAcc lhs acc) $ M.insert b (Exists bnd) prev) of
-              Exists scp
-                 -> Exists $ tryBuildAlet lhs u bnd scp
-        _ -> let res = makeAST env [cluster] prev in case cluster of
-                ExecL _ -> case (res, makeAST env ctail prev) of
-                  (Exists exec@Exec{}, Exists scp) -> Exists $ Alet LeftHandSideUnit (shared TupRunit) exec scp
-                  (Exists (Return TupRunit), Exists scp) -> Exists scp
-                  _ -> error "nope"
-                NonExecL _ -> makeAST env ctail $ foldC (`M.insert` res) prev cluster
-      _   -> let res = makeAST env [cluster] prev in case cluster of
-                ExecL _ -> case (res, makeAST env ctail prev) of
-                  (Exists exec@Exec{}, Exists scp) -> Exists $ Alet LeftHandSideUnit (shared TupRunit) exec scp
-                  (Exists (Return TupRunit), Exists scp) -> Exists scp
-                  _ -> error "nope"
-                NonExecL _ -> makeAST env ctail $ foldC (`M.insert` res) prev cluster
+        NotFold con
+          | SLet mylhs b u <- con ->
+            case makeAST env [NonExecL b] of
+              Exists bnd -> createLHS mylhs env $ \env' lhs ->
+                case makeAST env' ctail of
+                  Exists scp
+                    -> Exists $ tryBuildAlet lhs u bnd scp
+        _ -> let res = makeAST env [cluster] in case cluster of
+              ExecL _ -> case (res, makeAST env ctail) of
+                (Exists exec@Exec{}, Exists scp) -> Exists $ Alet LeftHandSideUnit (shared TupRunit) exec scp
+                (Exists (Return TupRunit), Exists scp) -> Exists scp
+                _ -> error "nope"
+              NonExecL _ -> makeAST env ctail
 
-    makeASTF :: forall env. HasCallStack => BuffersEnv env -> Label Comp -> M.Map (Label Comp) (Exists (PreOpenAcc (Clustered op) env)) -> Exists (PreOpenAfun (Clustered op) env)
-    makeASTF env l prev = case makeCluster env (NonExecL l) of
-      NotFold (SBod _) -> case makeAST env (subcluster l) prev of
-        --  fromJust $ l' ^. parent) prev of
+    makeASTF :: forall env. BuffersEnv env -> Label Comp -> Exists (PreOpenAfun (Clustered op) env)
+    makeASTF env l = case makeCluster env (NonExecL l) of
+      NotFold (SBod l') -> case makeAST env (subcluster l) of
           Exists acc -> Exists $ Abody acc
       NotFold (SFun lhs l') -> createLHS lhs env $ \env' lhs' ->
-        case makeASTF env' l' (M.map (\(Exists acc) -> Exists $ weakenAcc lhs' acc) $ M.insertWith (\ _ x -> x) l' (Exists undefined) prev) of
+        case makeASTF env' l' of
           Exists fun -> Exists $ Alam lhs' fun
       NotFold sym -> error $ "wrong type: acc"
       _ -> error "not a notfold"
@@ -304,7 +300,7 @@ openReconstruct' singletons labelenv graph clusterslist mlab subclustersmap symb
                                 -- it stays.
                                 let args' = fromJust $ reindexLabelledArgsOp (mkReindexPartial inplaceM env' env) args
                                 in
-                                  if isNoOp op (unlabelop args') then
+                                  if isNoOp op (unLabelOp args') then
                                     -- Remove operations that became a no-op by in-place updates.
                                     -- For instance, 'map id xs ys' may become 'map id xs xs',
                                     -- which is a no-op.
