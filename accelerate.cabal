@@ -318,6 +318,11 @@ flag bounds-checks
   default:              True
   description:          Enable bounds checking in the interpreter
 
+flag memory-counter
+  manual:               True
+  default:              False
+  description:          Enable counters for benchmarking memory usage
+
 -- This flag is currently completely unused, so let's not expose it to users
 -- flag unsafe-checks
 --   manual:               True
@@ -691,6 +696,13 @@ library
   if flag(bounds-checks)
     cpp-options:
         -DACCELERATE_BOUNDS_CHECKS
+
+  if flag(memory-counter)
+    cpp-options:
+        -DACCELERATE_MEMORY_COUNTER
+
+    cc-options:
+        -DACCELERATE_MEMORY_COUNTER
 
   -- if flag(unsafe-checks)
   --   cpp-options:

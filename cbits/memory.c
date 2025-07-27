@@ -3,7 +3,9 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdatomic.h>
+#ifdef ACCELERATE_MEMORY_COUNTER
 #include <pthread.h>
+#endif  // ACCELERATE_MEMORY_COUNTER
 
 #include "align.h"
 #include "flags.h"
@@ -15,6 +17,8 @@ struct ObjectHeader {
   _Atomic uint64_t reference_count;
   uint64_t byte_size; // Size of the array. Does not include the header, and is not necessarily a multiple of the alignment.
 } CACHE_ALIGNED;
+
+#ifdef ACCELERATE_MEMORY_COUNTER
 
 // For memory counting:
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -52,6 +56,8 @@ uint64_t accelerate_memory_counter_max() {
   return ret;
 }
 
+#endif  // ACCELERATE_MEMORY_COUNTER
+
 
 void* accelerate_buffer_alloc(uint64_t byte_size) {
   uint64_t size = byte_size + sizeof(struct ObjectHeader);
@@ -62,7 +68,7 @@ void* accelerate_buffer_alloc(uint64_t byte_size) {
   void *ptr = accelerate_raw_alloc(size, CACHE_LINE_SIZE);
 
   // TODO: call ___tracy_emit_memory_alloc
-
+  #ifdef ACCELERATE_MEMORY_COUNTER
   // For benchmarking memory usage:
   pthread_mutex_lock(&mutex);
   total_allocated += byte_size;
@@ -70,6 +76,7 @@ void* accelerate_buffer_alloc(uint64_t byte_size) {
   if (current_allocated > max_allocated)
     max_allocated = current_allocated;
   pthread_mutex_unlock(&mutex);
+  #endif  // ACCELERATE_MEMORY_COUNTER
 
   struct ObjectHeader* header = (struct ObjectHeader*) ptr;
   header->reference_count = 1;
@@ -101,10 +108,14 @@ void accelerate_buffer_release_by(void* interior, uint64_t amount) {
   uint64_t old = atomic_fetch_add_explicit(&header->reference_count, -amount, memory_order_acq_rel);
   if (old == amount) {
     // TODO: call ___tracy_emit_memory_free
+
+    #ifdef ACCELERATE_MEMORY_COUNTER
     pthread_mutex_lock(&mutex);
     current_allocated -= header->byte_size;
-    accelerate_raw_free(header);
     pthread_mutex_unlock(&mutex);
+    #endif  // ACCELERATE_MEMORY_COUNTER
+
+    accelerate_raw_free(header);
   }
   if (old < amount) {
     printf("Reference count underflow\n");

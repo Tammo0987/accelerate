@@ -117,12 +117,6 @@ foreign import ccall unsafe "accelerate_buffer_retain" memoryRetain :: Ptr () ->
 foreign import ccall unsafe "accelerate_buffer_release" memoryRelease :: Ptr () -> IO ()
 foreign import ccall unsafe "&accelerate_buffer_release" memoryReleaseRef :: FunPtr (Ptr () -> IO ())
 
--- For benchmarking memory usage:
-foreign import ccall unsafe "accelerate_memory_counter_reset" memoryCounterReset :: IO ()
-foreign import ccall unsafe "accelerate_memory_counter_total" memoryCounterTotal :: IO Word64
-foreign import ccall unsafe "accelerate_memory_counter_init" memoryCounterInit :: IO Word64
-foreign import ccall unsafe "accelerate_memory_counter_max" memoryCounterMax :: IO Word64
-
 #else
 
 memoryAlloc :: Word64 -> IO (Ptr ())
@@ -140,7 +134,18 @@ memoryRelease = undefined
 memoryReleaseRef :: FunPtr (Ptr () -> IO ())
 memoryReleaseRef = undefined
 
--- For benchmarking memory usage:
+#endif
+
+
+#if defined(ACCELERATE_MEMORY_COUNTER) && !defined(__GHCIDE__)
+
+foreign import ccall unsafe "accelerate_memory_counter_reset" memoryCounterReset :: IO ()
+foreign import ccall unsafe "accelerate_memory_counter_total" memoryCounterTotal :: IO Word64
+foreign import ccall unsafe "accelerate_memory_counter_init" memoryCounterInit :: IO Word64
+foreign import ccall unsafe "accelerate_memory_counter_max" memoryCounterMax :: IO Word64
+
+#else
+
 memoryCounterReset :: IO ()
 memoryCounterReset = return ()
 
@@ -155,6 +160,7 @@ memoryCounterMax = return 0
 
 #endif
 
+#if defined(ACCELERATE_MEMORY_COUNTER) || defined(__GHCIDE__)
 
 memoryCounterReport :: IO ()
 memoryCounterReport = do
@@ -164,6 +170,13 @@ memoryCounterReport = do
   putStrLn $ "Total memory allocated:   " ++ show totalAlloc ++ " bytes"
   putStrLn $ "Initial memory allocated: " ++ show initAlloc ++ " bytes"
   putStrLn $ "Maximum memory allocated: " ++ show maxAlloc ++ " bytes"
+
+#else
+
+memoryCounterReport :: IO ()
+memoryCounterReport = putStrLn "MEMORY COUNTER DISABLED"
+
+#endif
 
 --
 -- SEE: [linking to .c files]
