@@ -106,12 +106,7 @@ runAt :: forall backend t. (Sugar.Arrays t, Backend backend) => Smart.Acc t -> t
 runAt = runWithAt @backend defaultOptions
 
 runWithAt :: forall backend t. (Sugar.Arrays t, Backend backend) => Config -> Smart.Acc t -> t
-runWithAt config acc
-  = Sugar.toArr $ sugarArrays repr $ unsafePerformIO $ executeAcc (desugarArraysR repr) program
-  where
-    repr = Sugar.arraysR @t
-    schedule = convertAccWith @(Schedule backend) @(Kernel backend) config acc
-    program = linkAfunSchedule schedule
+runWithAt = runNWithAt @backend
 
 {- runWithObj :: forall backend t. (Sugar.Arrays t, Backend backend) => Objective -> Smart.Acc t -> t
 runWithObj obj acc = Sugar.toArr $ sugarArrays repr $ unsafePerformIO $ executeAcc (desugarArraysR repr) program
