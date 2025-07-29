@@ -111,16 +111,13 @@ labelIds (Label i p) = i : maybe [] labelIds p
 
 instance Eq (Label t) where
   (==) :: Label t -> Label t -> Bool
-  (==) (Label i1 p1) (Label i2 p2)
-    | i1 == i2  = checkMismatch p1 p2 True
-    | otherwise = False
+  (==) l1 l2 = (l1^.labelId == l2^.labelId) && checkMismatch (l1^.parent) (l2^.parent) True
 
 instance Ord (Label t) where
   compare :: Label t -> Label t -> Ordering
-  compare (Label i1 p1) (Label i2 p2) = case compare i1 i2 of
-    EQ -> checkMismatch p1 p2 EQ
-    LT -> LT
-    GT -> GT
+  compare l1 l2 = case compare (l1^.labelId) (l2^.labelId) of
+    EQ  -> checkMismatch (l1^.parent) (l2^.parent) EQ
+    ord -> ord
 
 -- | Checks if two parents are equal and throw an error if they are not.
 checkMismatch :: Parent -> Parent -> a -> a
