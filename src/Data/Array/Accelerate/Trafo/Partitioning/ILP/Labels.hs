@@ -26,36 +26,27 @@ either be a computation or a buffer.
 {-# LANGUAGE OverloadedStrings #-}
 module Data.Array.Accelerate.Trafo.Partitioning.ILP.Labels where
 
+import Data.Array.Accelerate.AST.Idx
+import Data.Array.Accelerate.AST.LeftHandSide
 import Data.Array.Accelerate.AST.Operation
+import Data.Array.Accelerate.Error
+import Data.Array.Accelerate.Representation.Array
 import Data.Array.Accelerate.Representation.Type
 
 import Lens.Micro
 import Lens.Micro.Mtl
 
 import Data.Set (Set)
-import qualified Data.Set as S
 
 import Data.Hashable (Hashable, hashWithSalt)
-import Data.Array.Accelerate.AST.Idx
 import Prelude hiding (exp)
-import Data.Array.Accelerate.AST.LeftHandSide
 
 import qualified Data.Functor.Const as C
 import Data.Coerce
 import Control.Monad.State.Strict
-import Data.Foldable
-import Data.Array.Accelerate.Type (ScalarType)
-import Data.Array.Accelerate.Representation.Array
-import Data.Bifunctor (Bifunctor(..))
 import Data.Maybe (fromJust)
 import Data.List ( intercalate )
 import Debug.Trace
-import Data.Typeable
-import Data.Array.Accelerate.Analysis.Match
-import Unsafe.Coerce (unsafeCoerce)
-import Control.Applicative ((<|>))
-import Data.Array.Accelerate.Representation.Ground (groundRelt)
-import Data.Array.Accelerate.Error
 
 
 
@@ -154,82 +145,8 @@ freshL' = id <%= (labelId +~ 1)
 -- | Set of labels.
 type Labels t = Set (Label t)
 
-
-
---------------------------------------------------------------------------------
--- Constant-valued Tuple Representation
---------------------------------------------------------------------------------
-
--- | Constant valued 'TupR' with flipped type arguments.
-data TupF t a where
-  TupFunit   :: TupF () a
-  TupFsingle :: a -> TupF t a
-  TupFpair   :: TupF s a -> TupF t a -> TupF (s, t) a
-
--- | Convert a 'TupR' of 'Const' values to a 'TupF'.
-toTupF :: TupR (C.Const a) t -> TupF t a
-toTupF TupRunit       = TupFunit
-toTupF (TupRsingle a) = TupFsingle (C.getConst a)
-toTupF (TupRpair l r) = TupFpair (toTupF l) (toTupF r)
-
--- | Convert a 'TupF' of 'Const' values to a 'TupR'.
-fromTupF :: TupF t a -> TupR (C.Const a) t
-fromTupF TupFunit       = TupRunit
-fromTupF (TupFsingle a) = TupRsingle (C.Const a)
-fromTupF (TupFpair l r) = TupRpair (fromTupF l) (fromTupF r)
-
--- | Create a 'TupF' with the same shape as a 'TupR'.
-tupFlike :: Applicative f => TupR s t -> f b -> f (TupF t b)
-tupFlike TupRunit       _ = pure TupFunit
-tupFlike (TupRsingle _) f = TupFsingle <$> f
-tupFlike (TupRpair l r) f = TupFpair <$> tupFlike l f <*> tupFlike r f
-
-eqTupF :: Eq a => TupF s a -> TupF t a -> Bool
-eqTupF TupFunit         TupFunit         = True
-eqTupF (TupFsingle a)   (TupFsingle b)   = a == b
-eqTupF (TupFpair l1 r1) (TupFpair l2 r2) = eqTupF l1 l2 && eqTupF r1 r2
-eqTupF _ _ = False
-
-
-instance Show a => Show (TupF t a) where
-  show :: Show a => TupF t a -> String
-  show = show . fromTupF
-
-instance Eq a => Eq (TupF t a) where
-  (==) :: Eq a => TupF t a -> TupF t a -> Bool
-  (==) TupFunit       TupFunit           = True
-  (==) (TupFsingle a) (TupFsingle b)     = a == b
-  (==) (TupFpair l1 r1) (TupFpair l2 r2) = l1 == l2 && r1 == r2
-  (==) _ _ = False
-
-instance Functor (TupF t) where
-  fmap :: (a -> b) -> TupF t a -> TupF t b
-  fmap _ TupFunit       = TupFunit
-  fmap f (TupFsingle a) = TupFsingle (f a)
-  fmap f (TupFpair l r) = TupFpair (fmap f l) (fmap f r)
-
-
-instance Foldable (TupF t) where
- foldMap :: Monoid m => (a -> m) -> TupF t a -> m
- foldMap _ TupFunit       = mempty
- foldMap f (TupFsingle a) = f (coerce a)
- foldMap f (TupFpair l r) = foldMap f l <> foldMap f r
-
-instance Traversable (TupF t) where
-  traverse :: Applicative f => (a -> f b) -> TupF t a -> f (TupF t b)
-  traverse _ TupFunit       = pure TupFunit
-  traverse f (TupFsingle a) = TupFsingle <$> f a
-  traverse f (TupFpair l r) = TupFpair <$> traverse f l <*> traverse f r
-
-instance Semigroup a => Semigroup (TupF t a) where
-  (<>) :: TupF t a -> TupF t a -> TupF t a
-  (<>) TupFunit         TupFunit         = TupFunit
-  (<>) (TupFsingle a)   (TupFsingle b)   = TupFsingle (a <> b)
-  (<>) (TupFpair l1 r1) (TupFpair l2 r2) = TupFpair (l1 <> l2) (r1 <> r2)
-  (<>) _ _ = internalError "Inaccessible left-hand side"
-
--- | Tuple of 'Labels' of type 'GVal'.
-type BuffersTup t = TupF t (Labels GVal)
+-- | Tuple of ground value labels.
+type GVals = TupR (C.Const (Labels GVal))
 
 
 
@@ -247,14 +164,14 @@ instance Show EnvLabel where
 
 -- | A variable in the environment stores a tuple of buffers and their uniquenesses.
 --   They are uniquely identified by their 'EnvLabel'.
-type EnvVal t  = (EnvLabel, BuffersTup t, Uniquenesses t)
+type EnvVal t = (EnvLabel, GVals t, Uniquenesses t)
 
--- | A collection of variables in the environment. The structure of the 'EnvLabelTup'
+-- | A collection of variables in the environment. The structure of the 'EnvLabels'
 --   can be used to extract individual 'EnvVal'.
-type EnvVals t = (EnvLabelTup t, BuffersTup t, Uniquenesses t)
+type EnvVals t = (EnvLabels t, GVals t, Uniquenesses t)
 
--- | A 'TupF' of 'EnvLabel'.
-type EnvLabelTup t = TupF t EnvLabel
+-- | A 'TupR' of 'EnvLabel'.
+type EnvLabels = TupR (C.Const EnvLabel)
 
 -- | Create a fresh 'EnvLabel' from the current state.
 freshE' :: State EnvLabel EnvLabel
@@ -269,36 +186,36 @@ freshE' = id <%= (+1)
 -- if-then-else there are now two labels that could be referenced depending
 -- on the branch taken.
 --
-data BuffersEnv env where
+data GValEnv env where
   -- | The empty environment.
-  EnvNil :: BuffersEnv ()
+  EnvNil :: GValEnv ()
   -- | The non-empty environment.
   (:>>:) :: EnvVal t        -- ^ See 'EnvVal'.
-         -> BuffersEnv env  -- ^ The rest of the environment.
-         -> BuffersEnv (env, t)
+         -> GValEnv env  -- ^ The rest of the environment.
+         -> GValEnv (env, t)
 
-instance Show (BuffersEnv env) where
-  show :: BuffersEnv env -> String
+instance Show (GValEnv env) where
+  show :: GValEnv env -> String
   show EnvNil = "EnvNil"
   show (envl :>>: env) = show envl ++ " :>>: " ++ show env
 
 -- TODO: Is this instance necessary?
-instance Semigroup (BuffersEnv env) where
-  (<>) :: BuffersEnv env -> BuffersEnv env -> BuffersEnv env
+instance Semigroup (GValEnv env) where
+  (<>) :: GValEnv env -> GValEnv env -> GValEnv env
   (<>) EnvNil EnvNil = EnvNil
   (<>) ((e1, bs1, us1) :>>: env1) ((e2, bs2, us2) :>>: env2)
     | e1 == e2  = (e1, bs1 <> bs2, us1 <> us2) :>>: (env1 <> env2)
     | otherwise = internalError "mappend: Encountered diverging EnvLabels."
 
--- | Constructs a new 'BuffersEnv' by prepending labels for each element in the
+-- | Constructs a new 'GValEnv' by prepending labels for each element in the
 --   left-hand side.
 --
 -- The case where the left-hand side and the right-hand side are incompatible
 -- should neven happen, but in case it does just replicate the labels.
-weakenEnv :: LeftHandSide s v env env' -> BuffersTup v -> Uniquenesses v -> BuffersEnv env -> State EnvLabel (BuffersEnv env')
+weakenEnv :: LeftHandSide s v env env' -> GVals v -> Uniquenesses v -> GValEnv env -> State EnvLabel (GValEnv env')
 weakenEnv LeftHandSideWildcard{} _ _ = pure
 weakenEnv LeftHandSideSingle{} bs us = \lenv -> freshE' >>= \e -> return ((e, bs, us) :>>: lenv)
-weakenEnv (LeftHandSidePair l r) (TupFpair lbs rbs) (TupRpair lus rus) = weakenEnv l lbs lus >=> weakenEnv r rbs rus
+weakenEnv (LeftHandSidePair l r) (TupRpair lbs rbs) (TupRpair lus rus) = weakenEnv l lbs lus >=> weakenEnv r rbs rus
 weakenEnv (LeftHandSidePair _ _) _ _ = internalError "weakenEnv: Inaccesible left-hand side"
 
 
@@ -332,7 +249,7 @@ instance Show (BoundLHS s v env env') where
 type BoundGLHS = BoundLHS GroundR
 
 -- | Get bindings from the environment and bind them to the left-hand side.
-bindLHS :: LeftHandSide s v env env' -> BuffersEnv env' -> BoundLHS s v env env'
+bindLHS :: LeftHandSide s v env env' -> GValEnv env' -> BoundLHS s v env env'
 bindLHS (LeftHandSideSingle sv) (l :>>: _) = BoundLHSsingle l sv
 bindLHS (LeftHandSideWildcard tr) _ = BoundLHSwildcard tr
 bindLHS (LeftHandSidePair l r) env = BoundLHSpair (bindLHS l (stripLHS r env)) (bindLHS r env)
@@ -343,14 +260,14 @@ unbindLHS (BoundLHSwildcard tr) = LeftHandSideWildcard tr
 unbindLHS (BoundLHSpair l r)    = LeftHandSidePair (unbindLHS l) (unbindLHS r)
 
 -- | Remove values bound by the left-hand side from the environment.
-stripLHS :: LeftHandSide s v env env' -> BuffersEnv env' -> BuffersEnv env
+stripLHS :: LeftHandSide s v env env' -> GValEnv env' -> GValEnv env
 stripLHS (LeftHandSideSingle _) (_ :>>: le') = le'
 stripLHS (LeftHandSideWildcard _) le = le
 stripLHS (LeftHandSidePair l r) le = stripLHS l (stripLHS r le)
 
 createLHS :: BoundLHS s v _env _env'
-          -> BuffersEnv env
-          -> (forall env'. BuffersEnv env' -> LeftHandSide s v env env' -> r)
+          -> GValEnv env
+          -> (forall env'. GValEnv env' -> LeftHandSide s v env env' -> r)
           -> r
 createLHS (BoundLHSsingle e sv) env k = k (e :>>: env) (LeftHandSideSingle sv)
 createLHS (BoundLHSwildcard tr) env k = k env (LeftHandSideWildcard tr)
@@ -384,18 +301,18 @@ can therefore not be fused.
 --   array or not, and if so, which buffers it is associated with as a 'TupF'.
 data ArgLabel t where
   -- | The argument is an array.
-  Arr     :: EnvVals e   -- ^ The array values.
-          -> EnvVals sh  -- ^ The shape values.
+  Arr     :: EnvVals (Buffers e)  -- ^ The array values.
+          -> EnvVals sh           -- ^ The shape values.
           -> ArgLabel (m sh e)
   -- | The argument is a scalar 'Var'', 'Exp'' or 'Fun''.
-  NotArr  :: Labels GVal -- ^ The dependencies of the argument.
+  NotArr  :: Labels GVal  -- ^ The variables referenced by the argument.
           -> ArgLabel (t e)
 
 deriving instance Show (ArgLabel t)
 
 -- | Get the set of dependent buffers of an 'ArgLabel'.
 getLabelDeps :: ArgLabel t -> Labels GVal
-getLabelDeps (Arr (_, arr, _) (_, sh, _)) = fold arr <> fold sh
+getLabelDeps (Arr (_, arr, _) (_, sh, _)) = foldTupR arr <> foldTupR sh
 getLabelDeps (NotArr deps) = deps
 
 -- | Get the set of unique array dependencies of an 'ArgLabel'.
@@ -403,41 +320,39 @@ getLabelUniqueArrDeps :: ArgLabel t -> Labels GVal
 getLabelUniqueArrDeps (Arr (_, arr, u) _) = uniqueLabels u arr
 getLabelUniqueArrDeps (NotArr _) = internalError "getLabelUniqueArrDeps: Expected Arr but got NotArr"
 
--- | Given 'Uniquenesses', get the unique labels from 'BuffersTup'.
-uniqueLabels :: Uniquenesses e -> BuffersTup e -> Labels GVal
-uniqueLabels TupRunit TupFunit      = mempty
+-- | Given 'Uniquenesses', get the unique labels from 'GVals'.
+uniqueLabels :: Uniquenesses e -> GVals e -> Labels GVal
+uniqueLabels TupRunit TupRunit      = mempty
 uniqueLabels (TupRsingle Shared) _  = mempty
-uniqueLabels (TupRsingle Unique) bs = fold bs
-uniqueLabels (TupRpair ul ur) (TupFpair l r) = uniqueLabels ul l <> uniqueLabels ur r
+uniqueLabels (TupRsingle Unique) bs = foldTupR bs
+uniqueLabels (TupRpair ul ur) (TupRpair l r) = uniqueLabels ul l <> uniqueLabels ur r
 uniqueLabels _ _ = internalError "uniqueLabels: Tuple mismatch "
 
 -- | Get the arrays of an 'ArgLabel'.
-getLabelArrays :: ArgLabel (m sh e) -> BuffersTup e
+getLabelArrays :: ArgLabel (m sh e) -> GVals (Buffers e)
 getLabelArrays (Arr (_, arr, _) (_, _, _)) = arr
 getLabelArrays (NotArr _) = internalError "getLabelArrays: Expected Arr but got NotArr"
 
 -- | Get the array dependencies of an 'ArgLabel'.
 getLabelArrDeps :: ArgLabel (m sh e) -> Labels GVal
-getLabelArrDeps = fold . getLabelArrays
+getLabelArrDeps = foldTupR . getLabelArrays
 
 -- | Get a single array dependency of an 'ArgLabel'.
 getLabelArrDep :: ArgLabel (m sh e) -> Label GVal
 getLabelArrDep = foldr1 const . getLabelArrDeps
 
 -- | Get the shapes of an 'ArgLabel'.
-getLabelShape :: ArgLabel (m sh e) -> BuffersTup sh
+getLabelShape :: ArgLabel (m sh e) -> GVals sh
 getLabelShape (Arr (_, _, _) (_, sh, _)) = sh
 getLabelShape (NotArr _) = internalError "getLabelShape: Expected Arr but got NotArr"
 
 -- | Get the shape dependencies of an 'ArgLabel'.
 getLabelShDeps :: ArgLabel (m sh e) -> Labels GVal
-getLabelShDeps = fold . getLabelShape
+getLabelShDeps = foldTupR . getLabelShape
 
 -- | Check if two arguments use the same shape variables.
 eqLabelShape :: ArgLabel (m1 sh1 e1) -> ArgLabel (m2 sh2 e2) -> Bool
-eqLabelShape l1 l2 = eqTupF (getLabelShape l1) (getLabelShape l2)
-
-
+eqLabelShape l1 l2 = eqConstsR (getLabelShape l1) (getLabelShape l2)
 
 -- | The argument to a function paired with 'ArgLabels'
 --
@@ -453,47 +368,47 @@ data LabelledArg env t = L (Arg env t) (ArgLabel t)
 type LabelledArgs env = PreArgs (LabelledArg env)
 
 -- | Label the arguments to a function using the given environment.
-labelArgs :: Args env args -> BuffersEnv env -> LabelledArgs env args
+labelArgs :: Args env args -> GValEnv env -> LabelledArgs env args
 labelArgs ArgsNil _ = ArgsNil
 labelArgs (arg :>: args) env =
   L arg (getArgLabels arg env) :>: labelArgs args env
 
--- | Get the 'ArgLabels' associated with 'Arg' from 'BuffersEnv'.
-getArgLabels :: Arg env t -> BuffersEnv env -> ArgLabel t
+-- | Get the 'ArgLabels' associated with 'Arg' from 'GValEnv'.
+getArgLabels :: Arg env t -> GValEnv env -> ArgLabel t
 getArgLabels (ArgVar vars) env = NotArr $ getVarsDeps vars env
 getArgLabels (ArgExp exp)  env = NotArr $ getExpDeps  exp  env
 getArgLabels (ArgFun fun)  env = NotArr $ getFunDeps  fun  env
-getArgLabels (ArgArray _ (ArrayR _ tp) sh arr) env
-  = Arr (unbuffers tp $ getVarsFromEnv arr env) (getVarsFromEnv sh env)
+getArgLabels (ArgArray _ (ArrayR _ _tp) sh arr) env
+  = Arr (getVarsFromEnv arr env) (getVarsFromEnv sh env)
 
--- | Get the values associated with 'Vars' from 'BuffersEnv'.
-getVarsFromEnv :: Vars a env b -> BuffersEnv env -> EnvVals b
-getVarsFromEnv TupRunit         _   = (TupFunit, TupFunit, TupRunit)
+-- | Get the values associated with 'Vars' from 'GValEnv'.
+getVarsFromEnv :: Vars a env b -> GValEnv env -> EnvVals b
+getVarsFromEnv TupRunit         _   = (TupRunit, TupRunit, TupRunit)
 getVarsFromEnv (TupRsingle var) env | (e, bs, u) <- getVarFromEnv var env
-                                    = (TupFsingle e, bs, u)
+                                    = (TupRsingle (C.Const e), bs, u)
 getVarsFromEnv (TupRpair l r)   env | (el, bsl, ul) <- getVarsFromEnv l env
                                     , (er, bsr, ur) <- getVarsFromEnv r env
-                                    = (TupFpair el er, TupFpair bsl bsr, TupRpair ul ur)
+                                    = (TupRpair el er, TupRpair bsl bsr, TupRpair ul ur)
 
--- | Get the value associated with a 'Var' from 'BuffersEnv'.
-getVarFromEnv :: Var a env b -> BuffersEnv env -> EnvVal b
+-- | Get the value associated with a 'Var' from 'GValEnv'.
+getVarFromEnv :: Var a env b -> GValEnv env -> EnvVal b
 getVarFromEnv = lookupIdxInEnv . varIdx
 
--- | Get the value associated with an 'Idx' from 'BuffersEnv'.
-lookupIdxInEnv :: Idx env t -> BuffersEnv env -> EnvVal t
+-- | Get the value associated with an 'Idx' from 'GValEnv'.
+lookupIdxInEnv :: Idx env t -> GValEnv env -> EnvVal t
 lookupIdxInEnv ZeroIdx       (bs :>>: _)   = bs
 lookupIdxInEnv (SuccIdx idx) (_  :>>: env) = lookupIdxInEnv idx env
 
 -- | Get the dependencies of a tuple of variables.
-getVarsDeps :: Vars s env t -> BuffersEnv env -> Labels GVal
-getVarsDeps vars = fold . (^._2) . getVarsFromEnv vars
+getVarsDeps :: Vars s env t -> GValEnv env -> Labels GVal
+getVarsDeps vars = foldTupR . (^._2) . getVarsFromEnv vars
 
 -- | Get the dependencies of a tuple of variables.
-getVarDeps :: Var s env t -> BuffersEnv env -> Labels GVal
-getVarDeps var = fold . (^._2) . getVarFromEnv var
+getVarDeps :: Var s env t -> GValEnv env -> Labels GVal
+getVarDeps var = foldTupR . (^._2) . getVarFromEnv var
 
 -- | Get the dependencies of an expression.
-getExpDeps :: OpenExp x env y -> BuffersEnv env -> Labels GVal
+getExpDeps :: OpenExp x env y -> GValEnv env -> Labels GVal
 getExpDeps (ArrayInstr (Index     var) poe) env = getVarDeps var  env <> getExpDeps poe  env
 getExpDeps (ArrayInstr (Parameter var) poe) env = getVarDeps var  env <> getExpDeps poe  env
 getExpDeps (Let _ poe1 poe2)                env = getExpDeps poe1 env <> getExpDeps poe2 env
@@ -524,21 +439,20 @@ getExpDeps (Undef _)                        _   = mempty
 getExpDeps  Coerce{}                        _   = mempty
 
 -- | Get the dependencies of a function.
-getFunDeps :: OpenFun x env y -> BuffersEnv env -> Labels GVal
+getFunDeps :: OpenFun x env y -> GValEnv env -> Labels GVal
 getFunDeps (Body  poe) env = getExpDeps poe env
 getFunDeps (Lam _ fun) env = getFunDeps fun env
 
--- | Remove the 'Buffers' type from 'ArgLabel'.
-unbuffers :: forall e. TypeR e -> EnvVals (Distribute Buffer e) -> EnvVals e
-unbuffers TupRunit _ = (TupFunit, TupFunit, TupRunit)
-unbuffers (TupRsingle t) (TupFsingle e, TupFsingle bs, TupRsingle u)
-  | Refl <- reprIsSingle @ScalarType @e @Buffer t
-  = (TupFsingle e, TupFsingle bs, TupRsingle $ unsafeCoerce u)  -- TODO: get rid of unsafeCoerce
-unbuffers (TupRpair t1 t2) (TupFpair el er, TupFpair bsl bsr, TupRpair ul ur)
-  | (el', bsl', ul') <- unbuffers t1 (el, bsl, ul)
-  , (er', bsr', ur') <- unbuffers t2 (er, bsr, ur)
-  = (TupFpair el' er', TupFpair bsl' bsr', TupRpair ul' ur')
-unbuffers _ _ = internalError "unbuffers: Tuple mismatch"
+-- -- | Remove the 'Buffers' type from 'ArgLabel'.
+-- unbuffers :: forall e. TypeR e -> EnvVals (Distribute Buffer e) -> EnvVals e
+-- unbuffers TupRunit _ = (TupRunit, TupRunit, TupRunit)
+-- unbuffers (TupRsingle t) (TupRsingle (C.Const e), TupRsingle (C.Const bs), TupRsingle _)
+--   = (TupRsingle (C.Const e), TupRsingle (C.Const bs), TupRsingle _)
+-- unbuffers (TupRpair t1 t2) (TupRpair el er, TupRpair bsl bsr, TupRpair ul ur)
+--   | (el', bsl', ul') <- unbuffers t1 (el, bsl, ul)
+--   , (er', bsr', ur') <- unbuffers t2 (er, bsr, ur)
+--   = (TupRpair el' er', TupRpair bsl' bsr', TupRpair ul' ur')
+-- unbuffers _ _ = internalError "unbuffers: Tuple mismatch"
 
 
 
@@ -547,17 +461,17 @@ unbuffers _ _ = internalError "unbuffers: Tuple mismatch"
 --------------------------------------------------------------------------------
 
 -- | Map a function over the labels in the environment.
-mapLEnv :: (forall t. BuffersTup t -> BuffersTup t) -> BuffersEnv env -> BuffersEnv env
+mapLEnv :: (forall t. GVals t -> GVals t) -> GValEnv env -> GValEnv env
 mapLEnv _ EnvNil = EnvNil
 mapLEnv f ((e, bs, us) :>>: env) = (e, f bs, us) :>>: mapLEnv f env
 
 -- | Fold over the labels in the environment.
-foldMapLEnv :: Monoid m => (forall t. BuffersTup t -> m) -> BuffersEnv env -> m
+foldMapLEnv :: Monoid m => (forall t. GVals t -> m) -> GValEnv env -> m
 foldMapLEnv _ EnvNil = mempty
-foldMapLEnv f ((_, bs, us) :>>: env) = f bs <> foldMapLEnv f env
+foldMapLEnv f ((_, bs, _) :>>: env) = f bs <> foldMapLEnv f env
 
 -- | Map a monadic function over the labels in the environment.
-mapLEnvM :: Monad m => (forall t. BuffersTup t -> m (BuffersTup t)) -> BuffersEnv env -> m (BuffersEnv env)
+mapLEnvM :: Monad m => (forall t. GVals t -> m (GVals t)) -> GValEnv env -> m (GValEnv env)
 mapLEnvM _ EnvNil = return EnvNil
 mapLEnvM f ((e, bs, us) :>>: env) = do
   bs'  <- f bs
@@ -565,37 +479,37 @@ mapLEnvM f ((e, bs, us) :>>: env) = do
   return ((e, bs', us) :>>: env')
 
 -- | Flipped version of 'mapLEnvM'.
-forLEnvM :: Monad m => BuffersEnv env -> (forall t. BuffersTup t -> m (BuffersTup t)) -> m (BuffersEnv env)
+forLEnvM :: Monad m => GValEnv env -> (forall t. GVals t -> m (GVals t)) -> m (GValEnv env)
 forLEnvM env f = mapLEnvM f env
 {-# INLINE forLEnvM #-}
 
 -- | Map a monadic action over the labels in the environment and discard the result.
-mapLEnvM_ :: Monad m => (forall t. BuffersTup t -> m ()) -> BuffersEnv env -> m ()
+mapLEnvM_ :: Monad m => (forall t. GVals t -> m ()) -> GValEnv env -> m ()
 mapLEnvM_ _ EnvNil = return ()
 mapLEnvM_ f ((_, bs, _) :>>: env) = f bs >> mapLEnvM_ f env
 
 -- | Flipped version of 'mapLEnvM_'.
-forLEnvM_ :: Monad m => BuffersEnv env -> (forall t. BuffersTup t -> m ()) -> m ()
+forLEnvM_ :: Monad m => GValEnv env -> (forall t. GVals t -> m ()) -> m ()
 forLEnvM_ env f = mapLEnvM_ f env
 {-# INLINE forLEnvM_ #-}
 
 -- | Traverse over the labels in the environment.
-traverseLEnv :: Applicative f => (forall t. BuffersTup t -> f (BuffersTup t)) -> BuffersEnv env -> f (BuffersEnv env)
+traverseLEnv :: Applicative f => (forall t. GVals t -> f (GVals t)) -> GValEnv env -> f (GValEnv env)
 traverseLEnv _ EnvNil = pure EnvNil
 traverseLEnv f ((e, bs, us) :>>: env) = ((:>>:) . (e,,us) <$> f bs) <*> traverseLEnv f env
 
 -- | Flipped version of 'traverseLEnv'.
-forLEnv :: Applicative f => BuffersEnv env -> (forall t. BuffersTup t -> f (BuffersTup t)) -> f (BuffersEnv env)
+forLEnv :: Applicative f => GValEnv env -> (forall t. GVals t -> f (GVals t)) -> f (GValEnv env)
 forLEnv env f = traverseLEnv f env
 {-# INLINE forLEnv #-}
 
 -- | Traverse over the labels in the environment and discard the result.
-traverseLEnv_ :: Applicative f => (forall t. BuffersTup t -> f ()) -> BuffersEnv env -> f ()
+traverseLEnv_ :: Applicative f => (forall t. GVals t -> f ()) -> GValEnv env -> f ()
 traverseLEnv_ _ EnvNil = pure ()
 traverseLEnv_ f ((_, bs, _) :>>: env) = f bs *> traverseLEnv_ f env
 
 -- | Flipped version of 'traverseLEnv_'.
-forLEnv_ :: Applicative f => BuffersEnv env -> (forall t. BuffersTup t -> f ()) -> f ()
+forLEnv_ :: Applicative f => GValEnv env -> (forall t. GVals t -> f ()) -> f ()
 forLEnv_ env f = traverseLEnv_ f env
 {-# INLINE forLEnv_ #-}
 
@@ -674,21 +588,21 @@ forLArgs_ largs f = traverseLArgs_ f largs
 -- | All arrays that the function reads from.
 inputArrays :: LabelledArgs env t -> Labels GVal
 inputArrays = foldMapLArgs \case
-  L (ArgArray In  _ _ _) (Arr (_,arr,_) _) -> fold arr
-  L (ArgArray Mut _ _ _) (Arr (_,arr,_) _) -> fold arr
+  L (ArgArray In  _ _ _) (Arr (_,arr,_) _) -> foldTupR arr
+  L (ArgArray Mut _ _ _) (Arr (_,arr,_) _) -> foldTupR arr
   _ -> mempty
 
 -- | All arrays that the function writes to.
 outputArrays :: LabelledArgs env t -> Labels GVal
 outputArrays = foldMapLArgs \case
-  L (ArgArray Out _ _ _) (Arr (_,arr,_) _) -> fold arr
-  L (ArgArray Mut _ _ _) (Arr (_,arr,_) _) -> fold arr
+  L (ArgArray Out _ _ _) (Arr (_,arr,_) _) -> foldTupR arr
+  L (ArgArray Mut _ _ _) (Arr (_,arr,_) _) -> foldTupR arr
   _ -> mempty
 
 -- | All non-array arguments and array shapes.
 notArrays :: LabelledArgs env t -> Labels GVal
 notArrays = foldMapLArgs \case
-  L _ (Arr _ (_,sh,_)) -> fold sh
+  L _ (Arr _ (_,sh,_)) -> foldTupR sh
   L _ (NotArr deps)    -> deps
 
 -- | Fold map over all inputs.

@@ -51,13 +51,11 @@ import Lens.Micro
 import Lens.Micro.Mtl
 
 import Control.Monad.State.Strict (State, runState)
-import Data.Coerce (coerce)
-import Data.Foldable (Foldable (fold, foldr'), traverse_, toList)
+import Data.Foldable (Foldable (foldr'), traverse_, toList)
 import Data.Kind (Type)
 import Debug.Trace
 import Unsafe.Coerce (unsafeCoerce)
-import Data.Maybe (fromMaybe)
-import GHC.IO (unsafePerformIO)
+import qualified Data.Functor.Const as C
 
 
 
@@ -359,7 +357,7 @@ allInfusible prods buff cons ilp = foldr' (\prod -> infusible prod buff cons) il
 --   the state used by the frontend construction algorithm.
 data BackendGraphState op env = BackendGraphState
   { _backendFusionILP  :: FusionILP op    -- ^ The entire ILP.
-  , _backendBuffersEnv :: BuffersEnv env  -- ^ The buffers environment (read only).
+  , _backendBuffersEnv :: GValEnv env  -- ^ The buffers environment (read only).
   , _backendReadersEnv :: ReadersEnv      -- ^ The readers environment (read only).
   , _backendWritersEnv :: WritersEnv      -- ^ The writers environment (read only).
   }
@@ -369,8 +367,8 @@ instance HasFusionILP (BackendGraphState op env) op where
   fusionILP f s = f (_backendFusionILP s) <&> \ilp -> s{_backendFusionILP = ilp}
 
 instance HasBuffersEnv (BackendGraphState op env) (BackendGraphState op env') env env' where
-  buffersEnv :: Lens (BackendGraphState op env) (BackendGraphState op env') (BuffersEnv env) (BuffersEnv env')
-  buffersEnv f s = f (_backendBuffersEnv s) <&> \env -> s{_backendBuffersEnv = env}
+  gvalEnv :: Lens (BackendGraphState op env) (BackendGraphState op env') (GValEnv env) (GValEnv env')
+  gvalEnv f s = f (_backendBuffersEnv s) <&> \env -> s{_backendBuffersEnv = env}
 
 instance HasReadersEnv (BackendGraphState op env) where
   readersEnv :: Lens' (BackendGraphState op env) ReadersEnv
@@ -528,19 +526,19 @@ pimax = var . PiMax
 --------------------------------------------------------------------------------
 
 data Symbol (op :: Type -> Type) where
-  SExe  :: BuffersEnv env -> LabelledArgs      env args -> op args                              -> Symbol op
-  SExe' :: BuffersEnv env -> LabelledArgsOp op env args -> op args                              -> Symbol op
+  SExe  :: GValEnv env -> LabelledArgs      env args -> op args                              -> Symbol op
+  SExe' :: GValEnv env -> LabelledArgsOp op env args -> op args                              -> Symbol op
   SUse  ::                   ScalarType e -> Int -> Buffer e                                    -> Symbol op
-  SITE  :: BuffersEnv env -> ExpVar env PrimBool -> Label Comp -> Label Comp                    -> Symbol op
-  SWhl  :: BuffersEnv env -> Label Comp -> Label Comp -> GroundVars env bnd -> Uniquenesses bnd -> Symbol op
+  SITE  :: GValEnv env -> ExpVar env PrimBool -> Label Comp -> Label Comp                    -> Symbol op
+  SWhl  :: GValEnv env -> Label Comp -> Label Comp -> GroundVars env bnd -> Uniquenesses bnd -> Symbol op
   SLet  ::                   BoundGLHS bnd env env' -> Label Comp           -> Uniquenesses bnd -> Symbol op
   SFun  ::                   BoundGLHS bnd env env' -> Label Comp                               -> Symbol op
-  SBod  ::                   BuffersTup a                                                       -> Symbol op
+  SBod  ::                   GVals a                                                       -> Symbol op
   SBlk  ::                                                                                         Symbol op
-  SRet  :: BuffersEnv env -> GroundVars env a                                                   -> Symbol op
-  SCmp  :: BuffersEnv env -> Exp env a                                                          -> Symbol op
-  SAlc  :: BuffersEnv env -> ShapeR sh -> ScalarType e -> ExpVars env sh                        -> Symbol op
-  SUnt  :: BuffersEnv env -> ExpVar env e                                                       -> Symbol op
+  SRet  :: GValEnv env -> GroundVars env a                                                   -> Symbol op
+  SCmp  :: GValEnv env -> Exp env a                                                          -> Symbol op
+  SAlc  :: GValEnv env -> ShapeR sh -> ScalarType e -> ExpVars env sh                        -> Symbol op
+  SUnt  :: GValEnv env -> ExpVar env e                                                       -> Symbol op
 
 instance Show (Symbol op) where
   show :: Symbol op -> String
@@ -627,7 +625,7 @@ attachBackendLabels sol = M.mapWithKey \cases
 --
 data FusionGraphState op env = FusionGraphState
   { _fusionILP  :: FusionILP op    -- ^ The ILP information.
-  , _buffersEnv :: BuffersEnv env  -- ^ The label environment.
+  , _buffersEnv :: GValEnv env  -- ^ The label environment.
   , _readersEnv :: ReadersEnv      -- ^ Mapping from buffers to their current consumers.
   , _writersEnv :: WritersEnv      -- ^ Mapping from buffers to their current producers.
   , _allocators :: Allocators      -- ^ Mapping from buffers to their allocator.
@@ -654,11 +652,11 @@ instance HasFusionILP (FusionGraphState op env) op where
   fusionILP f s = f (_fusionILP s) <&> \ilp -> s{_fusionILP = ilp}
 
 class HasBuffersEnv s t env env' | s -> env, t -> env' where
-  buffersEnv :: Lens s t (BuffersEnv env) (BuffersEnv env')
+  gvalEnv :: Lens s t (GValEnv env) (GValEnv env')
 
 instance HasBuffersEnv (FusionGraphState op env) (FusionGraphState op env') env env' where
-  buffersEnv :: Lens (FusionGraphState op env) (FusionGraphState op env') (BuffersEnv env) (BuffersEnv env')
-  buffersEnv f s = f (_buffersEnv s) <&> \env -> s{_buffersEnv = env}
+  gvalEnv :: Lens (FusionGraphState op env) (FusionGraphState op env') (GValEnv env) (GValEnv env')
+  gvalEnv f s = f (_buffersEnv s) <&> \env -> s{_buffersEnv = env}
 
 class HasReadersEnv s where
   readersEnv :: Lens' s ReadersEnv
@@ -704,7 +702,7 @@ currEnvL f s = f (_currEnvL s) <&> \l -> s{_currEnvL = l}
 -- The fusion ILP is the only value that the backend may modify, so its the only
 -- value that is retrieved from the backend graph state afterwards.
 backendGraphState :: ReadersEnv -> WritersEnv -> Lens' (FusionGraphState op env) (BackendGraphState op env)
-backendGraphState renv wenv f s = f (BackendGraphState (s^.fusionILP) (s^.buffersEnv) renv wenv)
+backendGraphState renv wenv f s = f (BackendGraphState (s^.fusionILP) (s^.gvalEnv) renv wenv)
   <&> \b -> s & fusionILP .~ b^.fusionILP
 
 -- | Lens for getting and setting the writers of a buffer.
@@ -745,8 +743,8 @@ allocator b = allocators.(`M.alterF` b)
 scope :: Label Comp -> Lens' (FusionGraphState op env) (FusionGraphState op env)
 scope c = with (currComp.parent) (Just c)
 
-local :: BuffersEnv env' -> Lens' (FusionGraphState op env) (FusionGraphState op env')
-local env' f s = (buffersEnv .~ s^.buffersEnv) <$> f (s & buffersEnv .~ env')
+local :: GValEnv env' -> Lens' (FusionGraphState op env) (FusionGraphState op env')
+local env' f s = (gvalEnv .~ s^.gvalEnv) <$> f (s & gvalEnv .~ env')
 
 -- | Fresh computation label.
 freshComp :: State (FusionGraphState op env) (Label Comp)
@@ -873,7 +871,7 @@ instance HasAllocators (FullGraph op) where
 
 -- | Construct the full fusion graph for a program.
 mkFullGraph :: MakesILP op => PreOpenAcc op () t -> FullGraph op
-mkFullGraph acc = finalizeInplacePaths $ manifestBuffers (fold res) (s^.fusionILP, s^.symbols, s^.allocators)
+mkFullGraph acc = finalizeInplacePaths $ manifestBuffers (foldTupR res) (s^.fusionILP, s^.symbols, s^.allocators)
   where (res, s) = runState (mkFusionGraph acc) initialFusionGraphState
 
 -- | Construct the full fusion graph for a function.
@@ -892,9 +890,9 @@ manifestBuffers bs = fusionILP.constraints <>~ foldMap (\b -> manifest b .==. in
 
 -- | Construct the fusion graph of a program.
 mkFusionGraph :: forall op env t. MakesILP op
-              => FusionGraphMaker PreOpenAcc op env t (BuffersTup t)
+              => FusionGraphMaker PreOpenAcc op env t (GVals t)
 mkFusionGraph (Exec op args) = do
-  lenv <- use buffersEnv
+  lenv <- use gvalEnv
   renv <- use readersEnv
   wenv <- use writersEnv
   c    <- freshComp
@@ -908,7 +906,7 @@ mkFusionGraph (Exec op args) = do
   c `requiresBuffers` notArrs
   zoom (backendGraphState renv wenv) (mkGraph c op labelledArgs)
   symbol c ?= SExe lenv labelledArgs op
-  return TupFunit
+  return TupRunit
 
 mkFusionGraph (Alet LeftHandSideUnit _ bnd body)
   = mkFusionGraph bnd >> mkFusionGraph body
@@ -918,52 +916,52 @@ mkFusionGraph (Alet LeftHandSideUnit _ bnd body)
 -- instructions attach themselves to the buffer.
 mkFusionGraph (Alet lhs u bnd body) = do
   c       <- freshComp  -- TODO: If there is an issue with reconstruction, maybe move this behind "bndRes <- mkFusionGraph bnd". The order in which labels are generate affects the order in which the clusters are interpreted. Previously let-bindings where always in a separate cluster from the bound computation, but now they are usually in the same cluster to prevent all buffers from being manifest. That said, topsort should already be taking care of this ordering issue.
-  lenv    <- use buffersEnv
+  lenv    <- use gvalEnv
   bndRes  <- mkFusionGraph bnd
-  bndResW <- traverse (use . allWriters) bndRes
-  c `bindsBuffers` fold bndRes
+  bndResW <- traverseConstsR (use . allWriters) bndRes
+  c `bindsBuffers` foldTupR bndRes
   lenv'   <- zoom currEnvL (weakenEnv lhs bndRes u lenv)
-  symbol c ?= SLet (bindLHS lhs lenv') (fromSingletonSet $ fold bndResW) u
+  symbol c ?= SLet (bindLHS lhs lenv') (fromSingletonSet $ foldTupR bndResW) u
   bodyRes <- zoom (local lenv') (mkFusionGraph body)
-  c `producesBuffers` fold bodyRes
+  c `producesBuffers` foldTupR bodyRes
   return bodyRes
 
 mkFusionGraph (Return vars) = do
-  lenv <- use buffersEnv
+  lenv <- use gvalEnv
   c    <- freshComp
   let (_, bs, _) = getVarsFromEnv vars lenv
-  c `returnsBuffers` fold bs
+  c `returnsBuffers` foldTupR bs
   symbol c ?= SRet lenv vars
   return bs
 
 mkFusionGraph (Compute expr) = do
   c    <- freshComp
-  lenv <- use buffersEnv
+  lenv <- use gvalEnv
   c `requiresBuffers` getExpDeps expr lenv
   symbol c ?= SCmp lenv expr
-  tupFlike (expType expr) (S.singleton <$> freshBuff c)
+  traverseTupR (const $ C.Const . S.singleton <$> freshBuff c) (expType expr)
 
 mkFusionGraph (Alloc shr e sh) = do
   c <- freshComp
-  lenv   <- use buffersEnv
+  lenv   <- use gvalEnv
   c `requiresBuffers` getVarsDeps sh lenv
   symbol c ?= SAlc lenv shr e sh
-  TupFsingle . S.singleton <$> freshBuff c
+  TupRsingle . C.Const . S.singleton <$> freshBuff c
 
 mkFusionGraph (Unit v) = do
   c    <- freshComp
-  lenv <- use buffersEnv
+  lenv <- use gvalEnv
   c `requiresBuffers` getVarDeps v lenv
   symbol c ?= SUnt lenv v
-  TupFsingle . S.singleton <$> freshBuff c
+  TupRsingle . C.Const . S.singleton <$> freshBuff c
 
 mkFusionGraph (Use sctype n buff) = do
   c <- freshComp
   symbol c ?= SUse sctype n buff
-  TupFsingle . S.singleton <$> freshBuff c
+  TupRsingle . C.Const . S.singleton <$> freshBuff c
 
 mkFusionGraph (Acond cond tacc facc) = do
-  lenv    <- use buffersEnv
+  lenv    <- use gvalEnv
   c_cond  <- freshComp
   zoom (scope c_cond) do
     c_true  <- freshComp
@@ -975,75 +973,77 @@ mkFusionGraph (Acond cond tacc facc) = do
     readersEnv .= M.unionWith S.union t_renv f_renv
     writersEnv .= M.unionWith S.union t_wenv f_wenv
     let res = t_res <> f_res
-    c_cond `returnsBuffers` fold res
+    c_cond `returnsBuffers` foldTupR res
     return res
 
 mkFusionGraph (Awhile u cond body init) = do
-  lenv    <- use buffersEnv
+  -- TODO: Maybe allocate a fresh array for the return value of the while loop?
+  --       This would be more accurate to the decoupled-ness of the return value.
+  lenv    <- use gvalEnv
   c_while <- freshComp
   zoom (scope c_while) do
     c_cond  <- freshComp
     c_body  <- freshComp
     let (_, init_res, _) = getVarsFromEnv init lenv
-    c_while `requiresBuffers` fold init_res
+    c_while `requiresBuffers` foldTupR init_res
     symbol c_while ?= SWhl lenv c_cond c_body init u
     (_       , cond_renv, cond_wenv) <- block c_cond (mkFusionGraphW u) cond
     (body_res, body_renv, body_wenv) <- block c_body (mkFusionGraphW u) body
     readersEnv .= M.unionWith S.union cond_renv body_renv
     writersEnv .= M.unionWith S.union cond_wenv body_wenv
     let res = init_res <> body_res
-    c_while `returnsBuffers` fold res
+    c_while `returnsBuffers` foldTupR res
     return res
 
 
 
--- | Construct the fusion graph of a single-argument function.
+  -- | Construct the fusion graph of a single-argument function.
 mkFusionGraphW :: forall op env s t. MakesILP op
-               => Uniquenesses s -> FusionGraphMaker PreOpenAfun op env (s -> t) (BuffersTup t)
+               => Uniquenesses s -> FusionGraphMaker PreOpenAfun op env (s -> t) (GVals t)
 mkFusionGraphW _ (Abody _) = internalError "mkFusionGraphW: expected Alam"
 mkFusionGraphW u (Alam lhs f) = do
   c    <- freshComp
-  lenv <- use buffersEnv
-  bs   <- tupFlike (lhsToTupR lhs) (S.singleton <$> freshBuff c)
+  lenv <- use gvalEnv
+  bs   <- traverseTupR (const $ C.Const . S.singleton <$> freshBuff c) (lhsToTupR lhs)
   lenv'<- zoom currEnvL (weakenEnv lhs bs u lenv)
   res  <- zoom (local lenv') (unresult <$> mkFusionGraphF f)
-  resW <- traverse (use . allWriters) res
-  symbol c ?= SFun (bindLHS lhs lenv') (fromSingletonSet $ fold resW)
-  c `producesBuffers` fold res
+  resW <- traverseConstsR (use . allWriters) res
+  symbol c ?= SFun (bindLHS lhs lenv') (fromSingletonSet $ foldTupR resW)
+  c `producesBuffers` foldTupR res
   return res
 
 
 
 -- | Construct the fusion graph of a function.
 mkFusionGraphF :: forall op env t. MakesILP op
-               => FusionGraphMaker PreOpenAfun op env t (BuffersTup (Result t))
+               => FusionGraphMaker PreOpenAfun op env t (GVals (Result t))
 mkFusionGraphF (Abody acc) = do
   c <- freshComp
   zoom (scope c) do
     res <- mkFusionGraph acc
-    c `returnsBuffers` fold res
+    c `returnsBuffers` foldTupR res
     symbol c ?= SBod res
-    fusionILP.constraints %= (<> foldMap ((.==. int 0) . manifest) (fold res))
+    fusionILP.constraints %= (<> foldMap ((.==. int 0) . manifest) (foldTupR res))
     return $ result res
 
 mkFusionGraphF (Alam lhs f) = do
   c    <- freshComp
-  lenv <- use buffersEnv
-  bs   <- tupFlike (lhsToTupR lhs) (S.singleton <$> freshBuff c)
+  lenv <- use gvalEnv
+  bs   <- traverseTupR (const $ C.Const . S.singleton <$> freshBuff c) (lhsToTupR lhs)
   let lhs' = lhsToTupR lhs
   let u    = mapTupR (const Shared) lhs'  -- For now we assume variables to a function are shared. (safe)
   lenv' <- zoom currEnvL (weakenEnv lhs bs u lenv)
   res   <- zoom (local lenv') (mkFusionGraphF f)
-  resW  <- traverse (use . allWriters) res
-  symbol c ?= SFun (bindLHS lhs lenv') (fromSingletonSet $ fold resW)
-  c `producesBuffers` fold res
+  resW  <- traverseConstsR (use . allWriters) res
+  symbol c ?= SFun (bindLHS lhs lenv') (fromSingletonSet $ foldTupR resW)
+  c `producesBuffers` foldTupR res
   return res
 
 
 
 -- | Helper for if-then-else and while loop blocks.
-block :: HasCallStack => Label Comp -> FusionGraphMaker f op env t (BuffersTup r)
-      -> FusionGraphMaker f op env t (BuffersTup r, ReadersEnv, WritersEnv)
+block :: HasCallStack => Label Comp -> FusionGraphMaker f op env t (GVals r)
+      -> FusionGraphMaker f op env t (GVals r, ReadersEnv, WritersEnv)
 block c f x = zoom (scope c . protected writersEnv . protected readersEnv) do
   res <- f x
   symbol c ?= SBlk
@@ -1068,38 +1068,14 @@ type family Result t where
   Result (_ -> t) = Result t
   Result t        = t
 
-result :: BuffersTup t -> BuffersTup (Result t)
+result :: GVals t -> GVals (Result t)
 result = unsafeCoerce
 {-# INLINE result #-}
 
-unresult :: BuffersTup (Result t) -> BuffersTup t
+unresult :: GVals (Result t) -> GVals t
 unresult = unsafeCoerce
 {-# INLINE unresult #-}
 
-{-
-I probably want to not duplicate a buffer that is used as both input
-and output. Doing so is extremely tricky because doing so requires that the
-environment is updated to point to the new buffer. Because of this we can't
-simply put the old environment back after a let binding.
-
-Doing this isn't the worst, we just need to weaken the environment instead. What
-is a problem is how to handle the backend. The backend needs to know which
-buffers are its inputs and outputs and it needs to be able to query the graph.
-Problem is, it needs to do these queries on the old graph which doesn't contain
-the new buffer yet.
-
-So avoinding duplicating buffers is probably best. In this case it's not
-necessary to keep the environment in the state, but I'll do so regardless
-because in most cases the environment isn't touched. I could in this case
-move the graph out of the state since it might cause confusion as to whether I
-am working on the full graph or some temporary subgraph that will be merged
-later.
-
-Bonus, this approach still allows for the duplication of input and ouput buffers
-in a separate pass before fusion. Doing it like that won't have any of the
-aforementioned problems since the buffer will be a proper part of the graph
-and the environment before some operation is executed.
--}
 
 
 
@@ -1206,7 +1182,7 @@ mkInplacePathsFromClusters g = g&fusionILP.inplacePaths <>~ go initialClusters
 -- | Makes a ReindexPartial, which allows us to transform indices in @env@ into indices in @env'@.
 -- We cannot guarantee the index is present in env', so we use the partiality of ReindexPartial by
 -- returning a Maybe. Uses unsafeCoerce to re-introduce type information implied by the EnvLabels.
-mkReindexPartial :: forall env env'. Map (Label GVal) (Label GVal) -> BuffersEnv env -> BuffersEnv env' -> ReindexPartial Maybe env env'
+mkReindexPartial :: forall env env'. Map (Label GVal) (Label GVal) -> GValEnv env -> GValEnv env' -> ReindexPartial Maybe env env'
 mkReindexPartial m env env' idx = let val = lookupIdxInEnv idx env^._2 in case idxOf (inplaceOf val) env' of
     Just idx' -> Just idx'
     -- Gracefully fall back to using the original value instead of the one defined by an in-place update.
@@ -1217,15 +1193,14 @@ mkReindexPartial m env env' idx = let val = lookupIdxInEnv idx env^._2 in case i
     Nothing -> internalWarning "mkReindexPartial: Fallback to non-in-place value." False $ idxOf val env'
   where
     -- Replace the buffer with the one we will actually write the data to.
-    inplaceOf :: BuffersTup a -> BuffersTup a
-    -- inplaceOf (TupFsingle bs) = TupFsingle $ maybe bs S.fromList (traverse (`M.lookup` m) $ S.toList bs)
-    inplaceOf (TupFsingle bs) = TupFsingle $ S.map (\b -> M.findWithDefault b b m) bs
-    inplaceOf (TupFpair bs1 bs2) = TupFpair (inplaceOf bs1) (inplaceOf bs2)
-    inplaceOf TupFunit = TupFunit
+    inplaceOf :: GVals a -> GVals a
+    inplaceOf (TupRsingle (C.Const bs)) = TupRsingle $ C.Const $ S.map (\b -> M.findWithDefault b b m) bs
+    inplaceOf (TupRpair bs1 bs2) = TupRpair (inplaceOf bs1) (inplaceOf bs2)
+    inplaceOf TupRunit = TupRunit
 
     -- Find the corresponding EnvLabel in the new environment.
-    idxOf :: forall e a. BuffersTup a -> BuffersEnv e -> Maybe (Idx e a)
-    idxOf bs ((_,bs',_) :>>: rest) -- bs' is the BuffersTup in the new environment
+    idxOf :: forall e a. GVals a -> GValEnv e -> Maybe (Idx e a)
+    idxOf bs ((_,bs',_) :>>: rest) -- bs' is the GVals in the new environment
       -- Here we have to convince GHC that the top element in the environment
       -- really does have the same type as the one we were searching for.
       -- Some literature does this stuff too: 'effect handlers in haskell, evidently'
@@ -1233,7 +1208,7 @@ mkReindexPartial m env env' idx = let val = lookupIdxInEnv idx env^._2 in case i
       -- Basically: standard procedure if you're using Ints as a unique identifier
       -- and want to re-introduce type information. :)
       -- Type applications allow us to restrict unsafeCoerce to the return type.
-      | bs `eqTupF` bs' = Just $ unsafeCoerce @(Idx e _) @(Idx e a) ZeroIdx
+      | bs `eqConstsR` bs' = Just $ unsafeCoerce @(Idx e _) @(Idx e a) ZeroIdx
       -- Recurse if we did not find e' yet.
       | otherwise = SuccIdx <$> idxOf bs rest
     -- If we hit the end, the Elabel was not present in the environment.
@@ -1293,13 +1268,13 @@ traceComp c = do
   traceM $ "    Symbol:       " ++ show c_symb
 
 -- | Print out information about the current environment.
-traceEnv' :: BuffersEnv env' -> State (FusionGraphState op env) ()
+traceEnv' :: GValEnv env' -> State (FusionGraphState op env) ()
 traceEnv' env = do
   traceM "  Environment: "
   forLEnv_ env \bs -> traceM $ "    " ++ show bs
 
 traceEnv :: State (FusionGraphState op env) ()
-traceEnv = use buffersEnv >>= traceEnv'
+traceEnv = use gvalEnv >>= traceEnv'
 
 -- | Converts a triple (a, b, c) into ((a, b), c)
 tripleToLeftRec :: (a, b, c) -> ((a, b), c)

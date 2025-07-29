@@ -36,6 +36,7 @@ import Data.Type.Equality
 
 import Formatting
 import Language.Haskell.TH.Extra
+import Data.Functor.Const
 
 
 -- | Both arrays (Acc) and expressions (Exp) are represented as nested
@@ -237,6 +238,23 @@ traverseTupR :: Applicative f => (forall s. a s -> f (b s)) -> TupR a t -> f (Tu
 traverseTupR f (TupRsingle a)   = TupRsingle <$> f a
 traverseTupR _ TupRunit         = pure TupRunit
 traverseTupR f (TupRpair a1 a2) = TupRpair <$> traverseTupR f a1 <*> traverseTupR f a2
+
+traverseConstsR :: Applicative f => (a -> f b) -> TupR (Const a) t -> f (TupR (Const b) t)
+traverseConstsR f = traverseTupR (\(Const a) -> Const <$> f a)
+
+foldTupR :: (Monoid m) => TupR (Const m) t -> m
+foldTupR TupRunit = mempty
+foldTupR (TupRsingle (Const x)) = x
+foldTupR (TupRpair l r) = foldTupR l <> foldTupR r
+
+eqTupR :: (forall s1 s2. a s1 -> a s2 -> Bool) -> TupR a t1 -> TupR a t2 -> Bool
+eqTupR _ TupRunit TupRunit = True
+eqTupR f (TupRsingle x) (TupRsingle y) = f x y
+eqTupR f (TupRpair xl xr) (TupRpair yl yr) = eqTupR f xl yl && eqTupR f xr yr
+eqTupR _ _ _ = False
+
+eqConstsR :: Eq a => TupR (Const a) s -> TupR (Const a) t -> Bool
+eqConstsR = eqTupR (\(Const x) (Const y) -> x == y)
 
 functionImpossible :: TypeR (s -> t) -> a
 functionImpossible (TupRsingle (SingleScalarType (NumSingleType tp))) = case tp of

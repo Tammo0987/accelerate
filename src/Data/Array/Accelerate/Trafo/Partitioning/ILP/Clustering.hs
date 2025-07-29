@@ -172,7 +172,7 @@ topSort singletons (FusionGraph strictEdges dataflowEdges _) cluster readDirM =
 
 openReconstruct   :: (MakesILP op, SimplifyOperation op)
                   => Bool
-                  -> BuffersEnv aenv
+                  -> GValEnv aenv
                   -> FusionGraph
                   -> [ClusterLs]
                   -> M.Map (Label Comp) [ClusterLs]
@@ -183,7 +183,7 @@ openReconstruct   :: (MakesILP op, SimplifyOperation op)
 openReconstruct  a b c d   e f g h = (\(Left x) -> x) $ openReconstruct' a b c d Nothing e f g h
 openReconstructF  :: (MakesILP op, SimplifyOperation op)
                   => Bool
-                  -> BuffersEnv aenv
+                  -> GValEnv aenv
                   -> FusionGraph
                   -> [ClusterLs]
                   -> Label Comp
@@ -194,13 +194,13 @@ openReconstructF  :: (MakesILP op, SimplifyOperation op)
                   -> Exists (PreOpenAfun (Clustered op) aenv)
 openReconstructF a b c d l e f g h = (\(Right x) -> x) $ openReconstruct' a b c d (Just l) e f g h
 
-openReconstruct' :: forall op aenv. (MakesILP op, SimplifyOperation op) => Bool -> BuffersEnv aenv -> FusionGraph -> [ClusterLs] -> Maybe (Label Comp) -> M.Map (Label Comp) [ClusterLs] -> Symbols op -> ReadDirM -> InplaceM -> Either (Exists (PreOpenAcc (Clustered op) aenv)) (Exists (PreOpenAfun (Clustered op) aenv))
+openReconstruct' :: forall op aenv. (MakesILP op, SimplifyOperation op) => Bool -> GValEnv aenv -> FusionGraph -> [ClusterLs] -> Maybe (Label Comp) -> M.Map (Label Comp) [ClusterLs] -> Symbols op -> ReadDirM -> InplaceM -> Either (Exists (PreOpenAcc (Clustered op) aenv)) (Exists (PreOpenAfun (Clustered op) aenv))
 openReconstruct' singletons labelenv graph clusterslist mlab subclustersmap symbols readDirM inplaceM =
   case mlab of
   Just l  -> Right $ makeASTF labelenv l
   Nothing -> Left $ makeAST labelenv clusters
   where
-    mkReindexPartial' :: BuffersEnv env -> BuffersEnv env' -> ReindexPartial Maybe env env'
+    mkReindexPartial' :: GValEnv env -> GValEnv env' -> ReindexPartial Maybe env env'
     mkReindexPartial' = mkReindexPartial inplaceM
 
     -- Make a tree of let bindings
@@ -209,7 +209,7 @@ openReconstruct' singletons labelenv graph clusterslist mlab subclustersmap symb
     -- Those are stored in the 'prev' argument.
     -- Note also that we currently assume that the final cluster is the return argument: If all computations are relevant
     -- and our analysis is sound, the return argument should always appear last. If not.. oops
-    makeAST :: forall env. BuffersEnv env -> [ClusterL] -> Exists (PreOpenAcc (Clustered op) env)
+    makeAST :: forall env. GValEnv env -> [ClusterL] -> Exists (PreOpenAcc (Clustered op) env)
     makeAST _ [] = error "empty AST"
     makeAST env [cluster] = case makeCluster env cluster of
       Fold c args -> Exists $ Exec c $ unLabelOp args
@@ -258,7 +258,7 @@ openReconstruct' singletons labelenv graph clusterslist mlab subclustersmap symb
                 _ -> error "nope"
               NonExecL _ -> makeAST env ctail
 
-    makeASTF :: forall env. BuffersEnv env -> Label Comp -> Exists (PreOpenAfun (Clustered op) env)
+    makeASTF :: forall env. GValEnv env -> Label Comp -> Exists (PreOpenAfun (Clustered op) env)
     makeASTF env l = case makeCluster env (NonExecL l) of
       NotFold (SBod l') -> case makeAST env (subcluster l) of
           Exists acc -> Exists $ Abody acc
@@ -288,7 +288,7 @@ openReconstruct' singletons labelenv graph clusterslist mlab subclustersmap symb
                       NonExec l -> [NonExecL l])) subclustersmap
     subcluster l = subclusters !?? l
 
-    makeCluster :: HasCallStack => BuffersEnv env -> ClusterL -> FoldType op env
+    makeCluster :: HasCallStack => GValEnv env -> ClusterL -> FoldType op env
     makeCluster env (ExecL ls) =
        foldr1 (flip fuseCluster)
                     $ map ( \l -> case symbols !?? l of

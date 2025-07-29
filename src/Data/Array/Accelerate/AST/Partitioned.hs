@@ -62,7 +62,7 @@ import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.Trafo.Var
 import Data.Array.Accelerate.Trafo.Exp.Substitution
 import Data.Array.Accelerate.Trafo.Substitution
-import Data.Array.Accelerate.Trafo.Partitioning.ILP.Labels (LabelledArgs, LabelledArg (..), Label(..), ArgLabel (..), EnvLabel, LabelType (..), TupF (..), EnvLabelTup, EnvVals)
+import Data.Array.Accelerate.Trafo.Partitioning.ILP.Labels (LabelledArgs, LabelledArg (..), Label(..), ArgLabel (..), EnvLabel, LabelType (..), EnvLabels, EnvVals)
 import Data.List (sortOn, partition, groupBy, nubBy)
 import qualified Data.Functor.Const as C
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Graph (LabelledArgOp (..), BackendClusterArg, MakesILP (..), LabelledArgsOp, BackendCluster)
@@ -168,7 +168,7 @@ split (ArgArray Out (ArrayR shr (TupRpair rl rr)) sh (TupRpair bufl bufr)) = (Ar
 split _ = error "non-array soa"
 
 splitEnvVals :: EnvVals (l,r) -> (EnvVals l, EnvVals r)
-splitEnvVals (TupFpair el er, TupFpair bsl bsr, TupRpair ul ur) = ((el, bsl, ul), (er, bsr, ur))
+splitEnvVals (TupRpair el er, TupRpair bsl bsr, TupRpair ul ur) = ((el, bsl, ul), (er, bsr, ur))
 splitEnvVals (_, _, _) = error "pair in single"
 
 splitArgLabel :: ArgLabel (f (el,er)) -> (ArgLabel (f el), ArgLabel (f er))
@@ -383,8 +383,8 @@ mkFused ArgsNil (LOp r _ _ :>: rs) k = mkFused ArgsNil rs $ \f -> k (addright r 
 mkFused (LOp l _ _ :>: ls) ArgsNil k = mkFused ls ArgsNil $ \f -> k (addleft l f)
 mkFused ((LOp l (NotArr _) _) :>: ls) rs k = mkFused ls rs $ \f -> k (addleft l f)
 mkFused ls ((LOp r (NotArr _) _) :>: rs) k = mkFused ls rs $ \f -> k (addright r f)
-mkFused ((LOp l (Arr (TupFunit, _, _) _) _) :>: ls) rs k = mkFused ls rs $ \f -> k (addleft l f)
-mkFused ls ((LOp r (Arr (TupFunit, _, _) _) _) :>: rs) k = mkFused ls rs $ \f -> k (addright r f)
+mkFused ((LOp l (Arr (TupRunit, _, _) _) _) :>: ls) rs k = mkFused ls rs $ \f -> k (addleft l f)
+mkFused ls ((LOp r (Arr (TupRunit, _, _) _) _) :>: rs) k = mkFused ls rs $ \f -> k (addright r f)
 mkFused (l'@(LOp l _ bl) :>: ls) (r'@(LOp r _ br) :>: rs) k
   | Just le <- getElabelForSort $ unOpLabel l'
   , Just re <- getElabelForSort $ unOpLabel r'
@@ -394,8 +394,8 @@ mkFused (l'@(LOp l _ bl) :>: ls) (r'@(LOp r _ br) :>: rs) k
       EQ -> mkFused ls rs $ \f -> if bl == br then addboth l r f k else k (addleft l (addright r f))
 mkFused ((LOp l@(ArgArray Mut _ _ _) _ _) :>: ls) rs k = mkFused ls rs $ \f -> k (addleft l f)
 mkFused ls ((LOp r@(ArgArray Mut _ _ _) _ _) :>: rs) k = mkFused ls rs $ \f -> k (addright r f)
-mkFused ((LOp _ (Arr (TupFpair{}, _, _) _) _) :>: _) _ _ = error "not soa'd array"
-mkFused _ ((LOp _ (Arr (TupFpair{}, _, _) _) _) :>: _) _ = error "not soa'd array"
+mkFused ((LOp _ (Arr (TupRpair{}, _, _) _) _) :>: _) _ _ = error "not soa'd array"
+mkFused _ ((LOp _ (Arr (TupRpair{}, _, _) _) _) :>: _) _ = error "not soa'd array"
 mkFused _ _ _ = error "exhaustive"
 
 addleft :: Arg env arg -> Fusion left right args -> Fusion (arg->left) right (arg->args)
@@ -426,7 +426,7 @@ addboth (ArgArray In  _ _ _) (ArgArray Out _ _ _) _ _ = error "reverse vertical/
 addboth _ _ _ _ = error "fusing non-arrays"
 
 getElabelForSort :: LabelledArg env a -> Maybe EnvLabel
-getElabelForSort (L (ArgArray m (ArrayR _ TupRsingle{}) _ _) (Arr (TupFsingle e, _, _) _))
+getElabelForSort (L (ArgArray m (ArrayR _ TupRsingle{}) _ _) (Arr (TupRsingle (C.Const e), _, _) _))
   | In  <- m = Just e
   | Out <- m = Just e
 getElabelForSort _ = Nothing
@@ -482,12 +482,12 @@ createClusterArg _ sorted (LOp (ArgArray (m :: Modifier m) (ArrayR (shr :: Shape
     inOrOut Out = True
     inOrOut _   = False
 
-    go :: TypeR t -> EnvLabelTup t -> ClusterArgBuffers (FunToEnv sorted) m sh t
-    go TupRunit TupFunit
+    go :: TypeR t -> EnvLabels (Buffers t) -> ClusterArgBuffers (FunToEnv sorted) m sh t
+    go TupRunit TupRunit
       = ClusterArgBuffersLive TupRunit $ findUnit sorted
-    go (TupRsingle t) ((TupFsingle label))
+    go (TupRsingle t) ((TupRsingle (C.Const label)))
       = ClusterArgBuffersLive (TupRsingle t) $ findLabel (TupRsingle t) label sorted
-    go (TupRpair t1 t2) ((TupFpair l1 l2))
+    go (TupRpair t1 t2) ((TupRpair l1 l2))
       = go t1 l1 `ClusterArgBuffersPair` go t2 l2
     go _ _ = internalError "Tuple mismatch"
 
@@ -508,7 +508,7 @@ createClusterArg _ sorted (LOp (ArgArray (m :: Modifier m) (ArrayR (shr :: Shape
       -> LabelledArgsOp op env sorted'
       -> Idx (FunToEnv sorted') (m sh t)
     findLabel tp label = \case
-      LOp (ArgArray m' (ArrayR _ tp') sh' _) (Arr (TupFsingle label', _, _) _) _ :>: _
+      LOp (ArgArray m' (ArrayR _ tp') sh' _) (Arr (TupRsingle (C.Const label'), _, _) _) _ :>: _
         | label == label'
         , Refl <- expectOr "Modifier didn't match" $ matchModifier m m'
         , Refl <- expectOr "Shapes didn't match" $ matchVars sh sh'
@@ -610,19 +610,19 @@ sortAndExpandArgs args = argsFromList $ singles ++ unitArraysDedup ++ dedup
     compareUnitArrays _ _ = False
 
 expandUnitArg :: LabelledArgOp op env t -> [Exists (LabelledArgOp op env)]
-expandUnitArg (LOp (ArgArray m (ArrayR shr (TupRpair t1 t2)) sh (TupRpair b1 b2)) (Arr (TupFpair l1 l2, TupFpair bs1 bs2, TupRpair u1 u2) shval) ba)
+expandUnitArg (LOp (ArgArray m (ArrayR shr (TupRpair t1 t2)) sh (TupRpair b1 b2)) (Arr (TupRpair l1 l2, TupRpair bs1 bs2, TupRpair u1 u2) shval) ba)
   =  expandUnitArg (LOp (ArgArray m (ArrayR shr t1) sh b1) (Arr (l1, bs1, u1) shval) ba)
   ++ expandUnitArg (LOp (ArgArray m (ArrayR shr t2) sh b2) (Arr (l2, bs2, u2) shval) ba)
-expandUnitArg arg@(LOp _ (Arr (TupFunit, _, _) _) _) = [Exists arg]
+expandUnitArg arg@(LOp _ (Arr (TupRunit, _, _) _) _) = [Exists arg]
 expandUnitArg _ = []
 
 expandArg :: LabelledArgOp op env t -> [(EnvLabel, Exists (LabelledArgOp op env))]
-expandArg (LOp (ArgArray m (ArrayR shr (TupRpair t1 t2)) sh (TupRpair b1 b2)) (Arr (TupFpair l1 l2, TupFpair bs1 bs2, TupRpair u1 u2) shvar) ba)
+expandArg (LOp (ArgArray m (ArrayR shr (TupRpair t1 t2)) sh (TupRpair b1 b2)) (Arr (TupRpair l1 l2, TupRpair bs1 bs2, TupRpair u1 u2) shvar) ba)
   =  expandArg (LOp (ArgArray m (ArrayR shr t1) sh b1) (Arr (l1, bs1, u1) shvar) ba)
   ++ expandArg (LOp (ArgArray m (ArrayR shr t2) sh b2) (Arr (l2, bs2, u2) shvar) ba)
-expandArg arg@(LOp _ (Arr (TupFsingle l, _, _) _) _)
+expandArg arg@(LOp _ (Arr (TupRsingle (C.Const l), _, _) _) _)
   = [(l, Exists arg)]
-expandArg (LOp _ (Arr (TupFunit, _, _) _) _) = []
+expandArg (LOp _ (Arr (TupRunit, _, _) _) _) = []
 expandArg _ = internalError "Tuple mismatch with labels"
 
 instance ShrinkArg (BackendClusterArg op) => SLVOperation (Clustered op) where
@@ -739,7 +739,7 @@ prjClusterArg args (ClusterArgArray (m :: Modifier m) (shr :: ShapeR sh) tp buff
 showSorted :: LabelledArgsOp op env args -> String
 showSorted ArgsNil = ""
 showSorted (a :>: args) = case a of
-  LOp (ArgArray m _ _ _) (Arr (_,bs,_) (_,sh,_)) _ -> show m <> "{" <> show (fold bs <> fold sh) <> "}" <> showSorted args
+  LOp (ArgArray m _ _ _) (Arr (_,bs,_) (_,sh,_)) _ -> show m <> "{" <> show (foldTupR bs <> foldTupR sh) <> "}" <> showSorted args
   _ -> showSorted args
 
 data FlatCluster op env where
