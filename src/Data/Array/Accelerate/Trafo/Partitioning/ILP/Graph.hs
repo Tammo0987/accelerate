@@ -1000,7 +1000,7 @@ mkFusionGraph (Awhile u cond body init) = do
   -- | Construct the fusion graph of a single-argument function.
 mkFusionGraphW :: forall op env s t. MakesILP op
                => Uniquenesses s -> FusionGraphMaker PreOpenAfun op env (s -> t) (GVals t)
-mkFusionGraphW _ (Abody _) = internalError "mkFusionGraphW: expected Alam"
+mkFusionGraphW _ (Abody body) = groundFunctionImpossible $ groundsR body
 mkFusionGraphW u (Alam lhs f) = do
   c    <- freshComp
   lenv <- use gvalEnv
