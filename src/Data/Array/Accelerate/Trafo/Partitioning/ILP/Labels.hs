@@ -107,7 +107,7 @@ instance Show (Label GVal) where
   show b = "B" ++ intercalate "." (map show . reverse $ labelIds b)
 
 labelIds :: Label t -> [Int]
-labelIds (Label i p) = i : maybe [] labelIds p
+labelIds l = l^.labelId : maybe [] labelIds (l^.parent)
 
 instance Eq (Label t) where
   (==) :: Label t -> Label t -> Bool
