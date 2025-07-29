@@ -242,10 +242,13 @@ traverseTupR f (TupRpair a1 a2) = TupRpair <$> traverseTupR f a1 <*> traverseTup
 traverseConstsR :: Applicative f => (a -> f b) -> TupR (Const a) t -> f (TupR (Const b) t)
 traverseConstsR f = traverseTupR (\(Const a) -> Const <$> f a)
 
-foldTupR :: (Monoid m) => TupR (Const m) t -> m
-foldTupR TupRunit = mempty
-foldTupR (TupRsingle (Const x)) = x
-foldTupR (TupRpair l r) = foldTupR l <> foldTupR r
+foldMapTupR :: Monoid m => (forall s. a s -> m) -> TupR a t -> m
+foldMapTupR f (TupRsingle a)   = f a
+foldMapTupR _ TupRunit         = mempty
+foldMapTupR f (TupRpair a1 a2) = foldMapTupR f a1 <> foldMapTupR f a2
+
+foldConstsR :: (Monoid m) => TupR (Const m) t -> m
+foldConstsR = foldMapTupR (\(Const a) -> a)
 
 eqTupR :: (forall s1 s2. a s1 -> a s2 -> Bool) -> TupR a t1 -> TupR a t2 -> Bool
 eqTupR _ TupRunit TupRunit = True

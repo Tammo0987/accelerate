@@ -871,7 +871,7 @@ instance HasAllocators (FullGraph op) where
 
 -- | Construct the full fusion graph for a program.
 mkFullGraph :: MakesILP op => PreOpenAcc op () t -> FullGraph op
-mkFullGraph acc = finalizeInplacePaths $ manifestBuffers (foldTupR res) (s^.fusionILP, s^.symbols, s^.allocators)
+mkFullGraph acc = finalizeInplacePaths $ manifestBuffers (foldConstsR res) (s^.fusionILP, s^.symbols, s^.allocators)
   where (res, s) = runState (mkFusionGraph acc) initialFusionGraphState
 
 -- | Construct the full fusion graph for a function.
@@ -919,18 +919,18 @@ mkFusionGraph (Alet lhs u bnd body) = do
   lenv    <- use gvalEnv
   bndRes  <- mkFusionGraph bnd
   bndResW <- traverseConstsR (use . allWriters) bndRes
-  c `bindsBuffers` foldTupR bndRes
+  c `bindsBuffers` foldConstsR bndRes
   lenv'   <- zoom currEnvL (weakenEnv lhs bndRes u lenv)
-  symbol c ?= SLet (bindLHS lhs lenv') (fromSingletonSet $ foldTupR bndResW) u
+  symbol c ?= SLet (bindLHS lhs lenv') (fromSingletonSet $ foldConstsR bndResW) u
   bodyRes <- zoom (local lenv') (mkFusionGraph body)
-  c `producesBuffers` foldTupR bodyRes
+  c `producesBuffers` foldConstsR bodyRes
   return bodyRes
 
 mkFusionGraph (Return vars) = do
   lenv <- use gvalEnv
   c    <- freshComp
   let (_, bs, _) = getVarsFromEnv vars lenv
-  c `returnsBuffers` foldTupR bs
+  c `returnsBuffers` foldConstsR bs
   symbol c ?= SRet lenv vars
   return bs
 
@@ -973,7 +973,7 @@ mkFusionGraph (Acond cond tacc facc) = do
     readersEnv .= M.unionWith S.union t_renv f_renv
     writersEnv .= M.unionWith S.union t_wenv f_wenv
     let res = t_res <> f_res
-    c_cond `returnsBuffers` foldTupR res
+    c_cond `returnsBuffers` foldConstsR res
     return res
 
 mkFusionGraph (Awhile u cond body init) = do
@@ -985,14 +985,14 @@ mkFusionGraph (Awhile u cond body init) = do
     c_cond  <- freshComp
     c_body  <- freshComp
     let (_, init_res, _) = getVarsFromEnv init lenv
-    c_while `requiresBuffers` foldTupR init_res
+    c_while `requiresBuffers` foldConstsR init_res
     symbol c_while ?= SWhl lenv c_cond c_body init u
     (_       , cond_renv, cond_wenv) <- block c_cond (mkFusionGraphW u) cond
     (body_res, body_renv, body_wenv) <- block c_body (mkFusionGraphW u) body
     readersEnv .= M.unionWith S.union cond_renv body_renv
     writersEnv .= M.unionWith S.union cond_wenv body_wenv
     let res = init_res <> body_res
-    c_while `returnsBuffers` foldTupR res
+    c_while `returnsBuffers` foldConstsR res
     return res
 
 
@@ -1008,8 +1008,8 @@ mkFusionGraphW u (Alam lhs f) = do
   lenv'<- zoom currEnvL (weakenEnv lhs bs u lenv)
   res  <- zoom (local lenv') (unresult <$> mkFusionGraphF f)
   resW <- traverseConstsR (use . allWriters) res
-  symbol c ?= SFun (bindLHS lhs lenv') (fromSingletonSet $ foldTupR resW)
-  c `producesBuffers` foldTupR res
+  symbol c ?= SFun (bindLHS lhs lenv') (fromSingletonSet $ foldConstsR resW)
+  c `producesBuffers` foldConstsR res
   return res
 
 
@@ -1021,9 +1021,9 @@ mkFusionGraphF (Abody acc) = do
   c <- freshComp
   zoom (scope c) do
     res <- mkFusionGraph acc
-    c `returnsBuffers` foldTupR res
+    c `returnsBuffers` foldConstsR res
     symbol c ?= SBod res
-    fusionILP.constraints %= (<> foldMap ((.==. int 0) . manifest) (foldTupR res))
+    fusionILP.constraints %= (<> foldMap ((.==. int 0) . manifest) (foldConstsR res))
     return $ result res
 
 mkFusionGraphF (Alam lhs f) = do
@@ -1035,8 +1035,8 @@ mkFusionGraphF (Alam lhs f) = do
   lenv' <- zoom currEnvL (weakenEnv lhs bs u lenv)
   res   <- zoom (local lenv') (mkFusionGraphF f)
   resW  <- traverseConstsR (use . allWriters) res
-  symbol c ?= SFun (bindLHS lhs lenv') (fromSingletonSet $ foldTupR resW)
-  c `producesBuffers` foldTupR res
+  symbol c ?= SFun (bindLHS lhs lenv') (fromSingletonSet $ foldConstsR resW)
+  c `producesBuffers` foldConstsR res
   return res
 
 

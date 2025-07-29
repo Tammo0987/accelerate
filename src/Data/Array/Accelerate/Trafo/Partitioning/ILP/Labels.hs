@@ -312,7 +312,7 @@ deriving instance Show (ArgLabel t)
 
 -- | Get the set of dependent buffers of an 'ArgLabel'.
 getLabelDeps :: ArgLabel t -> Labels GVal
-getLabelDeps (Arr (_, arr, _) (_, sh, _)) = foldTupR arr <> foldTupR sh
+getLabelDeps (Arr (_, arr, _) (_, sh, _)) = foldConstsR arr <> foldConstsR sh
 getLabelDeps (NotArr deps) = deps
 
 -- | Get the set of unique array dependencies of an 'ArgLabel'.
@@ -324,7 +324,7 @@ getLabelUniqueArrDeps (NotArr _) = internalError "getLabelUniqueArrDeps: Expecte
 uniqueLabels :: Uniquenesses e -> GVals e -> Labels GVal
 uniqueLabels TupRunit TupRunit      = mempty
 uniqueLabels (TupRsingle Shared) _  = mempty
-uniqueLabels (TupRsingle Unique) bs = foldTupR bs
+uniqueLabels (TupRsingle Unique) bs = foldConstsR bs
 uniqueLabels (TupRpair ul ur) (TupRpair l r) = uniqueLabels ul l <> uniqueLabels ur r
 uniqueLabels _ _ = internalError "uniqueLabels: Tuple mismatch "
 
@@ -335,7 +335,7 @@ getLabelArrays (NotArr _) = internalError "getLabelArrays: Expected Arr but got 
 
 -- | Get the array dependencies of an 'ArgLabel'.
 getLabelArrDeps :: ArgLabel (m sh e) -> Labels GVal
-getLabelArrDeps = foldTupR . getLabelArrays
+getLabelArrDeps = foldConstsR . getLabelArrays
 
 -- | Get a single array dependency of an 'ArgLabel'.
 getLabelArrDep :: ArgLabel (m sh e) -> Label GVal
@@ -348,7 +348,7 @@ getLabelShape (NotArr _) = internalError "getLabelShape: Expected Arr but got No
 
 -- | Get the shape dependencies of an 'ArgLabel'.
 getLabelShDeps :: ArgLabel (m sh e) -> Labels GVal
-getLabelShDeps = foldTupR . getLabelShape
+getLabelShDeps = foldConstsR . getLabelShape
 
 -- | Check if two arguments use the same shape variables.
 eqLabelShape :: ArgLabel (m1 sh1 e1) -> ArgLabel (m2 sh2 e2) -> Bool
@@ -401,11 +401,11 @@ lookupIdxInEnv (SuccIdx idx) (_  :>>: env) = lookupIdxInEnv idx env
 
 -- | Get the dependencies of a tuple of variables.
 getVarsDeps :: Vars s env t -> GValEnv env -> Labels GVal
-getVarsDeps vars = foldTupR . (^._2) . getVarsFromEnv vars
+getVarsDeps vars = foldConstsR . (^._2) . getVarsFromEnv vars
 
 -- | Get the dependencies of a tuple of variables.
 getVarDeps :: Var s env t -> GValEnv env -> Labels GVal
-getVarDeps var = foldTupR . (^._2) . getVarFromEnv var
+getVarDeps var = foldConstsR . (^._2) . getVarFromEnv var
 
 -- | Get the dependencies of an expression.
 getExpDeps :: OpenExp x env y -> GValEnv env -> Labels GVal
@@ -588,21 +588,21 @@ forLArgs_ largs f = traverseLArgs_ f largs
 -- | All arrays that the function reads from.
 inputArrays :: LabelledArgs env t -> Labels GVal
 inputArrays = foldMapLArgs \case
-  L (ArgArray In  _ _ _) (Arr (_,arr,_) _) -> foldTupR arr
-  L (ArgArray Mut _ _ _) (Arr (_,arr,_) _) -> foldTupR arr
+  L (ArgArray In  _ _ _) (Arr (_,arr,_) _) -> foldConstsR arr
+  L (ArgArray Mut _ _ _) (Arr (_,arr,_) _) -> foldConstsR arr
   _ -> mempty
 
 -- | All arrays that the function writes to.
 outputArrays :: LabelledArgs env t -> Labels GVal
 outputArrays = foldMapLArgs \case
-  L (ArgArray Out _ _ _) (Arr (_,arr,_) _) -> foldTupR arr
-  L (ArgArray Mut _ _ _) (Arr (_,arr,_) _) -> foldTupR arr
+  L (ArgArray Out _ _ _) (Arr (_,arr,_) _) -> foldConstsR arr
+  L (ArgArray Mut _ _ _) (Arr (_,arr,_) _) -> foldConstsR arr
   _ -> mempty
 
 -- | All non-array arguments and array shapes.
 notArrays :: LabelledArgs env t -> Labels GVal
 notArrays = foldMapLArgs \case
-  L _ (Arr _ (_,sh,_)) -> foldTupR sh
+  L _ (Arr _ (_,sh,_)) -> foldConstsR sh
   L _ (NotArr deps)    -> deps
 
 -- | Fold map over all inputs.

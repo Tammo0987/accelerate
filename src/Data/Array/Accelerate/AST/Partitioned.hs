@@ -739,7 +739,7 @@ prjClusterArg args (ClusterArgArray (m :: Modifier m) (shr :: ShapeR sh) tp buff
 showSorted :: LabelledArgsOp op env args -> String
 showSorted ArgsNil = ""
 showSorted (a :>: args) = case a of
-  LOp (ArgArray m _ _ _) (Arr (_,bs,_) (_,sh,_)) _ -> show m <> "{" <> show (foldTupR bs <> foldTupR sh) <> "}" <> showSorted args
+  LOp (ArgArray m _ _ _) (Arr (_,bs,_) (_,sh,_)) _ -> show m <> "{" <> show (foldConstsR bs <> foldConstsR sh) <> "}" <> showSorted args
   _ -> showSorted args
 
 data FlatCluster op env where
