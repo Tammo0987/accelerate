@@ -36,7 +36,6 @@ import Lens.Micro
 import Lens.Micro.Mtl
 
 import Data.Set (Set)
-import qualified Data.Set as S
 
 import Data.Hashable (Hashable, hashWithSalt)
 import Prelude hiding (exp)
@@ -47,7 +46,6 @@ import Control.Monad.State.Strict
 import Data.Maybe (fromJust)
 import Data.List ( intercalate )
 import Debug.Trace
-import Data.Foldable (fold)
 import Data.Array.Accelerate.Analysis.Match
 
 
