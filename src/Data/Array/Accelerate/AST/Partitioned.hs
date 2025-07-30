@@ -36,7 +36,7 @@ module Data.Array.Accelerate.AST.Partitioned (
   GroundR(..), NFData'(..), Arg(..),
   AccessGroundR(..),
   PreArgs(..), Modifier(..),
-  Label(..), LabelType(..)
+  Node(..), Comp, GVal
 ) where
 
 
@@ -62,7 +62,7 @@ import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.Trafo.Var
 import Data.Array.Accelerate.Trafo.Exp.Substitution
 import Data.Array.Accelerate.Trafo.Substitution
-import Data.Array.Accelerate.Trafo.Partitioning.ILP.Labels (LabelledArgs, LabelledArg (..), Label(..), ArgLabel (..), EnvLabel, LabelType (..), EnvLabels, EnvVals)
+import Data.Array.Accelerate.Trafo.Partitioning.ILP.Labels (LabelledArgs, LabelledArg (..), Node(..), ArgLabel (..), EnvLabel, Comp, GVal, EnvLabels, EnvVals, valsNodes)
 import Data.List (sortOn, partition, groupBy, nubBy)
 import qualified Data.Functor.Const as C
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Graph (LabelledArgOp (..), BackendClusterArg, MakesILP (..), LabelledArgsOp, BackendCluster)
@@ -70,7 +70,6 @@ import Data.Array.Accelerate.Trafo.Operation.LiveVars
 import Control.Applicative ((<|>))
 import Data.Array.Accelerate.AST.Var (varsType)
 import Data.Array.Accelerate.Analysis.Match
-import Data.Foldable (fold)
 
 
 
@@ -81,7 +80,7 @@ type PartitionedAfun op = PreOpenAfun (Clustered op)
 data Clustered op args = Clustered (Cluster op args) (BackendCluster op args)
 
 data Cluster op args where
-  SingleOp :: SingleOp op args -> Label Comp -> Cluster op args
+  SingleOp :: SingleOp op args -> Node Comp -> Cluster op args
   Fused :: Fusion largs rargs args
         -> Cluster op largs
         -> Cluster op rargs
@@ -433,7 +432,7 @@ getElabelForSort _ = Nothing
 
 singleton
   :: MakesILP op
-  => Label Comp
+  => Node Comp
   -> LabelledArgsOp op env args
   -> op args
   -> (forall args'. Clustered op args' -> LabelledArgsOp op env args' -> r)
@@ -739,7 +738,7 @@ prjClusterArg args (ClusterArgArray (m :: Modifier m) (shr :: ShapeR sh) tp buff
 showSorted :: LabelledArgsOp op env args -> String
 showSorted ArgsNil = ""
 showSorted (a :>: args) = case a of
-  LOp (ArgArray m _ _ _) (Arr (_,bs,_) (_,sh,_)) _ -> show m <> "{" <> show (foldConstsR bs <> foldConstsR sh) <> "}" <> showSorted args
+  LOp (ArgArray m _ _ _) (Arr (_,bs,_) (_,sh,_)) _ -> show m <> "{" <> show (valsNodes bs <> valsNodes sh) <> "}" <> showSorted args
   _ -> showSorted args
 
 data FlatCluster op env where

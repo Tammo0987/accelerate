@@ -74,12 +74,6 @@ import Unsafe.Coerce (unsafeCoerce)
 import Control.Monad.ST
 import Data.Bits
 import Data.Array.Accelerate.Backend
-import Data.Array.Accelerate.Trafo.Partitioning.ILP.Graph (Var (..), fused, infusibleEdges, manifest, LabelledArgOp (LOp))
-import qualified Data.Array.Accelerate.Trafo.Partitioning.ILP.Graph as Graph
-import Data.Array.Accelerate.Trafo.Partitioning.ILP.Labels
-import qualified Data.Set as Set
-import Data.Array.Accelerate.Trafo.Partitioning.ILP.Solver
-import Lens.Micro ((.~), (&))
 import Data.Array.Accelerate.Array.Buffer
 import Data.Array.Accelerate.Pretty.Partitioned ()
 import Data.Array.Accelerate.AST.Idx

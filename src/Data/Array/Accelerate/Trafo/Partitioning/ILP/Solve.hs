@@ -1,6 +1,4 @@
 {-# LANGUAGE AllowAmbiguousTypes #-}
-
-{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE BlockArguments #-}
 {-# LANGUAGE LambdaCase #-}
@@ -11,7 +9,7 @@ module Data.Array.Accelerate.Trafo.Partitioning.ILP.Solve where
 
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Graph hiding (graph, constraints, bounds)
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Labels
-    (Label, parent, Labels, LabelType (..) )
+    (Node, parent, Nodes, Comp, GVal)
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Solver hiding (finalize)
 
 import Data.List (groupBy, sortOn)
@@ -51,7 +49,7 @@ data Objective
   deriving (Show, Bounded, Enum, Eq, Ord)
 
 -- TODO: _obj is now obsolete
--- Makes the ILP. Note that this function 'appears' to ignore the Label levels completely!
+-- Makes the ILP. Note that this function 'appears' to ignore the Node levels completely!
 -- We could add some assertions, but if all the input is well-formed (no labels, constraints, etc
 -- that reward putting non-siblings in the same cluster) this is fine: We will interpret 'cluster 3'
 -- with parents `Nothing` as a different cluster than 'cluster 3' with parents `Just 5`.
@@ -59,10 +57,10 @@ makeILP :: forall op. MakesILP op => Objective -> FusionILP op -> ILP op
 makeILP obj (FusionILP graph constraints bounds) =
   ILP minMax objFun (graphConstraints <> constraints) (graphBounds <> bounds) (Constants n m)
   where
-    compN :: Labels Comp
+    compN :: Nodes Comp
     compN = graph^.computationNodes
 
-    buffN :: Labels GVal
+    buffN :: Nodes GVal
     buffN = graph^.bufferNodes
 
     readE :: S.Set ReadEdge
@@ -80,7 +78,7 @@ makeILP obj (FusionILP graph constraints bounds) =
     fusibleE, infusibleE :: S.Set DataflowEdge
     (fusibleE, infusibleE) = graph^.fusionEdges
 
-    fusibleE', infusibleE' :: S.Set (Label Comp, Label Comp)
+    fusibleE', infusibleE' :: S.Set (Node Comp, Node Comp)
     fusibleE'   = S.map (\(i,_,j) -> (i,j)) fusibleE
     infusibleE' = S.map (\(i,_,j) -> (i,j)) infusibleE
 
@@ -302,7 +300,7 @@ interpretWriteDirs = M.fromList . mapMaybe (_1 fromWriteDir) . M.toList
 
 -- | Extract the top-level clusters and the sub-scoped clusters from the ILP
 --   solution.
-interpretClusters :: Solution op -> ([Labels Comp], M.Map (Label Comp) [Labels Comp])
+interpretClusters :: Solution op -> ([Nodes Comp], M.Map (Node Comp) [Nodes Comp])
 interpretClusters sol = do
   let            piVars  = mapMaybe (_1 fromPi) (M.toList sol)               -- Take the Pi variables.
   let      scopedPiVars  = partition (^._1.parent) piVars                    -- Partition them by their parent (i.e. the scope they are in).
@@ -313,44 +311,44 @@ interpretClusters sol = do
   let subScopedClustersM = M.fromList $ map (\s -> (scopeLabel s, s)) subScopedClusters
   (topClusters, subScopedClustersM)
   where
-    fromPi :: Var op -> Maybe (Label Comp)
+    fromPi :: Var op -> Maybe (Node Comp)
     fromPi (Pi l) = Just l
     fromPi _      = Nothing
 
-    scopeLabel :: [Labels Comp] -> Label Comp
+    scopeLabel :: [Nodes Comp] -> Node Comp
     scopeLabel = fromJust . view parent . S.findMin . head
 
 -- | `groupBy` except it's equivalent to SQL's `GROUP BY` clause.
 partition :: Ord b => (a -> b) -> [a] -> [[a]]
 partition f = groupBy ((==) `on` f) . sortOn f
 
-interpretInplaceUpdates :: Solution op -> M.Map (Label GVal) (Label GVal)
+interpretInplaceUpdates :: Solution op -> M.Map (Node GVal) (Node GVal)
 interpretInplaceUpdates sol = M.map firstInChain inplaceM
   where
     -- Map from buffer to the buffer that will replace it.
     inplaceM = M.fromList $ mapMaybe fromInPlace $ M.toList sol
 
-    fromInPlace :: (Var op, Int) -> Maybe (Label GVal, Label GVal)
+    fromInPlace :: (Var op, Int) -> Maybe (Node GVal, Node GVal)
     fromInPlace (InPlace b1 _ _ b2, v) | v == 0 = Just (b2, b1)
     fromInPlace _ = Nothing
 
-    firstInChain :: Label GVal -> Label GVal
+    firstInChain :: Node GVal -> Node GVal
     firstInChain b = maybe b firstInChain (M.lookup b inplaceM)
 
 -- | Cluster labels, distinguishing between execute and non-execute labels.
-data ClusterLs = Execs (Labels Comp) | NonExec (Label Comp)
+data ClusterLs = Execs (Nodes Comp) | NonExec (Node Comp)
   deriving (Eq, Show)
 
 -- I think that only `let`s can still be in the same cluster as `exec`s,
 -- and their bodies should all be in earlier clusters already.
 -- Simply make one cluster per let, before the cluster with execs.
-splitExecs :: ([Labels Comp], M.Map (Label Comp) [Labels Comp]) -> Symbols op -> ([ClusterLs], M.Map (Label Comp) [ClusterLs])
+splitExecs :: ([Nodes Comp], M.Map (Node Comp) [Nodes Comp]) -> Symbols op -> ([ClusterLs], M.Map (Node Comp) [ClusterLs])
 splitExecs (xs, xM) symbolM = (f xs, M.map f xM)
   where
-    f :: [Labels Comp] -> [ClusterLs]
+    f :: [Nodes Comp] -> [ClusterLs]
     f = concatMap (\ls -> filter (/= Execs mempty) $ map NonExec (S.toList $ S.filter isBeforeExec ls) ++ [Execs (S.filter isExec ls)] ++ afterexecs ls)
 
-    isExec :: Label Comp -> Bool
+    isExec :: Node Comp -> Bool
     isExec l = case symbolM M.!? l of
       Just SExe {} -> True
       Just SExe'{} -> True

@@ -36,7 +36,6 @@ import Data.Type.Equality
 
 import Formatting
 import Language.Haskell.TH.Extra
-import Data.Functor.Const
 
 
 -- | Both arrays (Acc) and expressions (Exp) are represented as nested
@@ -239,16 +238,18 @@ traverseTupR f (TupRsingle a)   = TupRsingle <$> f a
 traverseTupR _ TupRunit         = pure TupRunit
 traverseTupR f (TupRpair a1 a2) = TupRpair <$> traverseTupR f a1 <*> traverseTupR f a2
 
-traverseConstsR :: Applicative f => (a -> f b) -> TupR (Const a) t -> f (TupR (Const b) t)
-traverseConstsR f = traverseTupR (\(Const a) -> Const <$> f a)
-
 foldMapTupR :: Monoid m => (forall s. a s -> m) -> TupR a t -> m
 foldMapTupR f (TupRsingle a)   = f a
 foldMapTupR _ TupRunit         = mempty
 foldMapTupR f (TupRpair a1 a2) = foldMapTupR f a1 <> foldMapTupR f a2
 
-foldConstsR :: (Monoid m) => TupR (Const m) t -> m
-foldConstsR = foldMapTupR (\(Const a) -> a)
+foldMapMTupR :: (Monad m, Monoid r) => (forall s. a s -> m r) -> TupR a t -> m r
+foldMapMTupR f (TupRsingle a)   = f a
+foldMapMTupR _ TupRunit         = return mempty
+foldMapMTupR f (TupRpair a1 a2) = do
+  r1 <- foldMapMTupR f a1
+  r2 <- foldMapMTupR f a2
+  return (r1 <> r2)
 
 eqTupR :: (forall s1 s2. a s1 -> a s2 -> Bool) -> TupR a t1 -> TupR a t2 -> Bool
 eqTupR _ TupRunit TupRunit = True
@@ -256,10 +257,14 @@ eqTupR f (TupRsingle x) (TupRsingle y) = f x y
 eqTupR f (TupRpair xl xr) (TupRpair yl yr) = eqTupR f xl yl && eqTupR f xr yr
 eqTupR _ _ _ = False
 
-eqConstsR :: Eq a => TupR (Const a) s -> TupR (Const a) t -> Bool
-eqConstsR = eqTupR (\(Const x) (Const y) -> x == y)
-
 functionImpossible :: TypeR (s -> t) -> a
 functionImpossible (TupRsingle (SingleScalarType (NumSingleType tp))) = case tp of
   IntegralNumType t -> case t of {}
   FloatingNumType t -> case t of {}
+
+instance (forall a. Eq (s a)) => Eq (TupR s t) where
+  (==) :: TupR s t -> TupR s t -> Bool
+  (==) TupRunit TupRunit = True
+  (==) (TupRsingle l) (TupRsingle r) = l == r
+  (==) (TupRpair l1 l2) (TupRpair r1 r2) = l1 == r1 && l2 == r2
+  (==) _ _ = False

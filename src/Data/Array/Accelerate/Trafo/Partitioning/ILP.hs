@@ -3,7 +3,6 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE ViewPatterns #-}
 module Data.Array.Accelerate.Trafo.Partitioning.ILP where
@@ -24,7 +23,7 @@ import Data.Array.Accelerate.Trafo.Partitioning.ILP.MIP
     ( cbc, cplex, glpsol, gurobiCl, lpSolve, scip, MIP(..) )
 
 import System.IO.Unsafe (unsafePerformIO)
-import Data.Array.Accelerate.Trafo.Partitioning.ILP.Labels (Label, LabelType(..), traceWith)
+import Data.Array.Accelerate.Trafo.Partitioning.ILP.Labels (Node, GVal, Comp, traceWith)
 import Data.Map (Map, toList, foldMapWithKey, filterWithKey)
 import Data.Array.Accelerate.Trafo.Operation.Simplify
 import qualified Data.Array.Accelerate.Pretty.Operation as Pretty
@@ -75,7 +74,7 @@ ilpFusionF solver objective fun = ilpFusion' mkFullGraphF (reconstructF fun Fals
 
 ilpFusion' :: (MakesILP op, SimplifyOperation op, ILPSolver s op)
            => (x -> FullGraph op)
-           -> (FusionGraph -> [ClusterLs] -> Map (Label Comp) [ClusterLs] -> Symbols op -> ReadDirM -> InplaceM -> y)
+           -> (FusionGraph -> [ClusterLs] -> Map (Node Comp) [ClusterLs] -> Symbols op -> ReadDirM -> InplaceM -> y)
            -> s
            -> Objective
            -> x
@@ -129,7 +128,7 @@ ppScopedClusters (top, sub) = "top =\n" ++ ppList top ++ foldMapWithKey (\k v ->
 -- more rigorous is to change 'topSort' in Clustering.hs into separating each cluster completely
 noFusion' :: (MakesILP op, SimplifyOperation op, ILPSolver s op)
            => (x -> FullGraph op)
-           -> (FusionGraph -> [ClusterLs] -> Map (Label Comp) [ClusterLs] -> Symbols op -> ReadDirM -> InplaceM -> y)
+           -> (FusionGraph -> [ClusterLs] -> Map (Node Comp) [ClusterLs] -> Symbols op -> ReadDirM -> InplaceM -> y)
            -> s
            -> Objective
            -> x
@@ -155,7 +154,7 @@ noFusion' = undefined
 -- it's perhaps more of an 'alternative' than a 'baseline'
 greedyFusion' :: forall s op x y. (MakesILP op, SimplifyOperation op, ILPSolver s op)
                     => (x -> FullGraph op)
-                    -> (FusionGraph -> [ClusterLs] -> Map (Label Comp) [ClusterLs] -> Symbols op -> ReadDirM -> InplaceM -> y)
+                    -> (FusionGraph -> [ClusterLs] -> Map (Node Comp) [ClusterLs] -> Symbols op -> ReadDirM -> InplaceM -> y)
                     -> s
                     -> Benchmarking
                     -> Objective
