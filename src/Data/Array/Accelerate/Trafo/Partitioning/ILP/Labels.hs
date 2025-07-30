@@ -33,6 +33,7 @@ import Lens.Micro
 import Lens.Micro.Mtl
 
 import Data.Set (Set)
+import qualified Data.Set as S
 
 import Data.Hashable (Hashable, hashWithSalt)
 import Prelude hiding (exp)
@@ -133,9 +134,27 @@ instance Hashable (Node t) where
 
 -- | Compute the nesting level of a 'Node'.
 level :: Node t -> Int
-level l = case l^.parent of
+level n = case n^.parent of
   Nothing -> 0
   Just p  -> 1 + level p
+
+
+-- | Compute the ancestry tree of a 'Node'.
+ancestree :: Node t -> [Node Comp]
+ancestree = ancestree' []
+  where
+    ancestree' :: [Node Comp] -> Node t -> [Node Comp]
+    ancestree' ps n = case n^.parent of
+      Nothing -> ps
+      Just p  -> ancestree' (p:ps) p
+
+
+-- | Similar to 'stripPrefix', except it also works if part of the prefix matches.
+stripLongestPrefix :: Eq a => [a] -> [a] -> [a]
+stripLongestPrefix [] ys = ys
+stripLongestPrefix (x:xs) (y:ys)
+  | x == y = stripLongestPrefix xs ys
+stripLongestPrefix _ ys = ys
 
 
 -- | Create a fresh 'Node'.
@@ -148,7 +167,7 @@ type Nodes t = Set (Node t)
 
 
 -- | A value consists of its type @s t@ and and the 'Node' that represents it.
-data Val s t = Val { valType :: s t, valNodes :: Nodes GVal }
+data Val s t = Val { valType :: s t, valNode :: Node GVal }
 
 
 -- | A 'TupR' of 'Val's.
@@ -165,7 +184,7 @@ type GroundVals = Vals GroundR
 
 -- | Get the nodes of 'Vals'.
 valsNodes :: Vals s t -> Nodes GVal
-valsNodes = foldMapTupR valNodes
+valsNodes = foldMapTupR (S.singleton . valNode)
 
 
 
@@ -213,11 +232,6 @@ instance Eq (Val s t) where
 instance Show (Val s t) where
   show :: Val s t -> String
   show (Val _ n) = "Val " ++ show n
-
-
-instance Semigroup (Val s t) where
-  (<>) :: Val s t -> Val s t -> Val s t
-  (<>) (Val t n1) (Val _ n2) = Val t (n1 <> n2)
 
 
 
