@@ -14,12 +14,9 @@ either be a computation or a buffer.
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE BlockArguments #-}
-{-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE QuantifiedConstraints #-}
-{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE OverloadedStrings #-}
@@ -29,7 +26,7 @@ import Data.Array.Accelerate.AST.Idx
 import Data.Array.Accelerate.AST.LeftHandSide
 import Data.Array.Accelerate.AST.Operation
 import Data.Array.Accelerate.Error
-import Data.Array.Accelerate.Representation.Array
+import Data.Array.Accelerate.Array.Buffer
 import Data.Array.Accelerate.Representation.Type
 
 import Lens.Micro
