@@ -44,6 +44,10 @@ import Data.Maybe (fromJust)
 import Data.List ( intercalate )
 import Debug.Trace
 import Data.Array.Accelerate.Analysis.Match
+import Data.Array.Accelerate.Representation.Ground (groundRelt)
+import qualified Data.Array.Accelerate.Pretty.Operation as P
+import qualified Data.Array.Accelerate.Pretty.Exp as P
+import Data.String (fromString)
 
 
 
@@ -164,6 +168,12 @@ valsNodes :: Vals s t -> Nodes GVal
 valsNodes = foldMapTupR valNodes
 
 
+
+-- | Get the type of 'Vals'.
+valsType :: Vals s t -> TupR s t
+valsType = mapTupR valType
+
+
 -- | Match the types of two 'GroundVals'.
 matchGroundVals :: GroundVals s -> GroundVals t -> Maybe (s :~: t)
 matchGroundVals = matchTupR matchGroundVal
@@ -172,6 +182,27 @@ matchGroundVals = matchTupR matchGroundVal
 -- | Match the types of two 'GroundVal's.
 matchGroundVal :: GroundVal s -> GroundVal t -> Maybe (s :~: t)
 matchGroundVal (Val t1 _) (Val t2 _) = matchGroundR t1 t2
+
+
+-- | Expect 'GroundVals' of the given type.
+expectGroundVals :: HasCallStack => GroundsR t -> Exists GroundVals -> GroundVals t
+expectGroundVals repr (Exists vals)
+  | Just Refl <- matchGroundsR repr (groundsR vals) = vals
+  | otherwise = internalError $ fromString $
+      "Result of lambda has unexpected type.\nExpected: "
+      ++ show (P.prettyTupR (const P.prettyGroundR) 0 repr)
+      ++ "\nActual: "
+      ++ show (P.prettyTupR (const P.prettyGroundR) 0 $ groundsR vals)
+
+
+instance HasGroundsR GroundVals where
+  groundsR :: GroundVals a -> GroundsR a
+  groundsR = valsType
+
+
+instance HasGroundsR GroundVal where
+  groundsR :: GroundVal a -> GroundsR a
+  groundsR (Val tp _) = TupRsingle tp
 
 
 instance Eq (Val s t) where

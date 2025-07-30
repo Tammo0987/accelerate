@@ -20,6 +20,7 @@
 {-# OPTIONS_GHC -Wno-orphans          #-}
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE PatternSynonyms #-}
+{-# LANGUAGE TypeOperators #-}
 module Data.Array.Accelerate.Trafo.Partitioning.ILP.Graph where
 
 import Prelude hiding ( init, reads )
@@ -987,36 +988,41 @@ mkFusionGraph (Awhile u cond body init) = do
     let (_, init_res, _) = lookupVars init lenv
     c_while `requiresBuffers` valsNodes init_res
     symbol c_while ?= SWhl lenv c_cond c_body init u
-    (_       , cond_renv, cond_wenv) <- block c_cond (mkFusionGraphW u) cond
-    (body_res, body_renv, body_wenv) <- block c_body (mkFusionGraphW u) body
+    (_       , cond_renv, cond_wenv) <- block c_cond mkFusionGraphCond cond
+    (body_res, body_renv, body_wenv) <- block c_body mkFusionGraphBody body
     readersEnv .= M.unionWith S.union cond_renv body_renv
     writersEnv .= M.unionWith S.union cond_wenv body_wenv
     let res = init_res <> body_res
     c_while `returnsBuffers` valsNodes res
     return res
+  where
+    primBool = TupRsingle $ GroundRscalar $ scalarType @PrimBool
+    mkFusionGraphCond = fmap (expectGroundVals primBool) . mkFusionGraphU u
+    mkFusionGraphBody = fmap (expectGroundVals (groundsR init)) . mkFusionGraphU u
 
 
 
-  -- | Construct the fusion graph of a single-argument function.
-mkFusionGraphW :: forall op env s t. MakesILP op
-               => Uniquenesses s -> FusionGraphMaker PreOpenAfun op env (s -> t) (GroundVals t)
-mkFusionGraphW _ (Abody body) = groundFunctionImpossible $ groundsR body
-mkFusionGraphW u (Alam lhs f) = do
-  c    <- freshComp
-  lenv <- use gvalEnv
-  bs   <- traverseTupR (\tp -> Val tp . S.singleton <$> freshBuff c) (lhsToTupR lhs)
-  lenv'<- zoom currEnvL (weakenEnv lhs bs u lenv)
-  res  <- zoom (local lenv') (unresult <$> mkFusionGraphF f)
-  resW <- foldMapMTupR (use . allWriters . valNodes) res
+-- | Construct the fusion graph of a single-argument function.
+mkFusionGraphU :: forall op env s t. (MakesILP op)
+               => Uniquenesses s -> FusionGraphMaker PreOpenAfun op env (s -> t) (Exists GroundVals)
+mkFusionGraphU _ (Abody body) = groundFunctionImpossible $ groundsR body
+mkFusionGraphU u (Alam lhs f) = do
+  c          <- freshComp
+  lenv       <- use gvalEnv
+  bs         <- traverseTupR (\tp -> Val tp . S.singleton <$> freshBuff c) (lhsToTupR lhs)
+  lenv'      <- zoom currEnvL (weakenEnv lhs bs u lenv)
+  Exists res <- zoom (local lenv') (mkFusionGraphF f)
+  resW       <- foldMapMTupR (use . allWriters . valNodes) res
   symbol c ?= SFun (bindLHS lhs lenv') (fromSingletonSet resW)
   c `producesBuffers` valsNodes res
-  return res
+  return $ Exists res
 
 
 
 -- | Construct the fusion graph of a function.
-mkFusionGraphF :: forall op env t. MakesILP op
-               => FusionGraphMaker PreOpenAfun op env t (GroundVals (Result t))
+mkFusionGraphF :: forall op env t. (MakesILP op)
+               => FusionGraphMaker PreOpenAfun op env t (Exists GroundVals)
+mkFusionGraphF (Alam lhs f) = mkFusionGraphU (shared $ lhsToTupR lhs) (Alam lhs f)
 mkFusionGraphF (Abody acc) = do
   c <- freshComp
   zoom (scope c) do
@@ -1024,20 +1030,7 @@ mkFusionGraphF (Abody acc) = do
     c `returnsBuffers` valsNodes res
     symbol c ?= SBod res
     fusionILP.constraints %= (<> foldMap ((.==. int 0) . manifest) (valsNodes res))
-    return $ result res
-
-mkFusionGraphF (Alam lhs f) = do
-  c    <- freshComp
-  lenv <- use gvalEnv
-  bs   <- traverseTupR (\tp -> Val tp . S.singleton <$> freshBuff c) (lhsToTupR lhs)
-  let lhs' = lhsToTupR lhs
-  let u    = mapTupR (const Shared) lhs'  -- For now we assume variables to a function are shared. (safe)
-  lenv' <- zoom currEnvL (weakenEnv lhs bs u lenv)
-  res   <- zoom (local lenv') (mkFusionGraphF f)
-  resW  <- foldMapMTupR (use . allWriters . valNodes) res
-  symbol c ?= SFun (bindLHS lhs lenv') (fromSingletonSet $ resW)
-  c `producesBuffers` valsNodes res
-  return res
+    return $ Exists res
 
 
 
@@ -1056,25 +1049,21 @@ block c f x = zoom (scope c . protected writersEnv . protected readersEnv) do
 -- | Type of functions that take an AST and produce a graph.
 type FusionGraphMaker f op env t r = f op env t -> State (FusionGraphState op env) r
 
--- | Type-level function to get the result type of a function.
---
--- Note that to make this work I needed 'unsafeCoerce', because the constructors
--- of data types we encounter use either @t@ or @s -> t@. Unfortunately GHC
--- can't distinguish between these two cases since both are of kind 'Type'.
--- The current types used in Accelerate are simply too permissive to allow for
--- rigorous proofs.
-type Result :: Type -> Type
-type family Result t where
-  Result (_ -> t) = Result t
-  Result t        = t
 
-result :: GroundVals t -> GroundVals (Result t)
-result = unsafeCoerce
-{-# INLINE result #-}
+class Result t r | t -> r where
+  result :: GroundVals t -> GroundVals r
 
-unresult :: GroundVals (Result t) -> GroundVals t
-unresult = unsafeCoerce
-{-# INLINE unresult #-}
+
+instance Result t r => Result (a -> t) r where
+  result :: Result t r => GroundVals (a -> t) -> GroundVals r
+  result vals@(TupRsingle (Val (GroundRscalar tp) _))
+    | (Refl :: (a -> t) :~: r) <- functionImpossible (TupRsingle tp)
+    = vals
+
+
+instance {-# INCOHERENT #-} Result t t where
+  result :: GroundVals t -> GroundVals t
+  result = id
 
 
 
