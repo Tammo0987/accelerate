@@ -140,22 +140,36 @@ level n = case n^.parent of
   Just p  -> 1 + level p
 
 
--- | Compute the ancestry tree of a 'Node'.
-ancestree :: Node t -> [Node Comp]
-ancestree = ancestree' []
-  where
-    ancestree' :: [Node Comp] -> Node t -> [Node Comp]
-    ancestree' ps n = case n^.parent of
-      Nothing -> ps
-      Just p  -> ancestree' (p:ps) p
+-- | Compute the ancestry tree of a 'Node', staring with the ancestor underneath the root.
+ancestree :: Node Comp -> [Node Comp]
+ancestree n = ancestree' [n] n
 
 
--- | Similar to 'stripPrefix', except it also works if part of the prefix matches.
-stripLongestPrefix :: Eq a => [a] -> [a] -> [a]
-stripLongestPrefix [] ys = ys
-stripLongestPrefix (x:xs) (y:ys)
-  | x == y = stripLongestPrefix xs ys
-stripLongestPrefix _ ys = ys
+-- | Helper function for 'ancestree'.
+ancestree' :: [Node Comp] -> Node t -> [Node Comp]
+ancestree' ps n = case n^.parent of
+  Nothing -> ps
+  Just p  -> ancestree' (p:ps) p
+
+
+-- | Compute the difference between the 'ancestree's of two 'Node's.
+difftree :: Node Comp -> Node Comp -> ([Node Comp], [Node Comp])
+difftree n1 n2 = difftree' (ancestree n1) (ancestree n2)
+
+
+-- | Compute the difference between two 'ancestree's.
+difftree' :: [Node Comp] -> [Node Comp] -> ([Node Comp], [Node Comp])
+difftree' (x:xs) (y:ys) | x == y = difftree' xs ys
+difftree' xs ys = (xs, ys)
+
+
+-- | The first nodes in the 'ancestree's of the two 'Node's that differ (or the 'Node' itself).
+ancestors :: Node Comp -> Node Comp -> (Node Comp, Node Comp)
+ancestors n1 n2 = if n1^.parent == n2^.parent then (n1, n2)
+  else case compare (level n1) (level n2) of
+    LT -> ancestors  n1           (n2^.parent')
+    GT -> ancestors (n1^.parent')  n2
+    EQ -> ancestors (n1^.parent') (n2^.parent')
 
 
 -- | Create a fresh 'Node'.
@@ -190,7 +204,6 @@ val t = Val t . S.singleton
 -- | Get the nodes of 'Vals'.
 valsNodes :: Vals s t -> Nodes GVal
 valsNodes = foldMapTupR valNodes
-
 
 
 -- | Get the type of 'Vals'.

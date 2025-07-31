@@ -55,7 +55,6 @@ import Data.Foldable (Foldable (foldr'), traverse_, toList)
 import Data.Kind (Type)
 import Debug.Trace
 import Unsafe.Coerce (unsafeCoerce)
-import qualified Data.Functor.Const as C
 
 
 
@@ -161,7 +160,7 @@ instance HasFusionGraph FusionGraph where
 insertStrict :: (HasCallStack, HasFusionGraph g) => StrictEdge -> g -> g
 insertStrict (c1, c2) g
   | c1 == c2                           = internalError "reflexive edge"
-  | c1^.parent /= c2^.parent           = internalError "different scopes"
+  -- | c1^.parent /= c2^.parent           = internalError "different scopes"
   | S.member (c2, c1) (g^.strictEdges) = internalError "cyclic edge"
   | otherwise = g & strictEdges %~ S.insert (c1, c2)
 
@@ -169,7 +168,7 @@ insertStrict (c1, c2) g
 insertFusible :: (HasCallStack, HasFusionGraph g) => DataflowEdge -> g -> g
 insertFusible (c1, b, c2) g
   | c1 == c2                            = internalError "reflexive edge"
-  | c1^.parent /= c2^.parent            = internalError "different scopes"
+  -- | c1^.parent /= c2^.parent            = internalError "different scopes"
   | S.member (c2, c1) (g^.strictEdges)  = internalError "cyclic edge"
   | otherwise = g & dataflowEdges %~ S.insert (c1, b, c2)
 
@@ -177,6 +176,7 @@ insertFusible (c1, b, c2) g
 insertInfusible :: (HasCallStack, HasFusionGraph g) => DataflowEdge -> g -> g
 insertInfusible (c1, b, c2) g
   | c1 == c2                            = internalError "reflexive edge"
+  -- | c1^.parent /= c2^.parent            = internalError "different scopes"
   | S.member (c2, c1) (g^.strictEdges)  = internalError "cyclic edge"
   | otherwise = g & dataflowEdges %~ S.insert (c1, b, c2)
                   & strictEdges   %~ S.insert (c1,    c2)
@@ -280,19 +280,10 @@ instance HasFusionGraph (FusionILP op) where
 
 -- | Safely add a strict relation between two computations.
 --
--- Strict edges can only occur between computations in the same scope, so we
--- traverse the scopes of the computations until we find two computations within
--- the same scope. If the computations we find are the same, we do nothing
--- because reflexive edges are not allowed but our algorithm may try to create
--- them in certain scenarios (e.g. when returning out of a body).
+-- Strict edges are formed between the 'ancestors' of the two computations and
+-- the two computations themselves.
 before :: HasCallStack => Node Comp -> Node Comp -> FusionILP op -> FusionILP op
-before c1 c2
-  | c1         == c2         = id
-  | c1^.parent == c2^.parent = fusionGraph %~ insertStrict (c1, c2)
-  | otherwise                = case compare (level c1) (level c2) of
-      LT -> before  c1           (c2^.parent')
-      GT -> before (c1^.parent')  c2
-      EQ -> before (c1^.parent') (c2^.parent')
+before c1 c2 = fusionGraph %~ insertStrict (c1, c2)
 
 -- | Safely add a fusible edge between two computations.
 --
@@ -300,15 +291,15 @@ before c1 c2
 -- an infusible edge.
 fusible :: HasCallStack => Node Comp -> Node GVal -> Node Comp -> FusionILP op -> FusionILP op
 fusible prod buff cons = if prod^.parent == cons^.parent
-  then fusionGraph %~ insertFusible (prod, buff, cons)
-  else infusible prod buff cons
+  then fusionGraph %~ insertFusible   (prod, buff, cons)
+  else fusionGraph %~ insertInfusible (prod, buff, cons)
 
 -- | Safely add an infusible edge between two computations.
 --
--- We add an infusible edge between the producer and consumer. We also add a
--- strict edge between them using the rules described in 'before'.
+-- An infusible edge is added between the two computations, and a strict edge
+-- between their ancestors.
 infusible :: HasCallStack => Node Comp -> Node GVal -> Node Comp -> FusionILP op -> FusionILP op
-infusible prod buff cons = before prod cons . (fusionGraph %~ insertInfusible (prod, buff, cons))
+infusible prod buff cons = fusionGraph %~ insertInfusible (prod, buff, cons)
 
 -- | Safely add strict ordering between multiple computations and another computation.
 allBefore :: HasCallStack => Nodes Comp -> Node Comp -> FusionILP op -> FusionILP op
@@ -862,6 +853,11 @@ producesBuffers c = traverse_ \b -> do
   writers b .= S.singleton c
 
 
+-- | A computation executes another computattion.
+executes :: HasCallStack => Node Comp -> Node Comp -> State (FusionGraphState op env) ()
+executes c1 c2 = fusionILP %= c1 ==|-|=> c2
+
+
 
 --------------------------------------------------------------------------------
 -- Full Graph construction
@@ -906,7 +902,7 @@ mkFusionGraph :: forall op env t. MakesILP op
               => PreOpenAcc op env t
               -> State (FusionGraphState op env) (GroundVals t)
 mkFusionGraph (Exec op args) = do
-  env <- use environment
+  env  <- use environment
   renv <- use readersEnv
   wenv <- use writersEnv
   c    <- freshComp
@@ -941,16 +937,16 @@ mkFusionGraph (Alet lhs u bnd body) = do
   return bodyRes
 
 mkFusionGraph (Return vars) = do
-  env <- use environment
-  c    <- freshComp
+  env  <- use environment
+  retN <- freshComp
   let (_, bs, _) = lookupVars vars env
-  c `returnsBuffers` valsNodes bs
-  symbol c ?= SRet env vars
+  retN `returnsBuffers` valsNodes bs
+  symbol retN ?= SRet env vars
   return bs
 
 mkFusionGraph (Compute expr) = do
   c    <- freshComp
-  env <- use environment
+  env  <- use environment
   c `requiresBuffers` getExpDeps expr env
   symbol c ?= SCmp env expr
   freshVals c (groundsR expr)
@@ -975,102 +971,94 @@ mkFusionGraph (Use tp n buff) = do
   TupRsingle <$> freshVal c (GroundRbuffer tp)
 
 mkFusionGraph (Acond cond tacc facc) = do
-  env     <- use environment
-  c_cond  <- freshComp
-  zoom (scope c_cond) do
-    c_true  <- freshComp
-    c_false <- freshComp
-    symbol c_cond ?= SITE env cond c_true c_false
-    c_cond `requiresBuffers` getVarDeps cond env  -- If-then-else reads the condition variable,
-    res <- uncurry (<>) <$> branches              -- executes "both" branches, and
-      (block c_true  $ mkFusionGraph tacc)
-      (block c_false $ mkFusionGraph facc)
-    c_cond `returnsBuffers` valsNodes res         -- returns the unified result of both branches.
+  env    <- use environment
+  condN  <- freshComp
+  zoom (scope condN) do
+    trueN  <- freshComp
+    falseN <- freshComp
+    symbol condN ?= SITE env cond trueN falseN
+    condN `requiresBuffers` getVarDeps cond env  -- If-then-else reads the condition variable,
+    res <- uncurry (<>) <$> branches             -- executes "both" branches, and
+      (block trueN  $ mkFusionGraph tacc)
+      (block falseN $ mkFusionGraph facc)
+    condN `returnsBuffers` valsNodes res         -- returns the unified result of both branches.
     return res
 
 mkFusionGraph (Awhile u cond body init) = do
-  -- TODO: Maybe allocate a fresh array for the return value of the while loop?
-  --       This would be more accurate to the decoupled-ness of the return value.
-  env     <- use environment
-  c_while <- freshComp
-  res     <- freshVals c_while (groundsR init)
-  zoom (scope c_while) do
-    c_cond  <- freshComp
-    c_body  <- freshComp
-    symbol c_while ?= SWhl env c_cond c_body init u
+  env    <- use environment
+  whileN <- freshComp
+  res    <- freshVals whileN (groundsR init)
+  zoom (scope whileN) do
+    condB <- freshComp
+    bodyB <- freshComp
     let init_val = lookupVars init env ^. _2
-    c_while `requiresBuffers` valsNodes init_val  -- While reads the initial value,
-    (cond_res, body_res) <- branches              -- executes "both" the condition and body,
-      (block c_cond $ mkFusionGraphCond cond)
-      (block c_body $ mkFusionGraphBody body)
-    c_while `requiresBuffers` valsNodes cond_res  -- requires the condition result, and
-    c_while `requiresBuffers` valsNodes body_res  -- requires the body result,
+    whileN `requiresBuffers` valsNodes init_val   -- While reads the initial value,
+    (condN, bodyN) <- branches                    -- executes "both" the condition and body,
+      (block condB $ mkFusionGraphU u cond)
+      (block bodyB $ mkFusionGraphU u body)
+    symbol whileN ?= SWhl env condB bodyB init u
+    whileN `executes` condN
+    whileN `executes` bodyN
   return res                                      -- to return a fresh value of the same type as the initial value.
-  where
-    primBool = TupRsingle $ GroundRscalar $ scalarType @PrimBool
-    mkFusionGraphCond = fmap (expectGroundVals primBool) . mkFusionGraphU u
-    mkFusionGraphBody = fmap (expectGroundVals (groundsR init)) . mkFusionGraphU u
 
 
 
 -- | Construct the fusion graph of a single-argument function.
 mkFusionGraphU :: forall op env s t. (MakesILP op)
                => Uniquenesses s -> PreOpenAfun op env (s -> t)
-               -> State (FusionGraphState op env) (Exists GroundVals)
+               -> State (FusionGraphState op env) (Node Comp)
 mkFusionGraphU _ (Abody body) = groundFunctionImpossible $ groundsR body
 mkFusionGraphU u (Alam lhs f) = do
-  c          <- freshComp
-  env        <- use environment
-  args       <- freshVals c (lhsToTupR lhs)
-  env'       <- zoom currEnvL (weakenEnv lhs args u env)
-  Exists res <- zoom (local env') (mkFusionGraphF f)
-  resW       <- foldMapMTupR (use . allWriters . valNodes) res
-  symbol c ?= SFun (bindLHS lhs env') (fromSingletonSet resW)
-  c `producesBuffers` valsNodes res
-  return $ Exists res
+  lam  <- freshComp
+  env  <- use environment
+  args <- freshVals lam (lhsToTupR lhs)
+  env' <- zoom currEnvL (weakenEnv lhs args u env)
+  fun  <- zoom (local env') (mkFusionGraphF f)
+  symbol lam ?= SFun (bindLHS lhs env') fun
+  lam `executes` fun
+  return lam
 
 
 
 -- | Construct the fusion graph of a function.
 mkFusionGraphF :: forall op env t. (MakesILP op)
                => PreOpenAfun op env t
-               -> State (FusionGraphState op env) (Exists GroundVals)
+               -> State (FusionGraphState op env) (Node Comp)
 mkFusionGraphF (Alam lhs f) = mkFusionGraphU (shared $ lhsToTupR lhs) (Alam lhs f)
 mkFusionGraphF (Abody acc) = do
-  c <- freshComp
-  zoom (scope c) do
+  body <- freshComp
+  zoom (scope body) do
     res <- mkFusionGraph acc
-    c `returnsBuffers` valsNodes res
-    symbol c ?= SBod res
+    body `returnsBuffers` valsNodes res
+    symbol body ?= SBod res
     id %= makeManifest (valsNodes res)
-    return $ Exists res
+    return body
 
 
 
--- | Helper for blocks.
-block :: Node Comp
-      -> State (FusionGraphState op env) (GroundVals r)
-      -> State (FusionGraphState op env) (GroundVals r)
-block c f = zoom (scope c) do
-  symbol c ?= SBlk
-  res <- f
-  c `returnsBuffers` valsNodes res
-  return res
+-- | A block has no effect on the graph, but the added scope they introduce is
+--   required by the reconstruction algorithm.
+--   The 'SBlk' symbol isn't even needed, because any time we encounter it an
+--   error is thrown, but it is somewhat useful for debugging.
+block :: Node Comp -> State (FusionGraphState op env) r -> State (FusionGraphState op env) r
+block c f = zoom (scope c) $ symbol c ?= SBlk >> f
 
 
 
 -- | Helper for if-then-else and while, executing both branches with the same
 --   readers and writers environments, then unifying said environments.
-branches :: State (FusionGraphState op env) (GroundVals r1)
-         -> State (FusionGraphState op env) (GroundVals r2)
-         -> State (FusionGraphState op env) (GroundVals r1, GroundVals r2)
+branches :: State (FusionGraphState op env) r1
+         -> State (FusionGraphState op env) r2
+         -> State (FusionGraphState op env) (r1, r2)
 branches f1 f2 = do
   -- Store the current readers and writers environments.
-  (renv, wenv) <- (,) <$> use readersEnv <*> use writersEnv
+  renv <- use readersEnv
+  wenv <- use writersEnv
   -- Run the left branch.
   res1 <- f1
   -- Retrieve the readers and writers environments after the branch, then restore them.
-  (renv', wenv') <- (,) <$> (readersEnv <<.= renv) <*> (writersEnv <<.= wenv)
+  renv' <- readersEnv <<.= renv
+  wenv' <- writersEnv <<.= wenv
   -- Run the right branch.
   res2 <- f2
   -- Unify the readers and writers environments.
@@ -1078,29 +1066,6 @@ branches f1 f2 = do
   writersEnv %= M.unionWith S.union wenv'
   -- Return the results of both branches.
   return (res1, res2)
-
-
-
-
--- | Type of functions that take an AST and produce a graph.
-type FusionGraphMaker f op env t r = f op env t -> State (FusionGraphState op env) r
-
-
-class Result t r | t -> r where
-  result :: GroundVals t -> GroundVals r
-
-
-instance Result t r => Result (a -> t) r where
-  result :: Result t r => GroundVals (a -> t) -> GroundVals r
-  result vals@(TupRsingle (Val (GroundRscalar tp) _))
-    | (Refl :: (a -> t) :~: r) <- functionImpossible (TupRsingle tp)
-    = vals
-
-
-instance {-# INCOHERENT #-} Result t t where
-  result :: GroundVals t -> GroundVals t
-  result = id
-
 
 
 
@@ -1131,7 +1096,7 @@ filterInplacePaths g = g&fusionILP.inplacePaths %~ filterKeys (sameElementType &
     -- Check if the input was allocated outside a while loop and the output is allocated inside a while loop.
     crossesWhile :: InplacePath -> Bool
     crossesWhile (r,(c,_)) = case M.lookup r producerMap of
-      Just ps -> any (\p -> any isWhile $ stripLongestPrefix (ancestree p) (ancestree c)) ps
+      Just ps -> any (any isWhile . fst . difftree c) ps
       Nothing -> False
 
     isWhile :: Node Comp -> Bool
