@@ -766,7 +766,6 @@ freshVals :: Node Comp -> TupR s t -> State (FusionGraphState op env) (Vals s t)
 freshVals comp = traverseTupR (freshVal comp)
 
 
-
 -- | Read from a buffer.
 readsBuffers :: HasCallStack => Node Comp -> Nodes GVal -> State (FusionGraphState op env) ()
 readsBuffers c = traverse_ \b -> do
@@ -837,19 +836,6 @@ bindsBuffers :: HasCallStack => Node Comp -> Nodes GVal -> State (FusionGraphSta
 bindsBuffers c = traverse_ \b -> do
   ws <- use $ writers b
   fusionILP %= ws >-|b|-> c
-  writers b .= S.singleton c
-
--- | A let-binding or function produces a buffer.
---
--- This just ensures that functions and let-bindings actually have a body.
--- In most cases this is not required, but if body doesn't use the bound buffer
--- it would try to generate a let-binding without a body.
--- TODO: This is ugly and should be removed, but for that the reconstruction
---       algorithm needs to be changed. It should be able to handle this case.
-producesBuffers :: HasCallStack => Node Comp -> Nodes GVal -> State (FusionGraphState op env) ()
-producesBuffers c = traverse_ \b -> do
-  ws <- use $ writers b
-  fusionILP %= flip (foldr' (c==|-|=>)) ws
   writers b .= S.singleton c
 
 
@@ -932,9 +918,7 @@ mkFusionGraph (Alet lhs u bnd body) = do
   c `bindsBuffers` valsNodes bndRes
   env'    <- zoom currEnvL (weakenEnv lhs bndRes u env)
   symbol c ?= SLet (bindLHS lhs env') (fromSingletonSet bndResW) u
-  bodyRes <- zoom (local env') (mkFusionGraph body)
-  c `producesBuffers` valsNodes bodyRes
-  return bodyRes
+  zoom (local env') (mkFusionGraph body)
 
 mkFusionGraph (Return vars) = do
   env  <- use environment
@@ -989,16 +973,16 @@ mkFusionGraph (Awhile u cond body init) = do
   whileN <- freshComp
   res    <- freshVals whileN (groundsR init)
   zoom (scope whileN) do
-    condB <- freshComp
-    bodyB <- freshComp
+    condN <- freshComp
+    bodyN <- freshComp
     let init_val = lookupVars init env ^. _2
     whileN `requiresBuffers` valsNodes init_val   -- While reads the initial value,
-    (condN, bodyN) <- branches                    -- executes "both" the condition and body,
-      (block condB $ mkFusionGraphU u cond)
-      (block bodyB $ mkFusionGraphU u body)
-    symbol whileN ?= SWhl env condB bodyB init u
-    whileN `executes` condN
-    whileN `executes` bodyN
+    (condFun, bodyFun) <- branches                -- executes "both" the condition and body,
+      (block condN $ mkFusionGraphU u cond)
+      (block bodyN $ mkFusionGraphU u body)
+    symbol whileN ?= SWhl env condN bodyN init u
+    whileN `executes` condFun
+    whileN `executes` bodyFun
   return res                                      -- to return a fresh value of the same type as the initial value.
 
 
@@ -1026,13 +1010,13 @@ mkFusionGraphF :: forall op env t. (MakesILP op)
                -> State (FusionGraphState op env) (Node Comp)
 mkFusionGraphF (Alam lhs f) = mkFusionGraphU (shared $ lhsToTupR lhs) (Alam lhs f)
 mkFusionGraphF (Abody acc) = do
-  body <- freshComp
-  zoom (scope body) do
+  bodyN <- freshComp
+  zoom (scope bodyN) do
     res <- mkFusionGraph acc
-    body `returnsBuffers` valsNodes res
-    symbol body ?= SBod res
+    symbol bodyN ?= SBod res
     id %= makeManifest (valsNodes res)
-    return body
+    bodyN `returnsBuffers` valsNodes res
+    return bodyN
 
 
 
