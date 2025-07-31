@@ -20,6 +20,7 @@ either be a computation or a buffer.
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE PatternSynonyms #-}
 module Data.Array.Accelerate.Trafo.Partitioning.ILP.Labels where
 
 import Data.Array.Accelerate.AST.Idx
@@ -167,7 +168,7 @@ type Nodes t = Set (Node t)
 
 
 -- | A value consists of its type @s t@ and and the 'Node' that represents it.
-data Val s t = Val { valType :: s t, valNode :: Node GVal }
+data Val s t = Val { valType :: s t, valNodes :: Nodes GVal }
 
 
 -- | A 'TupR' of 'Val's.
@@ -182,9 +183,13 @@ type GroundVal = Val GroundR
 type GroundVals = Vals GroundR
 
 
+val :: s t -> Node GVal -> Val s t
+val t = Val t . S.singleton
+
+
 -- | Get the nodes of 'Vals'.
 valsNodes :: Vals s t -> Nodes GVal
-valsNodes = foldMapTupR (S.singleton . valNode)
+valsNodes = foldMapTupR valNodes
 
 
 
@@ -232,6 +237,11 @@ instance Eq (Val s t) where
 instance Show (Val s t) where
   show :: Val s t -> String
   show (Val _ n) = "Val " ++ show n
+
+
+instance Semigroup (Val s t) where
+  (<>) :: Val s t -> Val s t -> Val s t
+  (<>) (Val tp n1) (Val _ n2) = Val tp (n1 <> n2)
 
 
 

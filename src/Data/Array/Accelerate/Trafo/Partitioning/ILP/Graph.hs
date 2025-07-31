@@ -764,9 +764,10 @@ freshGVal comp = do
   allocator buff ?= comp
   return buff
 
+
 -- | Fresh 'Val'.
 freshVal :: Node Comp -> s t -> State (FusionGraphState op env) (Val s t)
-freshVal comp tp = Val tp <$> freshGVal comp
+freshVal comp tp = val tp <$> freshGVal comp
 
 
 -- | Fresh 'Vals'.
@@ -931,7 +932,7 @@ mkFusionGraph (Alet lhs u bnd body) = do
   c       <- freshComp  -- TODO: If there is an issue with reconstruction, maybe move this behind "bndRes <- mkFusionGraph bnd". The order in which labels are generate affects the order in which the clusters are interpreted. Previously let-bindings where always in a separate cluster from the bound computation, but now they are usually in the same cluster to prevent all buffers from being manifest. That said, topsort should already be taking care of this ordering issue.
   env     <- use environment
   bndRes  <- mkFusionGraph bnd
-  bndResW <- foldMapMTupR (use . writers . valNode) bndRes
+  bndResW <- foldMapMTupR (use . allWriters . valNodes) bndRes
   c `bindsBuffers` valsNodes bndRes
   env'    <- zoom currEnvL (weakenEnv lhs bndRes u env)
   symbol c ?= SLet (bindLHS lhs env') (fromSingletonSet bndResW) u
@@ -976,20 +977,16 @@ mkFusionGraph (Use tp n buff) = do
 mkFusionGraph (Acond cond tacc facc) = do
   env     <- use environment
   c_cond  <- freshComp
-  res     <- freshVals c_cond (groundsR tacc)  -- Unlike Awhile, we could create it at the end, but doing it here ensures the node ID's are sequential.
   zoom (scope c_cond) do
     c_true  <- freshComp
     c_false <- freshComp
     symbol c_cond ?= SITE env cond c_true c_false
-    (t_res, f_res) <- branches
+    c_cond `requiresBuffers` getVarDeps cond env  -- If-then-else reads the condition variable,
+    res <- uncurry (<>) <$> branches              -- executes "both" branches, and
       (block c_true  $ mkFusionGraph tacc)
       (block c_false $ mkFusionGraph facc)
-    c_cond `requiresBuffers` getVarDeps cond env
-    c_cond `requiresBuffers` valsNodes t_res
-    c_cond `requiresBuffers` valsNodes f_res
-  -- Allocate fresh values for the result, because we no longer store multiple nodes
-  -- for the same value if a branch occurs.
-  return res
+    c_cond `returnsBuffers` valsNodes res         -- returns the unified result of both branches.
+    return res
 
 mkFusionGraph (Awhile u cond body init) = do
   -- TODO: Maybe allocate a fresh array for the return value of the while loop?
@@ -1002,15 +999,13 @@ mkFusionGraph (Awhile u cond body init) = do
     c_body  <- freshComp
     symbol c_while ?= SWhl env c_cond c_body init u
     let init_val = lookupVars init env ^. _2
-    c_cond `requiresBuffers` valsNodes init_val
-    c_body `requiresBuffers` valsNodes init_val
-    (cond_res, body_res) <- branches  -- This assumes neither the condition nor the body modify values outside of their scope.
+    c_while `requiresBuffers` valsNodes init_val  -- While reads the initial value,
+    (cond_res, body_res) <- branches              -- executes "both" the condition and body,
       (block c_cond $ mkFusionGraphCond cond)
       (block c_body $ mkFusionGraphBody body)
-    c_while `requiresBuffers` valsNodes init_val
-    c_while `requiresBuffers` valsNodes cond_res
-    c_while `requiresBuffers` valsNodes body_res
-  return res
+    c_while `requiresBuffers` valsNodes cond_res  -- requires the condition result, and
+    c_while `requiresBuffers` valsNodes body_res  -- requires the body result,
+  return res                                      -- to return a fresh value of the same type as the initial value.
   where
     primBool = TupRsingle $ GroundRscalar $ scalarType @PrimBool
     mkFusionGraphCond = fmap (expectGroundVals primBool) . mkFusionGraphU u
@@ -1029,7 +1024,7 @@ mkFusionGraphU u (Alam lhs f) = do
   args       <- freshVals c (lhsToTupR lhs)
   env'       <- zoom currEnvL (weakenEnv lhs args u env)
   Exists res <- zoom (local env') (mkFusionGraphF f)
-  resW       <- foldMapMTupR (use . writers . valNode) res
+  resW       <- foldMapMTupR (use . allWriters . valNodes) res
   symbol c ?= SFun (bindLHS lhs env') (fromSingletonSet resW)
   c `producesBuffers` valsNodes res
   return $ Exists res
@@ -1229,18 +1224,18 @@ mkInplacePathsFromClusters g = g&fusionILP.inplacePaths <>~ go initialClusters
 -- We cannot guarantee the index is present in env', so we use the partiality of ReindexPartial by
 -- returning a Maybe. Uses unsafeCoerce to re-introduce type information implied by the EnvLabels.
 mkReindexPartial :: forall env env'. Map (Node GVal) (Node GVal) -> Env env -> Env env' -> ReindexPartial Maybe env env'
-mkReindexPartial m env env' idx = let val = lookupIdx idx env^._2 in case idxOf (inplaceOf val) env' of
+mkReindexPartial m env env' idx = let node = lookupIdx idx env^._2 in case idxOf (inplaceOf node) env' of
     Just idx' -> Just idx'
     -- Gracefully fall back to using the original value instead of the one defined by an in-place update.
     -- This is a bit unsafe, because there is no guarantee anything has been written to this value, or even that it exists at all.
     -- That said, I think this can only happen when a value is returned, thus causing both the original value and the in-place updated value to be out-of-scope.
     -- The returned value is then stored in another scope, so if the return statement properly replaces the original value with the in-place updated value, then the resulting program should bind the in-place updated value instead of the original.
     -- WARNING: No guarantee that this will always work, check if there are any issues.
-    Nothing -> internalWarning "mkReindexPartial: Fallback to non-in-place value." False $ idxOf val env'
+    Nothing -> internalWarning "mkReindexPartial: Fallback to non-in-place value." False $ idxOf node env'
   where
     -- Replace the buffer with the one we will actually write the data to.
     inplaceOf :: GroundVals a -> GroundVals a
-    inplaceOf (TupRsingle (Val tp b)) = TupRsingle $ Val tp $ M.findWithDefault b b m
+    inplaceOf (TupRsingle (Val tp ns)) = TupRsingle $ Val tp $ S.map (\b -> M.findWithDefault b b m) ns
     inplaceOf (TupRpair bs1 bs2) = TupRpair (inplaceOf bs1) (inplaceOf bs2)
     inplaceOf TupRunit = TupRunit
 
