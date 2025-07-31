@@ -182,6 +182,10 @@ type Nodes t = Set (Node t)
 
 
 -- | A value consists of its type @s t@ and and the 'Node' that represents it.
+--
+-- This is probably redudant now, because we don't need the type information anymore,
+-- but I'll keep it for now because it might be useful for in-place updates accross while-loops.
+-- Then we'd need to know the value returned by the while-loop, which would need to be existentially quantified.
 data Val s t = Val { valType :: s t, valNodes :: Nodes GVal }
 
 
