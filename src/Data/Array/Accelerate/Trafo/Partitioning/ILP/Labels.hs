@@ -163,13 +163,22 @@ difftree' (x:xs) (y:ys) | x == y = difftree' xs ys
 difftree' xs ys = (xs, ys)
 
 
--- | The first nodes in the 'ancestree's of the two 'Node's that differ (or the 'Node' itself).
-ancestors :: Node Comp -> Node Comp -> (Node Comp, Node Comp)
-ancestors n1 n2 = if n1^.parent == n2^.parent then (n1, n2)
+-- | The first nodes in the 'ancestree's of the two 'Node's that differ, which
+--   may be one or both of the original 'Node's, but always two different 'Node's.
+ancestors :: Node Comp -> Node Comp -> Maybe (Node Comp, Node Comp)
+ancestors n1 n2 = case ancestors' n1 n2 of
+  (a1, a2) | a1 /= a2  -> Just (a1, a2)
+           | otherwise -> Nothing
+
+
+-- | The first nodes in the 'ancestree's of the two 'Node's that differ, which
+--   may be one or both of the original 'Node's.
+ancestors' :: Node Comp -> Node Comp -> (Node Comp, Node Comp)
+ancestors' n1 n2 = if n1^.parent == n2^.parent then (n1, n2)
   else case compare (level n1) (level n2) of
-    LT -> ancestors  n1           (n2^.parent')
-    GT -> ancestors (n1^.parent')  n2
-    EQ -> ancestors (n1^.parent') (n2^.parent')
+    LT -> ancestors'  n1           (n2^.parent')
+    GT -> ancestors' (n1^.parent')  n2
+    EQ -> ancestors' (n1^.parent') (n2^.parent')
 
 
 -- | Create a fresh 'Node'.

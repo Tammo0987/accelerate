@@ -112,7 +112,7 @@ type InplaceM = M.Map (Node GVal) (Node GVal)
 
 topSort :: Bool -> FusionGraph -> Nodes Comp -> ReadDirM -> [ClusterL]
 topSort _ _ (S.toList -> [l]) _ = [ExecL [l]]  -- If the cluster is empty.
-topSort singletons (FusionGraph strictEdges dataflowEdges _) cluster readDirM =
+topSort singletons (FusionGraph _ _ strictEdges dataflowEdges _) cluster readDirM =
   if singletons then concatMap (map (ExecL . pure)) topsorteds else map ExecL topsorteds
   where
     buildGraph =
@@ -285,6 +285,8 @@ openReconstruct' singletons labelenv graph clusterslist mlab subclustersmap symb
     subclusters = M.map (concatMap ( \case
                       Execs ls  -> topSort singletons graph ls readDirM
                       NonExec l -> [NonExecL l])) subclustersmap
+
+    subcluster :: HasCallStack => Node Comp -> [ClusterL]
     subcluster l = subclusters !?? l
 
     makeCluster :: HasCallStack => Env env -> ClusterL -> FoldType op env

@@ -109,19 +109,21 @@ pattern w :-> r <- (w,_,r)
 -- @
 --
 data FusionGraph = FusionGraph   -- TODO: Use hashmaps and hashsets in production.
-  {   _strictEdges :: Set StrictEdge          -- ^ Edges that enforce strict ordering.
+  { _compNodes     :: Set (Node Comp)         -- ^ Computation nodes.
+  , _valueNodes    :: Set (Node GVal)         -- ^ Value nodes.
+  , _strictEdges   :: Set StrictEdge          -- ^ Edges that enforce strict ordering.
   , _dataflowEdges :: Set DataflowEdge        -- ^ Edges that represent data-flow.
-  ,  _inplacePaths :: Map InplacePath Number  -- ^ Summary paths between buffers for in-place updates + their weight.
+  , _inplacePaths  :: Map InplacePath Number  -- ^ Summary paths between buffers for in-place updates + their weight.
   }
 
 instance Semigroup FusionGraph where
   (<>) :: FusionGraph -> FusionGraph -> FusionGraph
-  (<>) (FusionGraph  s1 d1 i1) (FusionGraph  s2 d2 i2)
-    = FusionGraph (s1 <> s2) (d1 <> d2) (i1 <> i2)
+  (<>) (FusionGraph c1 v1 s1 d1 i1) (FusionGraph c2 v2 s2 d2 i2)
+    = FusionGraph (c1 <> c2) (v1 <> v2) (s1 <> s2) (d1 <> d2) (i1 <> i2)
 
 instance Monoid FusionGraph where
   mempty :: FusionGraph
-  mempty = FusionGraph mempty mempty mempty
+  mempty = FusionGraph mempty mempty mempty mempty mempty
 
 -- | Class for types that contain a fusion graph.
 --
@@ -129,6 +131,12 @@ instance Monoid FusionGraph where
 -- using @makeClassy@.
 class HasFusionGraph g where
   fusionGraph :: Lens' g FusionGraph
+
+  computationNodes :: Lens' g (Set (Node Comp))
+  computationNodes = fusionGraph.computationNodes
+
+  valueNodes :: Lens' g (Set (Node GVal))
+  valueNodes = fusionGraph.valueNodes
 
   strictEdges :: Lens' g (Set StrictEdge)
   strictEdges = fusionGraph.strictEdges
@@ -147,6 +155,12 @@ instance HasFusionGraph FusionGraph where
   fusionGraph :: Lens' FusionGraph FusionGraph
   fusionGraph = id
 
+  computationNodes :: Lens' FusionGraph (Set (Node Comp))
+  computationNodes f s = f (_compNodes s) <&> \ns -> s{_compNodes = ns}
+
+  valueNodes :: Lens' FusionGraph (Set (Node GVal))
+  valueNodes f s = f (_valueNodes s) <&> \ns -> s{_valueNodes = ns}
+
   strictEdges :: Lens' FusionGraph (Set StrictEdge)
   strictEdges f s = f (_strictEdges s) <&> \es -> s{_strictEdges = es}
 
@@ -155,6 +169,12 @@ instance HasFusionGraph FusionGraph where
 
   inplacePaths :: Lens' FusionGraph (Map InplacePath Number)
   inplacePaths f s = f (_inplacePaths s) <&> \ps -> s{_inplacePaths = ps}
+
+insertComputation :: (HasCallStack, HasFusionGraph g) => Node Comp -> g -> g
+insertComputation c = computationNodes %~ S.insert c
+
+insertValue :: (HasCallStack, HasFusionGraph g) => Node GVal -> g -> g
+insertValue v = valueNodes %~ S.insert v
 
 -- | Insert a strict relation between two computations.
 insertStrict :: (HasCallStack, HasFusionGraph g) => StrictEdge -> g -> g
@@ -220,14 +240,14 @@ readEdgesOf b = to (\g -> S.filter (\(b',_) -> b' == b) (g^.readEdges))
 writeEdgesOf :: HasFusionGraph g => Node GVal -> SimpleGetter g (Set WriteEdge)
 writeEdgesOf b = to (\g -> S.filter (\(_,b') -> b' == b) (g^.writeEdges))
 
-computationNodes :: HasFusionGraph g => SimpleGetter g (Set (Node Comp))
-computationNodes = to (\g -> S.foldr (\(w,_,r)       -> S.insert w . S.insert r) S.empty (g^.dataflowEdges)
-                          <> S.foldr (\(w,r)         -> S.insert w . S.insert r) S.empty (g^.strictEdges)
-                          <> S.foldr (\((_,r),(w,_)) -> S.insert w . S.insert r) S.empty (M.keysSet $ g^.inplacePaths))
+-- computationNodes :: HasFusionGraph g => SimpleGetter g (Set (Node Comp))
+-- computationNodes = to (\g -> S.foldr (\(w,_,r)       -> S.insert w . S.insert r) S.empty (g^.dataflowEdges)
+--                           <> S.foldr (\(w,r)         -> S.insert w . S.insert r) S.empty (g^.strictEdges)
+--                           <> S.foldr (\((_,r),(w,_)) -> S.insert w . S.insert r) S.empty (M.keysSet $ g^.inplacePaths))
 
-bufferNodes :: HasFusionGraph g => SimpleGetter g (Set (Node GVal))
-bufferNodes = to (\g -> S.map (\(_,b,_) -> b) (g^.dataflowEdges)
-                     <> S.foldr (\((b1,_),(_,b2)) -> S.insert b1 . S.insert b2) S.empty (M.keysSet $ g^.inplacePaths))
+-- bufferNodes :: HasFusionGraph g => SimpleGetter g (Set (Node GVal))
+-- bufferNodes = to (\g -> S.map (\(_,b,_) -> b) (g^.dataflowEdges)
+--                      <> S.foldr (\((b1,_),(_,b2)) -> S.insert b1 . S.insert b2) S.empty (M.keysSet $ g^.inplacePaths))
 
 
 
@@ -280,26 +300,25 @@ instance HasFusionGraph (FusionILP op) where
 
 -- | Safely add a strict relation between two computations.
 --
--- Strict edges are formed between the 'ancestors' of the two computations and
--- the two computations themselves.
+-- Add a strict edge at the 'ancestors'.
 before :: HasCallStack => Node Comp -> Node Comp -> FusionILP op -> FusionILP op
-before c1 c2 = fusionGraph %~ insertStrict (c1, c2)
+before c1 c2 = maybe id insertStrict (ancestors c1 c2)
 
 -- | Safely add a fusible edge between two computations.
 --
--- If the computations share the same parent, add a fusible edge, otherwise add
--- an infusible edge.
+-- If in the same subgraph, add a fusible edge, otherwise add a strict edge at the 'ancestors'.
 fusible :: HasCallStack => Node Comp -> Node GVal -> Node Comp -> FusionILP op -> FusionILP op
 fusible prod buff cons = if prod^.parent == cons^.parent
-  then fusionGraph %~ insertFusible   (prod, buff, cons)
-  else fusionGraph %~ insertInfusible (prod, buff, cons)
+  then insertFusible (prod, buff, cons)
+  else prod `before` cons
 
 -- | Safely add an infusible edge between two computations.
 --
--- An infusible edge is added between the two computations, and a strict edge
--- between their ancestors.
+-- If in the same subgraph, add an infusible edge, otherwise add a strict edge at the 'ancestors'.
 infusible :: HasCallStack => Node Comp -> Node GVal -> Node Comp -> FusionILP op -> FusionILP op
-infusible prod buff cons = fusionGraph %~ insertInfusible (prod, buff, cons)
+infusible prod buff cons = if prod^.parent == cons^.parent
+  then insertInfusible (prod, buff, cons)
+  else prod `before` cons
 
 -- | Safely add strict ordering between multiple computations and another computation.
 allBefore :: HasCallStack => Nodes Comp -> Node Comp -> FusionILP op -> FusionILP op
@@ -740,7 +759,10 @@ local env' f s = (environment .~ s^.environment) <$> f (s & environment .~ env')
 
 -- | Fresh computation label.
 freshComp :: State (FusionGraphState op env) (Node Comp)
-freshComp = zoom currComp freshL'
+freshComp = do
+  c <- zoom currComp freshL'
+  fusionILP %= insertComputation c
+  return c
 
 -- | Fresh buffer and the corresponding computation label.
 --
@@ -750,10 +772,11 @@ freshComp = zoom currComp freshL'
 -- the graph though.
 freshGVal :: Node Comp -> State (FusionGraphState op env) (Node GVal)
 freshGVal comp = do
-  buff <- zoom (currComp.asBuff) freshL'
-  writers   buff .= S.singleton comp
-  allocator buff ?= comp
-  return buff
+  v <- zoom (currComp.asBuff) freshL'
+  fusionILP   %= insertValue v
+  writers   v .= S.singleton comp
+  allocator v ?= comp
+  return v
 
 
 -- | Fresh 'Val'.
@@ -839,9 +862,9 @@ bindsBuffers c = traverse_ \b -> do
   writers b .= S.singleton c
 
 
--- | A computation executes another computattion.
-executes :: HasCallStack => Node Comp -> Node Comp -> State (FusionGraphState op env) ()
-executes c1 c2 = fusionILP %= c1 ==|-|=> c2
+-- -- | A computation executes another computattion.
+-- executes :: HasCallStack => Node Comp -> Node Comp -> State (FusionGraphState op env) ()
+-- executes c1 c2 = fusionILP %= c1 ==|-|=> c2
 
 
 
@@ -977,12 +1000,10 @@ mkFusionGraph (Awhile u cond body init) = do
     bodyN <- freshComp
     let init_val = lookupVars init env ^. _2
     whileN `requiresBuffers` valsNodes init_val   -- While reads the initial value,
-    (condFun, bodyFun) <- branches                -- executes "both" the condition and body,
+    _ <- branches                                 -- executes "both" the condition and body,
       (block condN $ mkFusionGraphU u cond)
       (block bodyN $ mkFusionGraphU u body)
     symbol whileN ?= SWhl env condN bodyN init u
-    whileN `executes` condFun
-    whileN `executes` bodyFun
   return res                                      -- to return a fresh value of the same type as the initial value.
 
 
@@ -999,7 +1020,6 @@ mkFusionGraphU u (Alam lhs f) = do
   env' <- zoom currEnvL (weakenEnv lhs args u env)
   fun  <- zoom (local env') (mkFusionGraphF f)
   symbol lam ?= SFun (bindLHS lhs env') fun
-  lam `executes` fun
   return lam
 
 
@@ -1075,30 +1095,15 @@ mkInplacePaths _ _ _ _ _ = M.empty
 
 -- | Filters the in-place update paths to only include those that are valid.
 filterInplacePaths :: forall op. FullGraph op -> FullGraph op
-filterInplacePaths g = g&fusionILP.inplacePaths %~ filterKeys (sameElementType &&& (not.crossesWhile))
+filterInplacePaths g = g&fusionILP.inplacePaths %~ filterKeys sameElementType
   where
-    -- Check if the input was allocated outside a while loop and the output is allocated inside a while loop.
-    crossesWhile :: InplacePath -> Bool
-    crossesWhile (r,(c,_)) = case M.lookup r producerMap of
-      Just ps -> any (any isWhile . fst . difftree c) ps
-      Nothing -> False
-
-    isWhile :: Node Comp -> Bool
-    isWhile c = case g^.symbol c of
-      Just SWhl{} -> True
-      Just _      -> False
-      _ -> internalError "no symbol found"
-
-    producerMap :: Map ReadEdge (Nodes Comp)
-    producerMap = foldl (flip \(c1,v,c2) -> M.insertWith S.union (v,c2) (S.singleton c1)) M.empty (g^.fusionILP.dataflowEdges)
-
     -- Checks if the input and output have the same element type.
     sameElementType :: InplacePath -> Bool
     sameElementType ((b1, _), (_, b2))
       | Exists tp1 <- getElt b1
       , Exists tp2 <- getElt b2
-      , Just Refl  <- matchTypeR tp1 tp2 = True
-      | otherwise                        = False
+      , Just Refl <- matchTypeR tp1 tp2 = True
+      | otherwise = False
 
     -- Gets the element size of a buffer.
     getElt :: Node GVal -> Exists TypeR
@@ -1260,7 +1265,7 @@ filterKeys p = M.filterWithKey (\k _ -> p k)
 toDOT :: FusionGraph -> Symbols op -> String
 toDOT g syms = "strict digraph {\n" ++
   concatMap (\c -> "  <" ++ show c ++ "> [shape=box, label=\"" ++ show (syms M.! c) ++ tail (show c) ++ "\"];\n") (g^.computationNodes) ++
-  concatMap (\b -> "  <" ++ show b ++ "> [shape=circle, label=\"" ++ show b ++ "\"];\n") (g^.bufferNodes) ++
+  concatMap (\b -> "  <" ++ show b ++ "> [shape=ellipse, label=\"" ++ show b ++ "\"];\n") (g^.valueNodes) ++
   concatMap (\(b,c) -> "  <" ++ show b ++ "> -> <" ++ show c ++ "> [];\n") (g^.readEdges) ++
   concatMap (\(c,b) -> "  <" ++ show c ++ "> -> <" ++ show b ++ "> [];\n") (g^.writeEdges) ++
   concatMap (\((b1, _), (_, b2)) -> "  <" ++ show b1 ++ "> -> <" ++ show b2 ++ "> [color=gray, style=dotted];\n") (M.keysSet $ g^.inplacePaths) ++

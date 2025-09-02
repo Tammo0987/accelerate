@@ -60,8 +60,8 @@ makeILP obj (FusionILP graph constraints bounds) =
     compN :: Nodes Comp
     compN = graph^.computationNodes
 
-    buffN :: Nodes GVal
-    buffN = graph^.bufferNodes
+    valueN :: Nodes GVal
+    valueN = graph^.valueNodes
 
     readE :: S.Set ReadEdge
     readE = graph^.readEdges
@@ -92,7 +92,7 @@ makeILP obj (FusionILP graph constraints bounds) =
     n = S.size compN
 
     m :: Int
-    m = S.size buffN
+    m = S.size valueN
 
 
     ----------------------------------------------------------------------------
@@ -139,7 +139,7 @@ makeILP obj (FusionILP graph constraints bounds) =
 
     -- objective function that maximises the number of fused away arrays, and thus minimises the number of array writes
     -- using .-. instead of notB to factor the constants out of the cost function; if we use (1 - manifest l) as elsewhere Gurobi thinks the 1 is a variable name
-    numberOfManifestArrays = foldl' (\e b -> e .-. manifest b) (int 0) buffN
+    numberOfManifestArrays = foldl' (\e b -> e .-. manifest b) (int 0) valueN
 
     -- objective function that minimises the total number of array reads + writes
     numberOfArrayReadsWrites = numberOfReads .+. numberOfManifestArrays
@@ -193,7 +193,7 @@ makeILP obj (FusionILP graph constraints bounds) =
     fusedB = foldMap (binary . uncurry Fused) $ S.map (\(i,_,j) -> (i,j)) dataflowE
 
     -- 0 <= m_i  <= 1
-    manifestB = foldMap (binary . Manifest) buffN
+    manifestB = foldMap (binary . Manifest) valueN
 
 
     ----------------------------------------------------------------------------
@@ -246,7 +246,7 @@ makeILP obj (FusionILP graph constraints bounds) =
 
 
     -- 0 <= pimax_b
-    pimaxB = foldMap (\b -> lowerUpper 0 (PiMax b) (n+5)) buffN
+    pimaxB = foldMap (\b -> lowerUpper 0 (PiMax b) (n+5)) valueN
 
     -- inplace b1 b2 \in {0, 1}
     inplaceB = foldMap (\((b1,c1),(c2,b2)) -> binary $ InPlace b1 c1 c2 b2) inplaceP
