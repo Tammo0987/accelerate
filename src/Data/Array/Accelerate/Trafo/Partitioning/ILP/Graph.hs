@@ -306,19 +306,19 @@ before c1 c2 = maybe id insertStrict (ancestors c1 c2)
 
 -- | Safely add a fusible edge between two computations.
 --
--- If in the same subgraph, add a fusible edge, otherwise add a strict edge at the 'ancestors'.
+-- If in the same subgraph, add a fusible edge, otherwise add an infusible edge.
 fusible :: HasCallStack => Node Comp -> Node GVal -> Node Comp -> FusionILP op -> FusionILP op
 fusible prod buff cons = if prod^.parent == cons^.parent
   then insertFusible (prod, buff, cons)
-  else prod `before` cons
+  else insertInfusible (prod, buff, cons)
 
 -- | Safely add an infusible edge between two computations.
 --
--- If in the same subgraph, add an infusible edge, otherwise add a strict edge at the 'ancestors'.
+-- If in the same subgraph, add a fusible edge, otherwise add an infusible edge.
 infusible :: HasCallStack => Node Comp -> Node GVal -> Node Comp -> FusionILP op -> FusionILP op
-infusible prod buff cons = if prod^.parent == cons^.parent
-  then insertInfusible (prod, buff, cons)
-  else prod `before` cons
+infusible prod buff cons = case ancestors prod cons of
+  Just (prod', cons') -> insertInfusible (prod', buff, cons')
+  Nothing -> id
 
 -- | Safely add strict ordering between multiple computations and another computation.
 allBefore :: HasCallStack => Nodes Comp -> Node Comp -> FusionILP op -> FusionILP op
