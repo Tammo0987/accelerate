@@ -776,7 +776,7 @@ desugarOpenAcc env = travA
             shOut' = case shIn' of
               TupRpair s _ -> TupRpair s $ TupRsingle
                 $ Var scalarTypeInt ZeroIdx
-              _ -> internalError "Pair impossible"
+              TupRsingle var -> pairImpossible var
 
             shOut = mapTupR (\(Var t idx) -> Var (GroundRscalar t) $ weaken kOut idx) shOut'
 
@@ -1358,7 +1358,7 @@ mkDefaultFoldFunction (ArgFun op) def (ArgArray _ (ArrayR (ShapeRsnoc shr) tp) (
       ArgFun $ Lam lhsIdx $ Body
         $ Let lhs (While condition step initial)
         $ expVars $ valueVal weakenId
-mkDefaultFoldFunction _ _ _ = internalError "Fun impossible"
+mkDefaultFoldFunction _ _ (ArgArray _ _ (TupRsingle sh) _) = pairImpossible sh
 
 -- In case of a scan with a default value, prepends the initial value before the other elements
 -- The default value is placed as the first value in case of a left-to-right scan, or as the

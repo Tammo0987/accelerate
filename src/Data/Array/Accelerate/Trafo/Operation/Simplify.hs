@@ -84,7 +84,9 @@ copyOperationsForArray (ArgArray _ (ArrayR _ tp) _ input) (ArgArray _ _ _ output
 detectMapCopies :: forall genv sh t s. Args genv (Fun' (t -> s) -> In sh t -> Out sh s -> ()) -> [CopyOperation genv]
 detectMapCopies (ArgFun (Lam lhs (Body body)) :>: ArgArray _ _ _ input :>: ArgArray _ _ _ output :>: ArgsNil)
   = detectMapCopies' lhs body input output
-detectMapCopies _ = internalError "Function impossible"
+detectMapCopies (ArgFun (Body f) :>: _ ) = functionImpossible $ expType f
+detectMapCopies (ArgFun (Lam _ (Lam _ _)) :>: _ :>: ArgArray _ (ArrayR _ tp) _ _ :>: ArgsNil)
+  = functionImpossible tp
 
 detectMapCopies' :: forall genv env t s. ELeftHandSide t () env -> OpenExp env genv s -> GroundVars genv (Buffers t) -> GroundVars genv (Buffers s) -> [CopyOperation genv]
 detectMapCopies' lhs body input output = go Just body output []
