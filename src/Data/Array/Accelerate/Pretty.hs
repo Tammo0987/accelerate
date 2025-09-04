@@ -144,19 +144,6 @@ extractOpenAcc (OpenAcc pacc) = pacc
 -- extractDelayedOpenAcc Delayed{}       = internalError "expected manifest array"
 
 
--- Unfortunately, using unsafePerformIO here means that the getFlag will be
--- evaluated only once when the first 'show' is performed on a Delayed value;
--- afterwards, the thunk will have been evaluated, and all future pretty-print
--- outputs will use the same result.
--- This cannot be prevented using a NOINLINE pragma, since then the function
--- itself is still a thunk that will only be evaluated once.
---
--- The practical result of this is that @setFlag verbose@ will not change
--- anything after a Delayed has already been printed once.
-shouldPrintHash :: Bool
-shouldPrintHash = unsafePerformIO $ getFlag verbose
-
-
 -- Debugging
 -- ---------
 

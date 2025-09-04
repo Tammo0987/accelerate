@@ -17,7 +17,7 @@ module Data.Array.Accelerate.AST.Var
   where
 
 import Data.Array.Accelerate.Representation.Type
-    ( TupR(..), mapTupR, liftTupR, rnfTupR )
+    ( TupR(..), mapTupR, liftTupR, rnfTupR, Distributes(..) )
 import Data.Array.Accelerate.AST.Idx
 
 import Language.Haskell.TH.Extra
@@ -31,7 +31,6 @@ varsType :: Vars s env t -> TupR s t
 varsType TupRunit               = TupRunit
 varsType (TupRsingle (Var t _)) = TupRsingle t
 varsType (TupRpair a b)         = TupRpair (varsType a) (varsType b)
-
 
 rnfVar :: (forall b. s b -> ()) -> Var s env t -> ()
 rnfVar f (Var t idx) = f t `seq` rnfIdx idx
@@ -64,3 +63,8 @@ mapVar f (Var t ix) = Var (f t) ix
 
 mapVars :: (forall u. s u -> s' u) -> Vars s env t -> Vars s' env t
 mapVars f = mapTupR (mapVar f)
+
+instance Distributes s => Distributes (Var s env) where
+  reprIsSingle (Var t _) = reprIsSingle t
+  pairImpossible (Var t _) = pairImpossible t
+  unitImpossible (Var t _) = unitImpossible t

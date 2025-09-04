@@ -80,7 +80,7 @@ stronglyLiveVariablesFun'' liveness us (Alam lhs (Abody body))
       $ \re -> if
         | BindLiveness lhs'' re' <- bind lhs' re ->
           Alam lhs'' $ Abody $ fromEither' $ body' re' SubTupRkeep
-stronglyLiveVariablesFun'' _ _ _ = internalError "Function impossible"
+stronglyLiveVariablesFun'' _ _ _ = internalError "Expected unary function"
 
 fromEither' :: Either a a -> a
 fromEither' (Left  x) = x

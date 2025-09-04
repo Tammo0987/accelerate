@@ -698,19 +698,24 @@ downgradeAwhileFun signalIdx (BuildLam lhsInput (BuildLam lhsBool (BuildLam lhsO
         (LeftHandSidePair lhsBool lhsOutput)
         lhsBoolOutput'
         kInput
-  , LeftHandSidePair lhsBool' lhsOutput' <- lhsBoolOutput'
-  = BuildLam lhsInput'
-  $ BuildLam (lhsSnd lhsBool')
-  $ BuildLam lhsOutput'
-  $ BuildBody
-  $ termOutput
-  $ weaken' kOutput f
+  = case lhsBoolOutput' of
+      LeftHandSidePair lhsBool' lhsOutput' ->
+        BuildLam lhsInput'
+        $ BuildLam (lhsSnd lhsBool')
+        $ BuildLam lhsOutput'
+        $ BuildBody
+        $ termOutput
+        $ weaken' kOutput f
+      LeftHandSideWildcard _ ->
+        internalError "Infinite awhile loop: condition of the loop never returns"
+      LeftHandSideWildcard (TupRsingle tp) -> pairImpossible tp
   where
     lhsSnd :: BLeftHandSide ((), b) e1 e2 -> BLeftHandSide b e1 e2
     lhsSnd (LeftHandSidePair LeftHandSideWildcard{} l) = l
+    lhsSnd (LeftHandSidePair (LeftHandSideSingle t) _) = unitImpossible t
     lhsSnd (LeftHandSideWildcard (TupRpair _ t)) = LeftHandSideWildcard t
-    lhsSnd _ = internalError "Pair impossible"
-downgradeAwhileFun _ _ = internalError "Fun impossible"
+    lhsSnd (LeftHandSideWildcard (TupRsingle t)) = pairImpossible t
+    lhsSnd (LeftHandSideSingle t) = pairImpossible t
 
 buildFunLam
   :: BLeftHandSide t env1 env2
