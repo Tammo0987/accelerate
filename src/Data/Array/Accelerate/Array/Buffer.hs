@@ -47,7 +47,7 @@ module Data.Array.Accelerate.Array.Buffer (
   HTYPE_INT, HTYPE_WORD, HTYPE_CLONG, HTYPE_CULONG, HTYPE_CCHAR,
 
   -- * Utilities for type classes
-  ScalarArrayDict(..), ScalarArrayDict,
+  ScalarArrayDict(..),
 
   -- * TemplateHaskell
   liftBuffers, liftBuffer,
@@ -56,24 +56,20 @@ module Data.Array.Accelerate.Array.Buffer (
   memoryCounterReset, memoryCounterReport,
 ) where
 
+
 import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.Representation.Type
 import Data.Array.Accelerate.Type
-import Data.Primitive.Vec
 #ifdef ACCELERATE_DEBUG
 import Data.Array.Accelerate.Lifetime
 #endif
 
 import Data.Array.Accelerate.Debug.Internal.Flags
-import Data.Array.Accelerate.Debug.Internal.Profile
 import Data.Array.Accelerate.Debug.Internal.Trace
 
 import Control.Applicative
-import Control.DeepSeq
-import Control.Monad                                                ( (<=<) )
 import Data.Bits
 import Data.IORef
-import Data.Primitive                                               ( sizeOf# )
 import Data.Typeable                                                ( (:~:)(..) )
 import Foreign.Ptr
 import Foreign.ForeignPtr
@@ -201,7 +197,7 @@ scalarArrayDict = scalar
       = ScalarArrayDict
 
     vector :: VectorType a -> ScalarArrayDict a
-    vector (VectorType w s)
+    vector (VectorType _ s)
       | ScalarArrayDict <- singleArrayDict s
       , SingleDict <- singleDict s
       = ScalarArrayDict
@@ -305,9 +301,6 @@ rnfBuffers (TupRsingle t)   arr
 rnfBuffer :: Buffer e -> ()
 rnfBuffer !_ = ()
 
-unPtr# :: Ptr a -> Addr#
-unPtr# (Ptr addr#) = addr#
-
 -- | Safe combination of creating and fast freezing of array data.
 --
 runBuffers
@@ -376,18 +369,6 @@ bufferToList tp n buffer = go 0
     go !i | i >= n    = []
           | otherwise = indexBuffer tp buffer i : go (i + 1)
 
--- | Allocate the given number of bytes with 64-byte (cache line)
--- alignment. This is essential for SIMD instructions.
---
--- Additionally, we return a plain ForeignPtr, which unlike a regular ForeignPtr
--- created with 'mallocForeignPtr' carries no finalisers. It is an error to try
--- to add a finaliser to the plain ForeignPtr. For our purposes this is fine,
--- since in Accelerate finalisers are handled using Lifetime
---
-mallocPlainForeignPtrBytesAligned :: Int -> IO (ForeignPtr a)
-mallocPlainForeignPtrBytesAligned (I# size#) = IO $ \s0 ->
-  case newAlignedPinnedByteArray# size# 64# s0 of
-    (# s1, mbarr# #) -> (# s1, ForeignPtr (byteArrayContents# (unsafeCoerce# mbarr#)) (PlainPtr mbarr#) #)
 
 bufferRetainAndGetRef :: Buffer e -> IO (Ptr e)
 bufferRetainAndGetRef (Buffer foreignPtr) = withForeignPtr foreignPtr $ \ptr -> do
