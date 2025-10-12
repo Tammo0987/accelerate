@@ -70,7 +70,7 @@ import Data.Foldable (fold)
 -- Then, we can reconstruct the clusters front-to-back:
 --    identify the nodes that only depend on nodes outside of the cluster, they are the initials
 --    the `output type` indicates which nodes we will need to keep: they are all either a final node in the cluster, or get diagonally fused
--- How exactly we can use this information (and a dep. graph) to symbols a cluster of ver,hor,diag is not clear.. Will also depend on the exact cluster definition.
+-- How exactly we can use this information (and a dep. graph) to construct a cluster of ver,hor,diag is not clear.. Will also depend on the exact cluster definition.
 
 {-
 Within each cluster (Labels), we do a topological sort using the edges in Graph
@@ -154,19 +154,6 @@ topSort singletons (FusionGraph _ _ strictEdges dataflowEdges _) cluster readDir
       Nothing -> error $ "can't get readorder " ++ show (b,r)
 
     defaultDir = 0
-
-    -- Old readOrderOf (depended on Symbols instead of ReadDirM):
-    -- readOrderOf :: HasCallStack => (Node Comp, Node GVal, Node Comp) -> BackendArg op
-    -- readOrderOf (_,b,l) = case symbols M.!? l of
-    --   Just (SExe' _ args _) -> getOrder args b
-    --   _ -> error "can't get readorder"
-
-    -- getOrder :: HasCallStack => LabelledArgsOp op env args -> Node GVal -> BackendArg op
-    -- getOrder ArgsNil b = error $ "can't get readorder " ++ show b
-    -- getOrder (LOp (ArgArray In _ _ _) (_,deps,_) b :>: args) buff
-    --   | buff `S.member` deps = b
-    --   | otherwise = getOrder args buff
-    -- getOrder (_ :>: args) buff = getOrder args buff
 
 
 openReconstruct   :: (MakesILP op, SimplifyOperation op)

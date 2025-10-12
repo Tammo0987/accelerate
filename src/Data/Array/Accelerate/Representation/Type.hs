@@ -63,7 +63,7 @@ instance (forall a. Semigroup (s a)) => Semigroup (TupR s t) where
   (<>) TupRunit TupRunit = TupRunit
   (<>) (TupRsingle a) (TupRsingle b) = TupRsingle (a <> b)
   (<>) (TupRpair a1 a2) (TupRpair b1 b2) = TupRpair (a1 <> b1) (a2 <> b2)
-  (<>) _ _ = internalError "Semigroup TupR: inaccessible lhs"
+  (<>) _ _ = internalError "Semigroup TupR: tuple mismatch"
 
 
 formatTypeR :: Format r (TypeR a -> r)
@@ -250,12 +250,6 @@ foldMapMTupR f (TupRpair a1 a2) = do
   r1 <- foldMapMTupR f a1
   r2 <- foldMapMTupR f a2
   return (r1 <> r2)
-
-eqTupR :: (forall s1 s2. a s1 -> a s2 -> Bool) -> TupR a t1 -> TupR a t2 -> Bool
-eqTupR _ TupRunit TupRunit = True
-eqTupR f (TupRsingle x) (TupRsingle y) = f x y
-eqTupR f (TupRpair xl xr) (TupRpair yl yr) = eqTupR f xl yl && eqTupR f xr yr
-eqTupR _ _ _ = False
 
 functionImpossible :: TypeR (s -> t) -> a
 functionImpossible (TupRsingle (SingleScalarType (NumSingleType tp))) = case tp of
