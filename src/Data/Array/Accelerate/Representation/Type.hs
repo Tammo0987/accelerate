@@ -15,6 +15,7 @@
 {-# LANGUAGE TypeOperators     #-}
 {-# LANGUAGE UndecidableInstances #-}
 {-# OPTIONS_HADDOCK hide #-}
+{-# LANGUAGE InstanceSigs #-}
 -- |
 -- Module      : Data.Array.Accelerate.Representation.Type
 -- Copyright   : [2008..2020] The Accelerate Team
@@ -57,6 +58,14 @@ data TupR s a where
 
 deriving instance (forall a. Show (s a)) => Show (TupR s t)
 
+instance (forall a. Semigroup (s a)) => Semigroup (TupR s t) where
+  (<>) :: (forall a. Semigroup (s a)) => TupR s t -> TupR s t -> TupR s t
+  (<>) TupRunit TupRunit = TupRunit
+  (<>) (TupRsingle a) (TupRsingle b) = TupRsingle (a <> b)
+  (<>) (TupRpair a1 a2) (TupRpair b1 b2) = TupRpair (a1 <> b1) (a2 <> b2)
+  (<>) _ _ = internalError "Semigroup TupR: tuple mismatch"
+
+
 formatTypeR :: Format r (TypeR a -> r)
 formatTypeR = later $ \case
   TupRunit     -> "()"
@@ -75,7 +84,7 @@ type TypeR = TupR ScalarType
 --   typeR = TupRunit
 
 -- instance IsScalar a => IsTypeR a where
---   typeR = TupRsingle scalarType 
+--   typeR = TupRsingle scalarType
 
 data TupleIdx s t where
   TupleIdxLeft  :: TupleIdx l t -> TupleIdx (l, r) t
@@ -229,7 +238,27 @@ traverseTupR f (TupRsingle a)   = TupRsingle <$> f a
 traverseTupR _ TupRunit         = pure TupRunit
 traverseTupR f (TupRpair a1 a2) = TupRpair <$> traverseTupR f a1 <*> traverseTupR f a2
 
+foldMapTupR :: Monoid m => (forall s. a s -> m) -> TupR a t -> m
+foldMapTupR f (TupRsingle a)   = f a
+foldMapTupR _ TupRunit         = mempty
+foldMapTupR f (TupRpair a1 a2) = foldMapTupR f a1 <> foldMapTupR f a2
+
+foldMapMTupR :: (Monad m, Monoid r) => (forall s. a s -> m r) -> TupR a t -> m r
+foldMapMTupR f (TupRsingle a)   = f a
+foldMapMTupR _ TupRunit         = return mempty
+foldMapMTupR f (TupRpair a1 a2) = do
+  r1 <- foldMapMTupR f a1
+  r2 <- foldMapMTupR f a2
+  return (r1 <> r2)
+
 functionImpossible :: TypeR (s -> t) -> a
 functionImpossible (TupRsingle (SingleScalarType (NumSingleType tp))) = case tp of
   IntegralNumType t -> case t of {}
   FloatingNumType t -> case t of {}
+
+instance (forall a. Eq (s a)) => Eq (TupR s t) where
+  (==) :: TupR s t -> TupR s t -> Bool
+  (==) TupRunit TupRunit = True
+  (==) (TupRsingle l) (TupRsingle r) = l == r
+  (==) (TupRpair l1 l2) (TupRpair r1 r2) = l1 == r1 && l2 == r2
+  (==) _ _ = False

@@ -23,7 +23,6 @@ import Data.Array.Accelerate.Debug.Internal.Flags                   as F
 import Data.Word
 import System.IO.Unsafe
 import Foreign.Storable
-import Data.Array.Accelerate.Trafo.Partitioning.ILP.Solve (Objective(..))
 
 
 data Config = Config
@@ -35,4 +34,3 @@ data Config = Config
 defaultOptions :: Config
 defaultOptions = unsafePerformIO $!
   Config <$> BitSet <$> peek F.__cmd_line_flags
-

@@ -3,6 +3,9 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdatomic.h>
+#ifdef ACCELERATE_MEMORY_COUNTER
+#include <pthread.h>
+#endif  // ACCELERATE_MEMORY_COUNTER
 
 #include "align.h"
 #include "flags.h"
@@ -15,6 +18,47 @@ struct ObjectHeader {
   uint64_t byte_size; // Size of the array. Does not include the header, and is not necessarily a multiple of the alignment.
 } CACHE_ALIGNED;
 
+#ifdef ACCELERATE_MEMORY_COUNTER
+
+// For memory counting:
+pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+uint64_t total_allocated = 0;
+uint64_t current_allocated = 0;
+uint64_t init_allocated = 0;
+uint64_t max_allocated = 0;
+
+void accelerate_memory_counter_reset() {
+  pthread_mutex_lock(&mutex);
+  total_allocated = 0;
+  init_allocated = current_allocated;
+  max_allocated = current_allocated;
+  pthread_mutex_unlock(&mutex);
+}
+
+uint64_t accelerate_memory_counter_total() {
+  pthread_mutex_lock(&mutex);
+  uint64_t ret = total_allocated;
+  pthread_mutex_unlock(&mutex);
+  return ret;
+}
+
+uint64_t accelerate_memory_counter_init() {
+  pthread_mutex_lock(&mutex);
+  uint64_t ret = init_allocated;
+  pthread_mutex_unlock(&mutex);
+  return ret;
+}
+
+uint64_t accelerate_memory_counter_max() {
+  pthread_mutex_lock(&mutex);
+  uint64_t ret = max_allocated;
+  pthread_mutex_unlock(&mutex);
+  return ret;
+}
+
+#endif  // ACCELERATE_MEMORY_COUNTER
+
+
 void* accelerate_buffer_alloc(uint64_t byte_size) {
   uint64_t size = byte_size + sizeof(struct ObjectHeader);
   // Align size to the next multiple of CACHE_LINE_SIZE
@@ -24,6 +68,15 @@ void* accelerate_buffer_alloc(uint64_t byte_size) {
   void *ptr = accelerate_raw_alloc(size, CACHE_LINE_SIZE);
 
   // TODO: call ___tracy_emit_memory_alloc
+  #ifdef ACCELERATE_MEMORY_COUNTER
+  // For benchmarking memory usage:
+  pthread_mutex_lock(&mutex);
+  total_allocated += byte_size;
+  current_allocated += byte_size;
+  if (current_allocated > max_allocated)
+    max_allocated = current_allocated;
+  pthread_mutex_unlock(&mutex);
+  #endif  // ACCELERATE_MEMORY_COUNTER
 
   struct ObjectHeader* header = (struct ObjectHeader*) ptr;
   header->reference_count = 1;
@@ -55,6 +108,13 @@ void accelerate_buffer_release_by(void* interior, uint64_t amount) {
   uint64_t old = atomic_fetch_add_explicit(&header->reference_count, -amount, memory_order_acq_rel);
   if (old == amount) {
     // TODO: call ___tracy_emit_memory_free
+
+    #ifdef ACCELERATE_MEMORY_COUNTER
+    pthread_mutex_lock(&mutex);
+    current_allocated -= header->byte_size;
+    pthread_mutex_unlock(&mutex);
+    #endif  // ACCELERATE_MEMORY_COUNTER
+
     accelerate_raw_free(header);
   }
   if (old < amount) {

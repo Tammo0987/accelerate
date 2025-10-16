@@ -208,6 +208,13 @@ data Uniqueness t where
 
 type Uniquenesses = TupR Uniqueness
 
+deriving instance Show (Uniqueness t)
+
+instance Semigroup (Uniqueness t) where
+  (<>) :: Uniqueness t -> Uniqueness t -> Uniqueness t
+  (<>) Unique Unique = Unique
+  (<>) _      _      = Shared
+
 shared :: TupR s t -> Uniquenesses t
 shared = mapTupR (const Shared)
 
@@ -584,7 +591,7 @@ groundToExpVar TupRunit         TupRunit                = TupRunit
 groundToExpVar _                _                       = internalError "Impossible pair"
 expToGroundVar :: ExpVars env e -> GroundVars env e
 expToGroundVar  TupRunit = TupRunit
-expToGroundVar  (TupRsingle (Var a ix)) = TupRsingle $ Var (GroundRscalar a) ix 
+expToGroundVar  (TupRsingle (Var a ix)) = TupRsingle $ Var (GroundRscalar a) ix
 expToGroundVar  (TupRpair x y) = TupRpair (expToGroundVar x) (expToGroundVar y)
 
 class NFData' f where

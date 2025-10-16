@@ -51,6 +51,9 @@ module Data.Array.Accelerate.Array.Buffer (
 
   -- * TemplateHaskell
   liftBuffers, liftBuffer,
+
+  -- * Memory tracking
+  memoryCounterReset, memoryCounterReport,
 ) where
 
 
@@ -124,8 +127,54 @@ memoryRetain = undefined
 memoryRelease :: Ptr () -> IO ()
 memoryRelease = undefined
 
+memoryReleaseRef :: FunPtr (Ptr () -> IO ())
+memoryReleaseRef = undefined
+
 #endif
 
+
+#if defined(ACCELERATE_MEMORY_COUNTER) && !defined(__GHCIDE__)
+
+foreign import ccall unsafe "accelerate_memory_counter_reset" memoryCounterReset :: IO ()
+foreign import ccall unsafe "accelerate_memory_counter_total" memoryCounterTotal :: IO Word64
+foreign import ccall unsafe "accelerate_memory_counter_init" memoryCounterInit :: IO Word64
+foreign import ccall unsafe "accelerate_memory_counter_max" memoryCounterMax :: IO Word64
+
+#else
+
+memoryCounterReset :: IO ()
+memoryCounterReset = return ()
+
+memoryCounterTotal :: IO Word64
+memoryCounterTotal = return 0
+
+memoryCounterInit :: IO Word64
+memoryCounterInit = return 0
+
+memoryCounterMax :: IO Word64
+memoryCounterMax = return 0
+
+#endif
+
+#if defined(ACCELERATE_MEMORY_COUNTER) || defined(__GHCIDE__)
+
+memoryCounterReport :: IO ()
+memoryCounterReport = do
+  totalAlloc <- memoryCounterTotal
+  initAlloc  <- memoryCounterInit
+  maxAlloc   <- memoryCounterMax
+  putStrLn $ "Total memory allocated:   " ++ show totalAlloc ++ " bytes"
+  putStrLn $ "Initial memory allocated: " ++ show initAlloc ++ " bytes"
+  putStrLn $ "Maximum memory allocated: " ++ show maxAlloc ++ " bytes"
+
+#else
+
+memoryCounterReport :: IO ()
+memoryCounterReport = putStrLn "MEMORY COUNTER DISABLED"
+
+#endif
+
+--
 -- SEE: [linking to .c files]
 --
 runQ $ do

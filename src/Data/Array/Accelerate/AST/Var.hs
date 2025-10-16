@@ -64,6 +64,9 @@ mapVar f (Var t ix) = Var (f t) ix
 mapVars :: (forall u. s u -> s' u) -> Vars s env t -> Vars s' env t
 mapVars f = mapTupR (mapVar f)
 
+instance Show (Var s env t) where
+  show (Var _ idx) = "Var " ++ show (idxToInt idx)
+
 instance Distributes s => Distributes (Var s env) where
   reprIsSingle (Var t _) = reprIsSingle t
   pairImpossible (Var t _) = pairImpossible t
