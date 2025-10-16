@@ -1180,12 +1180,19 @@ mkInplacePathsFromClusters g = g&fusionILP.inplacePaths <>~ go initialClusters
 mkReindexPartial :: forall env env'. Map (Node GVal) (Node GVal) -> Env env -> Env env' -> ReindexPartial Maybe env env'
 mkReindexPartial m env env' idx = let node = lookupIdx idx env^._2 in case idxOf (inplaceOf node) env' of
     Just idx' -> Just idx'
-    -- Gracefully fall back to using the original value instead of the one defined by an in-place update.
+    -- Note: we are not yet sure what happens if the variable after in-place updates is not found,
+    -- but the variable before in-place updates is found. It might be that this never occurs.
+    -- Currently we throw an error in this case.
+    -- Instead, we could gracefully fall back to using the original value instead of the one defined by an in-place update.
     -- This is a bit unsafe, because there is no guarantee anything has been written to this value, or even that it exists at all.
-    -- That said, I think this can only happen when a value is returned, thus causing both the original value and the in-place updated value to be out-of-scope.
+    -- That said, I (Timo) think this can only happen when a value is returned, thus causing both the original value and the in-place updated value to be out-of-scope.
     -- The returned value is then stored in another scope, so if the return statement properly replaces the original value with the in-place updated value, then the resulting program should bind the in-place updated value instead of the original.
-    -- WARNING: No guarantee that this will always work, check if there are any issues.
-    Nothing -> internalWarning "mkReindexPartial: Fallback to non-in-place value." False $ idxOf node env'
+    -- See https://github.com/ivogabe/accelerate/pull/11#discussion_r2424009960
+    Nothing
+      | inplaceOf node /= node
+      , Just _ <- (idxOf node env') ->
+        internalError $ "mkReindexPartial: index of in-place updated buffer not found. Original buffer (without in-place updates taken into account) is available, but using that might not be sound."
+      | otherwise -> Nothing
   where
     -- Replace the buffer with the one we will actually write the data to.
     inplaceOf :: GroundVals a -> GroundVals a
