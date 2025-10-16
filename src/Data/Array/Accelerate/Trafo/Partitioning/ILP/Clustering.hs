@@ -63,15 +63,6 @@ import Lens.Micro
 import Debug.Trace
 import Data.Foldable (fold)
 
--- "open research question"
--- -- Each set of ints corresponds to a set of Constructions, which themselves contain a set of ints (the things they depend on).
--- -- Some of those ints will refer to nodes in previous clusters, others to nodes in this cluster.
--- One pass over these datatypes (back-to-front) should identify the 'output type' of each cluster: which nodes are needed in later clusters?
--- Then, we can reconstruct the clusters front-to-back:
---    identify the nodes that only depend on nodes outside of the cluster, they are the initials
---    the `output type` indicates which nodes we will need to keep: they are all either a final node in the cluster, or get diagonally fused
--- How exactly we can use this information (and a dep. graph) to construct a cluster of ver,hor,diag is not clear.. Will also depend on the exact cluster definition.
-
 {-
 Within each cluster (Labels), we do a topological sort using the edges in Graph
 ((a,b) means a before b in ordering). Then, we can simply cons them on top of each other.
