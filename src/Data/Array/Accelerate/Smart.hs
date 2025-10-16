@@ -320,13 +320,8 @@ data PreSmartAcc acc exp as where
                 -> Level                        -- environment size at defining occurrence
                 -> PreSmartAcc acc exp as
 
-  Pipe          :: ArraysR as
-                -> ArraysR bs
-                -> ArraysR cs
-                -> (SmartAcc as -> acc bs)
-                -> (SmartAcc bs -> acc cs)
-                -> acc as
-                -> PreSmartAcc acc exp cs
+  Manifest      :: acc as
+                -> PreSmartAcc acc exp as
 
   Aforeign      :: Foreign asm
                 => ArraysR bs
@@ -825,7 +820,7 @@ arrayR acc = case arraysR acc of
 instance HasArraysR acc => HasArraysR (PreSmartAcc acc exp) where
   arraysR = \case
     Atag repr _               -> repr
-    Pipe _ _ repr  _ _ _      -> repr
+    Manifest as               -> arraysR as
     Aforeign repr _ _ _       -> repr
     Acond _ a _               -> arraysR a
     Awhile _ _ _ a            -> arraysR a
@@ -1346,7 +1341,7 @@ formatPreAccOp :: Format r (PreSmartAcc acc exp arrs -> r)
 formatPreAccOp = later $ \case
   Atag _ i            -> bformat ("Atag " % int) i
   Use aR a            -> bformat ("Use " % string) (showArrayShort 5 (showsElt (arrayRtype aR)) aR a)
-  Pipe{}              -> "Pipe"
+  Manifest{}          -> "Manifest"
   Acond{}             -> "Acond"
   Awhile{}            -> "Awhile"
   Apair{}             -> "Apair"

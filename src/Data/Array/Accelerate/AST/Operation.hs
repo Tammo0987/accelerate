@@ -117,6 +117,16 @@ data PreOpenAcc (op :: Type -> Type) env a where
   Return  :: GroundVars env a
           -> PreOpenAcc op env a
 
+  -- | Fusion boundary.
+  -- Corresponds with 'compute' in the user-facing language. Internally we use
+  -- a different name as 'compute' already has a different meaning (computing
+  -- expressions).
+  --
+  -- This constructor may only occur before fusion.
+  --
+  Manifest :: GroundVar env (Buffer e)
+           -> PreOpenAcc op env (Buffer e)
+
   -- | Evaluates the expression and returns its value.
   --
   Compute :: Exp env t
@@ -353,6 +363,7 @@ class HasGroundsR f where
 instance HasGroundsR (PreOpenAcc op env) where
   groundsR (Exec _ _)          = TupRunit
   groundsR (Return vars)     = groundsR vars
+  groundsR (Manifest var)    = groundsR var     
   groundsR (Compute e)       = groundsR e
   groundsR (Alet _ _ _ a)    = groundsR a
   groundsR (Alloc _ tp _)    = TupRsingle $ GroundRbuffer tp
@@ -490,6 +501,7 @@ reindexPreArgs reindex k (a :>: as) = (:>:) <$> reindex k a <*> reindexPreArgs r
 reindexAcc :: Applicative f => ReindexPartial f env env' -> PreOpenAcc op env t -> f (PreOpenAcc op env' t)
 reindexAcc r (Exec opargs pa) = Exec opargs <$> reindexArgs r pa
 reindexAcc r (Return tr) = Return <$> reindexVars r tr
+reindexAcc r (Manifest var) = Manifest <$> reindexVar r var
 reindexAcc r (Compute poe) = Compute <$> reindexExp r poe
 reindexAcc r (Alet lhs tr poa poa') = reindexLHS r lhs $ \lhs' r' -> Alet lhs' tr <$> reindexAcc r poa <*> reindexAcc r' poa'
 reindexAcc r (Alloc sr st tr) = Alloc sr st <$> reindexVars r tr
@@ -572,6 +584,7 @@ mapAccExecutable :: (forall args benv'. op args -> Args benv' args -> op' args) 
 mapAccExecutable f = \case
   Exec op args                  -> Exec (f op args) args
   Return vars                   -> Return vars
+  Manifest var                  -> Manifest var
   Compute e                     -> Compute e
   Alet lhs uniqueness bnd body  -> Alet lhs uniqueness (mapAccExecutable f bnd) (mapAccExecutable f body)
   Alloc shr tp sh               -> Alloc shr tp sh
@@ -600,6 +613,7 @@ class NFData' f where
 instance NFData' op => NFData (OperationAcc op env a) where
   rnf (Exec op args)                = rnf' op `seq` rnfArgs args
   rnf (Return vars)                 = rnfGroundVars vars
+  rnf (Manifest var)                = rnfGroundVar var
   rnf (Compute expr)                = rnfOpenExp expr
   rnf (Alet lhs us bnd a)           = rnfLeftHandSide rnfGroundR lhs `seq` rnfTupR rnfUniqueness us `seq` rnf bnd `seq` rnf a
   rnf (Alloc shr tp sh)             = rnfShapeR shr `seq` rnfScalarType tp `seq` rnfTupR rnfExpVar sh

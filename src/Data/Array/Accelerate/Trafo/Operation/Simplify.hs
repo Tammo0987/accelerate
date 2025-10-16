@@ -209,6 +209,7 @@ simplify' uniquenesses = \case
     ( variableIndices uniquenesses vars
     , \env -> Return $ simplifyReturnVars env uniquenesses vars
     )
+  Manifest var -> ( IdxSet.empty, const $ Manifest var )
   Compute expr ->
     ( IdxSet.empty
     , \env ->

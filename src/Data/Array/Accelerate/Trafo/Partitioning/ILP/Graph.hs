@@ -457,7 +457,7 @@ data Var (op :: Type -> Type)
     -- ^ 0 is fused (same cluster), 1 is unfused. We do *not* have one of these for all pairs, only the ones we need for constraints and/or costs!
     -- Invariant: Like edges, both labels have to have the same parent: Either on top (Node _ Nothing) or as sub-computation of the same label (Node _ (Just x)).
     -- In fact, this is the Var-equivalent to Edge: an infusible edge has a constraint (== 1).
-  | Manifest (Node GVal)
+  | IsManifest (Node GVal)
     -- ^ 0 means manifest, 1 is like a `delayed array`.
     -- Binary variable; will we write the output to a manifest array, or is it fused away (i.e. all uses are in its cluster)?
   | ReadDir (Node GVal) (Node Comp)
@@ -499,9 +499,9 @@ pi = var . Pi
 delayed :: MakesILP op => Node GVal -> Expression op
 delayed = notB . manifest
 
--- | Constructor for 'Manifest' variables.
+-- | Constructor for 'IsManifest' variables.
 manifest :: Node GVal -> Expression op
-manifest = var . Manifest
+manifest = var . IsManifest
 
 -- | Safe constructor for 'Fused' variables.
 fused :: (Node Comp, Node Comp) -> Expression op
@@ -949,6 +949,14 @@ mkFusionGraph (Return vars) = do
   let (_, bs, _) = lookupVars vars env
   retN `returnsBuffers` valsNodes bs
   symbol retN ?= SRet env vars
+  return bs
+
+mkFusionGraph (Manifest buff) = do
+  env  <- use environment
+  retN <- freshComp
+  let (_, bs, _) = lookupVar buff env
+  retN `returnsBuffers` valsNodes bs
+  symbol retN ?= SRet env (TupRsingle buff)
   return bs
 
 mkFusionGraph (Compute expr) = do

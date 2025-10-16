@@ -39,7 +39,7 @@ convertPreOpenAcc = \case
   Apair a1 a2                     -> Apair (convertAcc a1) (convertAcc a2)
   Anil                            -> Anil
   Atrace msg as bs                -> Atrace msg (convertAcc as) (convertAcc bs)
-  Apply repr f a                  -> Apply repr (convertAfun f) (convertAcc a)
+  Manifest as                     -> Manifest (convertAcc as)
   Aforeign repr asm f a           -> Aforeign repr asm (convertAfun f) (convertAcc a)
   Acond e a1 a2                   -> Acond e (convertAcc a1) (convertAcc a2)
   Awhile c f a                    -> Awhile (convertAfun c) (convertAfun f) (convertAcc a)

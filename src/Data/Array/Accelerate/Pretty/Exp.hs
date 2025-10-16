@@ -57,8 +57,7 @@ type Adoc = Doc Keyword
 data Keyword
   = Statement     -- do | case of | let in
   | Conditional   -- if then else
-  | Manifest      -- collective operations (kernel functions)
-  | Delayed       -- fused operators
+  | FunctionName
   | Execute
   | Modifier
   deriving (Eq, Show)

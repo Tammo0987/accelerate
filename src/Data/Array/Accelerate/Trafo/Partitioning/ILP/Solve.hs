@@ -189,7 +189,7 @@ makeILP obj (FusionILP graph constraints bounds) =
     fusedB = foldMap (binary . uncurry Fused) $ S.map (\(i,_,j) -> (i,j)) dataflowE
 
     -- 0 <= m_i  <= 1
-    manifestB = foldMap (binary . Manifest) buffN
+    manifestB = foldMap (binary . IsManifest) buffN
 
 
     ----------------------------------------------------------------------------

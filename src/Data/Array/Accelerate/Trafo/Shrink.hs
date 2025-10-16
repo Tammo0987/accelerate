@@ -216,7 +216,7 @@ usesOfPreAcc withShape countAcc idx = count
       Apair a1 a2                -> countA a1 + countA a2
       Anil                       -> 0
       Atrace _ a1 a2             -> countA a1 + countA a2
-      Apply _ f a                -> countAF f idx + countA a
+      Manifest as                -> countA as
       Aforeign _ _ _ a           -> countA a
       Acond p t e                -> countE p + countA t + countA e
       -- Body and condition of the while loop may be evaluated multiple times.

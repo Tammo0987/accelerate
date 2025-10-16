@@ -320,16 +320,7 @@ convertSharingAcc config alyt aenv (ScopedAcc lams (AccSharing _ preAcc))
         -> let AST.OpenAcc a = avarsIn AST.OpenAcc $ prjIdx (bformat ("de Bruijn conversion tag " % int) i) formatArraysR matchArraysR repr i alyt
            in  a
 
-      Pipe reprA reprB reprC (afun1 :: SmartAcc as -> ScopedAcc bs) (afun2 :: SmartAcc bs -> ScopedAcc cs) acc
-        | DeclareVars lhs k value <- declareVars reprB ->
-          let
-            noStableSharing = StableSharingAcc noStableAccName (undefined :: SharingAcc acc exp ())
-            boundAcc = AST.Apply reprB (cvtAfun1 reprA afun1) (cvtA acc)
-            alyt'   = PushLayout (incLayout k alyt) lhs (value weakenId)
-            bodyAcc = AST.Apply reprC
-                        (convertSharingAfun1 config alyt' (noStableSharing : aenv') reprB afun2)
-                        (avarsIn AST.OpenAcc $ value weakenId)
-          in AST.Alet lhs (AST.OpenAcc boundAcc) (AST.OpenAcc bodyAcc)
+      Manifest as                 -> AST.Manifest (cvtA as)
 
       Aforeign repr ff afun acc
         -> AST.Aforeign repr ff (convertSmartAfun1 config (Smart.arraysR acc) afun) (cvtA acc)
@@ -1500,13 +1491,9 @@ makeOccMapSharingAcc config accOccMap = traverseAcc
 
           reconstruct $ case pacc of
             Atag repr i                 -> return (Atag repr i, 0)           -- height is 0!
-            Pipe repr1 repr2 repr3 afun1 afun2 acc
-                                        -> do
-                                             (afun1', h1) <- traverseAfun1 lvl repr1 afun1
-                                             (afun2', h2) <- traverseAfun1 lvl repr2 afun2
-                                             (acc', h3)   <- traverseAcc lvl acc
-                                             return (Pipe repr1 repr2 repr3 afun1' afun2' acc'
-                                                    , h1 `max` h2 `max` h3 + 1)
+            Manifest as                 -> do
+                                             (as', h) <- traverseAcc lvl as
+                                             return (Manifest as', h)
             Aforeign repr ff afun acc   -> travA (Aforeign repr ff afun) acc
             Acond e acc1 acc2           -> do
                                              (e'   , h1) <- traverseExp lvl e
@@ -2357,14 +2344,9 @@ determineScopesSharingAcc config accOccMap = scopesAcc
     scopesAcc (UnscopedAcc _ (AccSharing sn pacc))
       = case pacc of
           Atag tp i               -> reconstruct (Atag tp i) noNodeCounts
-          Pipe repr1 repr2 repr3 afun1 afun2 acc
-                                  -> let
-                                       (afun1', accCount1) = scopesAfun1 afun1
-                                       (afun2', accCount2) = scopesAfun1 afun2
-                                       (acc', accCount3)   = scopesAcc acc
-                                     in
-                                     reconstruct (Pipe repr1 repr2 repr3 afun1' afun2' acc')
-                                                 (accCount1 +++ accCount2 +++ accCount3)
+          Manifest as             -> let
+                                       (as', accCount) = scopesAcc as
+                                     in reconstruct (Manifest as') accCount
 
           Aforeign r ff afun acc  -> let
                                        (acc', accCount) = scopesAcc acc

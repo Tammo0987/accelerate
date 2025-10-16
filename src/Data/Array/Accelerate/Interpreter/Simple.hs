@@ -192,7 +192,7 @@ evalOpenAcc (OpenAcc pacc) aenv =
                                      in
                                      (TupRpair r1 r2, (a1, a2))
     Anil                          -> (TupRunit, ())
-    Apply repr afun acc           -> (repr, evalOpenAfun afun aenv $ snd $ manifest acc)
+    Manifest as                   -> manifest as
     Aforeign repr _ afun acc      -> (repr, evalOpenAfun afun Empty $ snd $ manifest acc)
     Acond p acc1 acc2
       | toBool (evalE p)          -> manifest acc1

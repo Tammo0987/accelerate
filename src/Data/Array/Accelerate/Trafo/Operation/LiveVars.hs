@@ -127,6 +127,13 @@ stronglyLiveVariables' liveness returns us = \case
       LVAnalysis
         liveness1
         $ \re s -> Right $ Return $ expectJust $ reEnvVars re $ subTupR s vars
+  Manifest var
+    | liveness1 <- returnVars returns (TupRsingle var) liveness ->
+      LVAnalysis
+        liveness1
+        $ \re s -> case s of
+          SubTupRskip -> Right $ Return TupRunit
+          SubTupRkeep -> Right $ Manifest $ expectJust $ reEnvVar re var
   Compute expr
     -- If the LHS of the binding is live, then all free variables of this
     -- expression are live as well.

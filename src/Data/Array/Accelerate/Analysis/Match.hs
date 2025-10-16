@@ -101,10 +101,8 @@ matchPreOpenAcc matchAcc = match
     match Anil Anil
       = Just Refl
 
-    match (Apply _ f1 a1) (Apply _ f2 a2)
-      | Just Refl <- matchPreOpenAfun matchAcc f1 f2
-      , Just Refl <- matchAcc                  a1 a2
-      = Just Refl
+    match (Manifest a1) (Manifest a2)
+      = matchAcc a1 a2
 
     match (Aforeign _ ff1 f1 a1) (Aforeign _ ff2 f2 a2)
       | Just Refl <- matchAcc a1 a2

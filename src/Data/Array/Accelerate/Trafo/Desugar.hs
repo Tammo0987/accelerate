@@ -19,6 +19,8 @@
 -- Portability : non-portable (GHC extensions)
 --
 
+-- TODO: Rename desugaring to lowering
+
 module Data.Array.Accelerate.Trafo.Desugar
   where
 
@@ -369,16 +371,18 @@ desugarOpenAcc env = travA
       Named.Avar (Var _ ix)
         | ArrayDescriptor _ sh bf <- prj' ix env -> Return (TupRpair sh bf)
       Named.Apair a b -> pair (travA a) (travA b)
-      Named.Anil       -> Return TupRunit
-      Named.Apply repr f arg -> case f of
-        Named.Alam lhs (Named.Abody a) -> travA $ Named.OpenAcc $ Named.Alet lhs arg a
-        Named.Abody a                  -> arraysRFunctionImpossible $ Named.arraysR a
-        Named.Alam _ Named.Alam{}      -> arraysRFunctionImpossible repr
+      Named.Anil -> Return TupRunit
+      Named.Manifest as -> makeManifest $ travA as
       Named.Aforeign repr asm (Named.Alam lhsA _) arg
         | DeclareVars lhs _ value <- declareVars $ desugarArraysR $ lhsToTupR lhsA
         , Just a <- mkForeign repr asm $ value weakenId
                                        -> alet lhs (travA arg) a
-      Named.Aforeign repr _ f arg   -> travA $ Named.OpenAcc $ Named.Apply repr (weaken weakenEmpty f) $ arg
+      Named.Aforeign repr _ f arg -> case f of
+        Named.Alam lhs (Named.Abody a)
+          | Exists lhs' <- rebuildLHS lhs
+            -> travA $ Named.OpenAcc $ Named.Alet lhs' arg (weaken (sinkWithLHS lhs lhs' weakenEmpty) a)
+        Named.Abody a                  -> arraysRFunctionImpossible $ Named.arraysR a
+        Named.Alam _ Named.Alam{}      -> arraysRFunctionImpossible repr
       Named.Acond c t f ->
         let
           lhs  = LeftHandSideSingle $ GroundRscalar scalarTypeWord8
