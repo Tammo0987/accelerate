@@ -2299,9 +2299,6 @@ slitOn dim i n = takeOn dim n . dropOn dim i
 -- > (acc1 >-> acc2) arrs = let tmp = acc1 arrs
 -- >                        in  tmp `seq` acc2 tmp
 --
--- For an example use of this operation see the 'Data.Array.Accelerate.compute'
--- function.
---
 infixl 1 >->
 (>->) :: forall a b c. (Arrays a, Arrays b, Arrays c) => (Acc a -> Acc b) -> (Acc b -> Acc c) -> (Acc a -> Acc c)
 acc1 >-> acc2 = acc2 . compute . acc1
