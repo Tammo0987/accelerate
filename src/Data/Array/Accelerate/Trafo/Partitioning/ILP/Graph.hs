@@ -531,6 +531,9 @@ inplace ((b1,c1),(c2,b2)) = var $ InPlace b1 c1 c2 b2
 pimax :: Node GVal -> Expression op
 pimax = var . PiMax
 
+dirToInt :: Direction -> Int
+dirToInt LeftToRight = -2
+dirToInt RightToLeft = -1
 
 
 --------------------------------------------------------------------------------

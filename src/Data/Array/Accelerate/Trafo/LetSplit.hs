@@ -14,7 +14,6 @@
 module Data.Array.Accelerate.Trafo.LetSplit (
 
   convertAfun,
-  convertAcc,
 
 ) where
 
