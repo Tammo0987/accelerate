@@ -104,6 +104,8 @@ import Data.Array.Accelerate.Eval
 import qualified Data.Array.Accelerate.AST.Partitioned as P
 import Data.Functor.Identity
 import Data.Array.Accelerate.Trafo.LiveVars
+import Data.Array.Accelerate.Trafo.Exp.Bounds.ArrayInstr
+import Data.Array.Accelerate.Trafo.Exp.Bounds.Optimize.ArrayInstr
 
 data Interpreter
 instance Backend Interpreter where
@@ -224,7 +226,7 @@ instance DesugarAcc InterpretOp where
   -- we desugar a Scan with seed into a scan1 followed by a map followed by an append
   -- mkScan dir comb (Just (ArgExp seed)) i@(ArgArray In arr@(ArrayR shr tp) sh _) o
   --   | DeclareVars lhsTemp1 wTemp  kTemp1 <- declareVars $ buffersR tp
-  --   , DeclareVars lhsTemp2 wTemp2 kTemp2 <- declareVars $ buffersR tp
+  --   , DeclareVadefaultBCPermuteWithFunrs lhsTemp2 wTemp2 kTemp2 <- declareVars $ buffersR tp
   --   , wTemp1 <- wTemp2 .> wTemp =
   --     aletUnique lhsTemp1 (desugarAlloc arr $ fromGrounds sh) $
   --       aletUnique lhsTemp2 (desugarAlloc arr $ fromGrounds $ weakenVars wTemp sh) $
@@ -291,6 +293,16 @@ instance SLVOperation InterpretOp where
   slvOperation IMap         = defaultSlvMap         IMap
   slvOperation IBackpermute = defaultSlvBackpermute IBackpermute
   slvOperation _            = Nothing
+
+instance BCOperation InterpretOp where
+  bcOperation :: InterpretOp f -> AbstInterpOperation InterpretOp f
+  bcOperation IGenerate        = defaultBCGenerate IGenerate
+  bcOperation IMap             = defaultBCMap IMap
+  bcOperation IBackpermute     = defaultBCBackpermute IBackpermute
+  bcOperation IPermute         = defaultBCPermuteWithFun IPermute
+  bcOperation IPermuteUnique   = defaultBCPermuteUnique IPermuteUnique
+  bcOperation (IFold1 ref)     = defaultBCFold1 (IFold1 ref)
+  bcOperation (IScan1 dir ref) = defaultBCScan1 (IScan1 dir ref)
 
 instance SetOpIndices InterpretOp where
   setOpIndices _ _ _ _ = error "TODO"

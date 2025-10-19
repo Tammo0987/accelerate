@@ -378,6 +378,7 @@ instance IsArrayInstr (ArrayInstr benv) where
     Index (Var (GroundRscalar tp) _) -> bufferImpossible tp
     Parameter (Var tp _)             -> tp
 
+  liftArrayInstr :: ArrayInstr benv t -> CodeQ (ArrayInstr benv t)
   liftArrayInstr (Index var)     = [|| Index $$(liftGroundVar var) ||]
   liftArrayInstr (Parameter var) = [|| Parameter $$(liftExpVar var) ||]
 
@@ -489,7 +490,6 @@ reindexAcc _ (Use st n bu) = pure $ Use st n bu
 reindexAcc r (Unit var) = Unit <$> reindexVar r var
 reindexAcc r (Acond var poa poa') = Acond <$> reindexVar r var <*> reindexAcc r poa <*> reindexAcc r poa'
 reindexAcc r (Awhile tr poa poa' tr') = Awhile tr <$> reindexAfun r poa <*> reindexAfun r poa' <*> reindexVars r tr'
-
 
 reindexAfun :: Applicative f => ReindexPartial f env env' -> PreOpenAfun op env t -> f (PreOpenAfun op env' t)
 reindexAfun r (Abody poa) = Abody <$> reindexAcc r poa

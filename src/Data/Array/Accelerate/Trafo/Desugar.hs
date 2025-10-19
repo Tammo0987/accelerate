@@ -8,7 +8,6 @@
 {-# LANGUAGE TypeApplications     #-}
 {-# LANGUAGE TypeFamilies         #-}
 {-# LANGUAGE TypeOperators        #-}
-{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE CPP #-}
 -- |
 -- Module      : Data.Array.Accelerate.Trafo.Desugar
@@ -448,7 +447,7 @@ desugarOpenAcc env = travA
             argC   = ArgFun . desugarFun env' <$> c
             argIn  = ArgArray In  (ArrayR shr (tag `TupRpair` sht)) sh (getPermuteIdx $ valueSrc kOut)
             argOut = ArgArray Out (ArrayR shr (tag `TupRpair` sht)) sh (valueOut weakenId)
-            argF   = ArgFun $ boundsCheckFMaybe shr' sh' $ Lam lhsFun (Body $ expVars $ valueFun weakenId)
+            argF   = ArgFun $ boundsCheckFMaybe shr' sh' tag $ Lam lhsFun (Body $ expVars $ valueFun weakenId)
           in
             aletUnique lhs' (travA def)
               $ alet lhs    (desugarOpenAcc (weakenBEnv (kDef .> kSh') env) src)
@@ -485,7 +484,7 @@ desugarOpenAcc env = travA
               argC   = ArgFun . desugarFun env' <$> c
               argIn  = ArgArray In  (ArrayR shr (tag `TupRpair` sht)) sh (getPermuteIdx $ valueSrc kOut')
               argOut' = ArgArray Out (ArrayR shr (tag `TupRpair` sht)) sh (valueOut' weakenId)
-              argF   = ArgFun $ boundsCheckFMaybe shr' sh'2 $ Lam lhsFun (Body $ expVars $ valueFun weakenId)
+              argF   = ArgFun $ boundsCheckFMaybe shr' sh'2 tag $ Lam lhsFun (Body $ expVars $ valueFun weakenId)
             in
               alet lhs' (travA def)
                 $ aletUnique lhsOut (desugarAlloc (ArrayR shr' tp) (valueSh' kDef))
@@ -505,7 +504,7 @@ desugarOpenAcc env = travA
         -- execute a kernel.
         | Lam _ (Body body) <- f
         , isUndef body
-        , DeclareVars lhsSh kSh valueSh <- declareVars $ shapeType shr
+        , DeclareVars lhsSh _  valueSh <- declareVars $ shapeType shr
         , DeclareVars lhsBf kBf valueBf <- declareVars $ buffersR tp ->
           alet (mapLeftHandSide GroundRscalar lhsSh) (Compute $ travE sh)
             $ aletUnique lhsBf (desugarAlloc (ArrayR shr tp) (valueSh weakenId))
@@ -733,10 +732,9 @@ desugarOpenAcc env = travA
           let
             shIn   = mapVars GroundRscalar $ valueSh (kOut .> kSh' .> kIn)
             shIn'  = mapVars GroundRscalar $ valueSh kIn
-            shInBC = assertNotEmpty (ShapeRsnoc shr) shIn'
             shIn'' = case def of
               Just _  -> paramsIn (shapeType (ShapeRsnoc shr)) shIn'
-              Nothing -> shInBC
+              Nothing -> assertNotEmpty (ShapeRsnoc shr) shIn'
             shOut' = case valueSh (kSh' .> kIn) of
                       TupRpair sh _ -> sh
                       TupRsingle _  -> error "Impossible pair"
@@ -800,18 +798,19 @@ desugarOpenAcc env = travA
         , DeclareVars lhsSh' kSh' valueSh' <- declareVars $ shapeType shr
         , DeclareVars lhsOut kOut valueOut <- declareVars $ buffersR tp ->
           let
-            sh   = mapVars GroundRscalar $ valueSh' kOut
+            sh   = mapVars GroundRscalar $ valueSh $ kOut .> kSh' .> kIn
             sh'  = mapVars GroundRscalar $ valueSh kIn
+            sh''   = mapVars GroundRscalar $ valueSh' kOut
             k = kOut .> kSh' .> kIn .> kSh
             argF = ArgFun $ desugarFun (weakenBEnv k env) f
             argIn  = ArgArray In (ArrayR shr tp) sh (valueIn $ kOut .> kSh')
             argOut = ArgArray Out (ArrayR shr tp) sh (valueOut weakenId)
           in
-            alet (LeftHandSidePair (mapLeftHandSide GroundRscalar lhsSh) lhsIn) (travA a) -- kSh -- kIn
-              $ alet (mapLeftHandSide GroundRscalar lhsSh') (Compute (assertNotEmpty shr sh')) -- kSh'
-              $ aletUnique lhsOut (desugarAlloc (ArrayR shr tp) $ valueSh' weakenId) -- kOut
+            alet (LeftHandSidePair (mapLeftHandSide GroundRscalar lhsSh) lhsIn) (travA a)
+              $ alet (mapLeftHandSide GroundRscalar lhsSh') (Compute (assertNotEmpty shr sh'))
+              $ aletUnique lhsOut (desugarAlloc (ArrayR shr tp) $ valueSh' weakenId)
               $ alet (LeftHandSideWildcard TupRunit) (mkScan dir argF Nothing argIn argOut)
-              $ Return (sh `TupRpair` valueOut weakenId)
+              $ Return (sh'' `TupRpair` valueOut weakenId)
 
       Named.Scan dir f (Just def) a
         | ArrayR shr tp <- Named.arrayR a
@@ -841,7 +840,7 @@ desugarOpenAcc env = travA
           in
             alet (LeftHandSidePair (mapLeftHandSide GroundRscalar lhsShIn) lhsIn) (travA a)
               $ alet (mapLeftHandSide GroundRscalar lhsShOut) (Compute $ mkBinary (PrimAdd numType) (ArrayInstr (Parameter shIn1) Nil) (mkConstant (TupRsingle scalarTypeInt) 1))
-              $ aletUnique lhsOut (desugarAlloc (ArrayR shr tp) $ shOut')
+              $ aletUnique lhsOut (desugarAlloc (ArrayR shr tp) shOut')
               $ alet (LeftHandSideWildcard TupRunit) (mkScan dir argF argDef argIn argOut)
               $ Return (shOut `TupRpair` valueOut weakenId)
 
@@ -970,8 +969,8 @@ data PrimMaybeDeclareVars s sh a aenv where
 desugarAlloc :: forall benv op sh a. ArrayR (Array sh a) -> ExpVars benv sh -> OperationAcc op benv (Buffers a)
 desugarAlloc (ArrayR _   TupRunit        ) _  = Return TupRunit
 desugarAlloc (ArrayR shr (TupRpair t1 t2)) sh = desugarAlloc (ArrayR shr t1) sh `pairUnique` desugarAlloc (ArrayR shr t2) sh
-desugarAlloc (ArrayR shr (TupRsingle tp) ) sh
-  | Refl <- reprIsSingle @ScalarType @a @Buffer tp = Alloc shr tp sh
+desugarAlloc (ArrayR shr (TupRsingle tp) ) sh 
+  | Refl <- reprIsSingle @ScalarType @a @Buffer tp = boundsCheckAlloc shr tp sh
 
 desugarBoundary :: HasCallStack
                 => BEnv benv aenv
@@ -1031,8 +1030,12 @@ desugarArrayInstr env (Named.LinearIndex (Var (ArrayR shr tp) array)) ix
     ArrayDescriptor _ sh buffers = prj' array env
     int = SingleScalarType $ NumSingleType $ IntegralNumType TypeInt
     lhs = LeftHandSideSingle int
+    v   = Var int ZeroIdx
   in
-    Let lhs (addBCAssertionLinear shr sh ix) $ linearIndex tp buffers $ Var int ZeroIdx
+    case addBCAssertionLinear shr sh v of
+      (Just (Assert g _)) -> Let lhs ix $ Assert g $ linearIndex tp buffers v
+      Nothing             -> Let lhs ix $ linearIndex tp buffers v
+      _                   -> error "expected assert"
 desugarArrayInstr env (Named.Index (Var (ArrayR shr tp) array)) ix
   =
   let
@@ -1040,8 +1043,12 @@ desugarArrayInstr env (Named.Index (Var (ArrayR shr tp) array)) ix
     sh' = paramsIn (shapeType shr) sh
     int = SingleScalarType $ NumSingleType $ IntegralNumType TypeInt
     lhs = LeftHandSideSingle int
+    v   = Var int ZeroIdx
   in
-    Let lhs (ToIndex shr sh' (addBCAssertion shr sh ix)) $ linearIndex tp buffers $ Var int ZeroIdx
+    case addBCAssertionLinear shr sh v of
+      (Just (Assert g _)) -> Let lhs (ToIndex shr sh' ix) $ Assert g $ linearIndex tp buffers v
+      Nothing             -> Let lhs (ToIndex shr sh' ix) $ linearIndex tp buffers v
+      _                   -> error "expected assert"
 
 weakenBEnv :: forall benv benv' aenv. benv :> benv' -> BEnv benv aenv -> BEnv benv' aenv
 weakenBEnv k = mapEnv f
@@ -1613,35 +1620,24 @@ removeScalarsInTermInv' _ _ _ = internalError "Tuple mismatch"
 
 #if 1
 
-addBCAssertion :: ShapeR sh -> TupR (Var GroundR benv) sh -> PreOpenExp (ArrayInstr benv) env sh -> PreOpenExp (ArrayInstr benv) env sh
-addBCAssertion shr sh (Let l r e) =  Let l r $ addBCAssertion shr sh e
-addBCAssertion shr sh (Pair t1 t2)
-  | DeclareVars l' _ v' <- declareVars (shapeType shr)
-  =
-    let vars = expVars (v' weakenId)
-    in Let l' (Pair t1 t2) (Assert (inBoundsPred shr sh vars) vars)
-addBCAssertion _ _ Nil = Nil
-addBCAssertion _ _ _ = error "Unexpected case in bounds checking"
+addBCAssertion :: ShapeR sh -> TupR (Var GroundR benv) sh -> ExpVars env sh -> Maybe (PreOpenExp (ArrayInstr benv) env sh)
+addBCAssertion shr sh e
+  = Just $ Assert (inBoundsPred shr sh (expVars e)) (expVars e)
 
-addBCAssertionLinear :: ShapeR sh -> TupR (Var GroundR benv) sh -> PreOpenExp (ArrayInstr benv) env Int -> PreOpenExp (ArrayInstr benv) env Int
-addBCAssertionLinear shr sh (Let l r e) = Let l r $ addBCAssertionLinear shr sh e
+addBCAssertionLinear :: ShapeR sh -> TupR (Var GroundR benv) sh -> ExpVar env Int -> Maybe (PreOpenExp (ArrayInstr benv) env Int)
 addBCAssertionLinear shr sh e
-  =
-    let
-      int = SingleScalarType $ NumSingleType $ IntegralNumType TypeInt
-      var = Evar (Var int ZeroIdx)
-      lhs = LeftHandSideSingle int
-    in
-      Let lhs e (Assert (inBoundsPredLinear shr sh var) var)
+  = Just $ Assert (inBoundsPredLinear shr sh (Evar e)) (Evar e)
 
-addBCAssertionMaybe :: ShapeR sh -> TupR (Var GroundR benv) sh -> PreOpenExp (ArrayInstr benv) env (TAG,sh) -> PreOpenExp (ArrayInstr benv) env (TAG,sh)
-addBCAssertionMaybe shr sh (Let l r e) =  Let l r $ addBCAssertionMaybe shr sh e
-addBCAssertionMaybe shr sh (tag `Pair` val) = 
-  Assert (
-    mkBinary (PrimBOr integralType)
-    (mkBinary (PrimEq singleType) tag (Const scalarTypeWord8 0))
-    (inBoundsPred shr sh val)
-    ) (tag `Pair` val)
+addBCAssertionMaybe :: ShapeR sh -> TupR (Var GroundR benv) sh -> ExpVars env (TAG,sh) -> PreOpenExp (ArrayInstr benv) env (TAG,sh)
+addBCAssertionMaybe shr sh (TupRpair tag val) =
+  let tag' = expVars tag
+      val' = expVars val
+  in
+    Assert (
+      mkBinary PrimLOr
+      (inBoundsPred shr sh val')
+      (mkBinary (PrimEq singleType) tag' (Const scalarTypeWord8 0))
+      ) (tag' `Pair` val')
 addBCAssertionMaybe _ _ _ = error "Unexpected case in bounds checking"
 
 assertNotEmpty :: ShapeR sh -> GroundVars benv sh -> OpenExp env benv sh
@@ -1650,22 +1646,34 @@ assertNotEmpty shr sh = Assert (notEmptyPred shr sh) (paramsIn (shapeType shr) s
 notEmptyPred :: ShapeR sh -> GroundVars benv sh -> OpenExp env benv PrimBool
 notEmptyPred (ShapeRsnoc ShapeRz) (TupRpair TupRunit (TupRsingle sh)) = mkBinary (PrimGt singleType) (paramIn scalarTypeInt sh) (Const scalarTypeInt 0)
 notEmptyPred (ShapeRsnoc shr') (TupRpair sh' (TupRsingle sh)) =
-  mkBinary (PrimBAnd integralType)
+  mkBinary PrimLAnd
   (mkBinary (PrimGt singleType) (paramIn scalarTypeInt sh) (Const scalarTypeInt 0))
   (notEmptyPred shr' sh')
 notEmptyPred _ _ = error "Error building bounds checks"
 
 boundsCheckF :: ShapeR sh -> GroundVars env sh -> Fun env (sh' -> sh) -> Fun env (sh' -> sh)
-boundsCheckF shr sh (Lam lhs (Body e)) = Lam lhs $ Body $ addBCAssertion shr sh e
+boundsCheckF shr sh (Lam lhs (Body e))
+  | DeclareVars l _ v <- declareVars $ shapeType shr
+  = let v' = v weakenId in
+    case addBCAssertion shr sh v' of
+      (Just (Assert g _)) ->  Lam lhs $ Body $ Let l e $ Assert g $ expVars v'
+      _                   -> error "unexpected case"
 boundsCheckF _ _ _ = error "Error building bounds checks"
 
 boundsCheckF' :: ShapeR sh -> GroundVars env sh -> Fun env (sh' -> PrimMaybe sh)-> Fun env (sh' -> PrimMaybe sh)
-boundsCheckF' shr sh (Lam lhs (Body (Pair tag (Let l r (Pair unit e))))) = Lam lhs $ Body $ Pair tag $ Let l r $ Pair unit (addBCAssertion shr sh e)
+boundsCheckF' shr sh (Lam lhs (Body (Pair tag (Let l r (Pair unit e))))) 
+  | DeclareVars l' _ v <- declareVars $ shapeType shr
+  = let v' = v weakenId in
+    case addBCAssertion shr sh v' of
+      (Just (Assert g _)) -> Lam lhs $ Body $ Pair tag $ Let l r $ Pair unit (Let l' e $ Assert g (expVars v'))
+      _                   -> error "unexpected case"
 boundsCheckF' _ _ _ = error "Error building bounds checks"
 
-boundsCheckFMaybe :: ShapeR sh -> GroundVars env sh -> Fun env ((TAG,sh') -> (TAG,sh)) -> Fun env ((TAG,sh') -> (TAG,sh))
-boundsCheckFMaybe shr sh (Lam lhs (Body e)) = Lam lhs $ Body $ addBCAssertionMaybe shr sh e
-boundsCheckFMaybe _ _ _ = error "Error building bounds checks"
+boundsCheckFMaybe :: ShapeR sh -> GroundVars env sh -> TupR ScalarType TAG -> Fun env ((TAG,sh') -> (TAG,sh)) -> Fun env ((TAG,sh') -> (TAG,sh))
+boundsCheckFMaybe shr sh tag (Lam lhs (Body e)) 
+  | DeclareVars l _ v <- declareVars $ (tag `TupRpair` shapeType shr)
+  = Lam lhs $ Body $ Let l e $ addBCAssertionMaybe shr sh (v weakenId)
+boundsCheckFMaybe _ _ _ _ = error "Error building bounds checks"
 
 inBoundsPredLinear :: ShapeR sh -> GroundVars benv sh -> OpenExp env benv Int -> OpenExp env benv PrimBool
 inBoundsPredLinear shr sh expr =
@@ -1674,38 +1682,72 @@ inBoundsPredLinear shr sh expr =
     upperBound = ShapeSize shr sh'
     lowerBound = Const scalarTypeInt 0
   in
-    mkBinary (PrimBAnd integralType)
+    mkBinary PrimLAnd
       (mkBinary (PrimGtEq singleType) expr lowerBound)
       (mkBinary (PrimLt singleType) expr upperBound)
 
 inBoundsPred :: ShapeR sh -> GroundVars benv sh -> OpenExp env benv sh -> OpenExp env benv PrimBool
-inBoundsPred (ShapeRsnoc _) (TupRpair TupRunit (TupRsingle sh)) (Pair Nil ix) =
-  mkBinary (PrimBAnd integralType)
+inBoundsPred (ShapeRsnoc ShapeRz) (TupRpair TupRunit (TupRsingle sh)) (Pair Nil ix) =
+  mkBinary PrimLAnd
   (mkBinary (PrimGtEq singleType) ix (Const scalarTypeInt 0))
   (mkBinary (PrimLt singleType) ix (paramIn scalarTypeInt sh))
-inBoundsPred (ShapeRsnoc shr') (TupRpair t1 (TupRsingle t2)) (Pair slix' ix) =
-  mkBinary (PrimBAnd integralType) (
-  mkBinary (PrimBAnd integralType)
+inBoundsPred (ShapeRsnoc shr') (TupRpair t1 (TupRsingle t2)) (Pair ix' ix) =
+  mkBinary PrimLAnd (
+  mkBinary PrimLAnd
     (mkBinary (PrimGtEq singleType) ix (Const scalarTypeInt 0))
     (mkBinary (PrimLt singleType) ix (paramIn scalarTypeInt t2))
-  ) $ inBoundsPred shr' t1 slix'
+  ) $ inBoundsPred shr' t1 ix'
 inBoundsPred _ _ _ = error "Error building bounds checks"
 
+boundsCheckAlloc
+  :: forall benv op sh a.
+     ShapeR sh
+  -> ScalarType a
+  -> ExpVars benv sh
+  -> OperationAcc op benv (Buffers a)
+boundsCheckAlloc shr tp sh =
+  case reprIsSingle @ScalarType @a @Buffer tp of
+    Refl ->
+      case declareVars (mapTupR varType sh) of
+        DeclareVars lhs _ val ->
+          Alet
+            (mapLeftHandSide GroundRscalar lhs)
+            (shared sh)
+            (Compute $ checkPositive shr sh)
+            (Alloc shr tp (val weakenId))
+
+checkPositive :: ShapeR sh -> ExpVars benv sh -> PreOpenExp (ArrayInstr benv) () sh
+checkPositive ShapeRz _ = Nil
+checkPositive (ShapeRsnoc ShapeRz) (TupRpair TupRunit (TupRsingle v)) = 
+  Pair Nil (Assert (mkBinary (PrimGtEq singleType) (ArrayInstr (Parameter v) Nil) (Const scalarTypeInt 0)) (ArrayInstr (Parameter v) Nil))
+checkPositive (ShapeRsnoc shr') (TupRpair v' (TupRsingle v)) = 
+  Pair (checkPositive shr' v') (Assert (mkBinary (PrimGtEq singleType) (ArrayInstr (Parameter v) Nil) (Const scalarTypeInt 0)) (ArrayInstr (Parameter v) Nil))
+checkPositive shr _ = error ("error building bounds checks " ++ show (countR shr))
+
+countR :: ShapeR sh -> Int
+countR ShapeRz = 0
+countR (ShapeRsnoc sh') = 1 + countR sh'
+
 #else
-addBCAssertion :: ShapeR sh -> TupR (Var GroundR benv) sh -> PreOpenExp (ArrayInstr benv) env sh -> PreOpenExp (ArrayInstr benv) env sh
-addBCAssertion _ _ e = e
-addBCAssertionLinear :: ShapeR sh -> TupR (Var GroundR benv) sh -> PreOpenExp (ArrayInstr benv) env Int -> PreOpenExp (ArrayInstr benv) env Int
-addBCAssertionLinear _ _ e = e
+addBCAssertion :: ShapeR sh -> TupR (Var GroundR benv) sh -> ExpVars env sh -> Maybe (PreOpenExp (ArrayInstr benv) env sh)
+addBCAssertion _ _ _ = Nothing
+addBCAssertionLinear :: ShapeR sh -> TupR (Var GroundR benv) sh -> ExpVar env Int -> Maybe (PreOpenExp (ArrayInstr benv) env Int)
+addBCAssertionLinear _ _ _ = Nothing
 addBCAssertionMaybe :: ShapeR sh -> TupR (Var GroundR benv) sh -> PreOpenExp (ArrayInstr benv) env (TAG,sh) -> PreOpenExp (ArrayInstr benv) env (TAG,sh)
-addBCAssertionMaybe _ _ e = e
+addBCAssertionMaybe _ _ = id
 assertNotEmpty :: ShapeR sh -> GroundVars benv sh -> OpenExp env benv sh
-assertNotEmpty shr sh = paramsIn (shapeType shr) sh
+assertNotEmpty shr = paramsIn (shapeType shr)
 boundsCheckF :: ShapeR sh -> GroundVars env sh -> Fun env (sh' -> sh) -> Fun env (sh' -> sh)
-boundsCheckF _ _ f = f
+boundsCheckF _ _ = id
 boundsCheckF' :: ShapeR sh -> GroundVars env sh -> Fun env (sh' -> PrimMaybe sh)-> Fun env (sh' -> PrimMaybe sh)
-boundsCheckF' _ _ f = f
-boundsCheckFMaybe :: ShapeR sh -> GroundVars env sh -> Fun env ((TAG,sh') -> (TAG,sh)) -> Fun env ((TAG,sh') -> (TAG,sh))
-boundsCheckFMaybe _ _ f = f
+boundsCheckF' _ _ = id
+boundsCheckFMaybe :: ShapeR sh -> GroundVars env sh -> TupR ScalarType TAG -> Fun env ((TAG,sh') -> (TAG,sh)) -> Fun env ((TAG,sh') -> (TAG,sh))
+boundsCheckFMaybe _ _ _ = id
+optimizeDesugarBounds :: PreOpenAcc op () a -> PreOpenAcc op () a
+optimizeDesugarBounds = id
+boundsCheckAlloc ::forall sh a benv op . ShapeR sh -> ScalarType a -> ExpVars benv sh -> OperationAcc op benv (Buffers a)
+boundsCheckAlloc shr tp sh
+  | Refl <- reprIsSingle @ScalarType @a @Buffer tp = Alloc shr tp sh
 #endif
 
 getPermuteIdx :: GroundVars benv (tag,((),(sh,a))) -> GroundVars benv (tag,sh)

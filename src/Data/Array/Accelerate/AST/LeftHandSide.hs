@@ -7,6 +7,8 @@
 {-# LANGUAGE TemplateHaskell       #-}
 {-# LANGUAGE TypeOperators         #-}
 {-# OPTIONS_HADDOCK hide #-}
+{-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE InstanceSigs #-}
 -- |
 -- Module      : Data.Array.Accelerate.AST.LeftHandSide
 -- Copyright   : [2008..2020] The Accelerate Team
@@ -33,6 +35,10 @@ import Data.Typeable
 
 data Exists f where
   Exists :: !(f a) -> Exists f
+
+instance (forall a . Show (f a)) => Show (Exists f) where
+  show :: (forall a. Show (f a)) => Exists f -> String
+  show (Exists e) = show e
 
 data LeftHandSide s v env env' where
   LeftHandSideSingle

@@ -76,7 +76,7 @@ import qualified Data.Array.Accelerate.AST.Operation as Operation
 import qualified Data.Array.Accelerate.Trafo.Partitioning.ILP.Graph as Graph
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Solve (Objective)
 import Data.Array.Accelerate.Trafo.Partitioning.ILP (Benchmarking)
-
+import Data.Array.Accelerate.Trafo.Exp.Bounds.ArrayInstr
 
 class
   ( Desugar.DesugarAcc (Operation backend)
@@ -93,6 +93,7 @@ class
   , Operation.NFData' (Graph.BackendClusterArg (KernelOperation (Kernel backend)))
   , Operation.ShrinkArg (Partitioning.BackendClusterArg (KernelOperation (Kernel backend)))
   , Operation.EncodeOperation (Operation backend)
+  , BCOperation (Operation backend)
   ) => Backend backend where
 
   type Schedule backend :: (Type -> Type) -> Type -> Type -> Type

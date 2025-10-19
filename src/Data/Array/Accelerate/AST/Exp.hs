@@ -189,6 +189,10 @@ data PreOpenExp arr env t where
                 -> PreOpenExp arr env t
                 -> PreOpenExp arr env t
 
+  Assume        :: PreOpenExp arr env PrimBool
+                -> PreOpenExp arr env t
+                -> PreOpenExp arr env t
+
   -- Value recursion
   While         :: PreOpenFun arr env (a -> PrimBool) -- continue while true
                 -> PreOpenFun arr env (a -> a)        -- function to iterate
@@ -402,6 +406,7 @@ expType = \case
   Undef tR                     -> TupRsingle tR
   Coerce _ tR _                -> TupRsingle tR
   Assert _ e2                  -> expType e2
+  Assume _ e2                  -> expType e2
 
 primConstType :: PrimConst a -> SingleType a
 primConstType = \case
@@ -548,6 +553,7 @@ rnfOpenExp topExp =
     ShapeSize shr sh          -> rnfShapeR shr `seq` rnfE sh
     Coerce t1 t2 e            -> rnfScalarType t1 `seq` rnfScalarType t2 `seq` rnfE e
     Assert e1 e2              -> rnfE e1 `seq` rnfE e2
+    Assume e1 e2              -> rnfE e1 `seq` rnfE e2
 
 rnfExpVar :: ExpVar env t -> ()
 rnfExpVar = rnfVar rnfScalarType
@@ -684,6 +690,7 @@ liftOpenExp pexp =
     ShapeSize shr ix          -> [|| ShapeSize $$(liftShapeR shr) $$(liftE ix) ||]
     Coerce t1 t2 e            -> [|| Coerce $$(liftScalarType t1) $$(liftScalarType t2) $$(liftE e) ||]
     Assert e1 e2              -> [|| Assert $$(liftE e1) $$(liftE e2) ||]
+    Assume e1 e2              -> [|| Assume $$(liftE e1) $$(liftE e2) ||]
 
 liftPrimConst :: PrimConst c -> CodeQ (PrimConst c)
 liftPrimConst (PrimMinBound t) = [|| PrimMinBound $$(liftBoundedType t) ||]
@@ -808,6 +815,7 @@ formatExpOp = later $ \case
   ShapeSize{}     -> "ShapeSize"
   Coerce{}        -> "Coerce"
   Assert{}        -> "Assert"
+  Assume{}        -> "Assume"
 
 expIsTrivial :: forall arr env t. (forall s. arr s -> Bool) -> PreOpenExp arr env t -> Bool
 expIsTrivial arrayInstr = \case

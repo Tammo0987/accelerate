@@ -67,6 +67,6 @@ sizeOfVectorType :: VectorType t -> Int
 sizeOfVectorType (VectorType n t) = n * sizeOfSingleType t
 
 sizeOfNumType :: forall t. NumType t -> Int
-sizeOfNumType (IntegralNumType t) | IntegralDict <- integralDict t = F.sizeOf (undefined::t)
+sizeOfNumType (IntegralNumType t) | IntegralDiFct <- integralDict t = F.sizeOf (undefined::t)
 sizeOfNumType (FloatingNumType t) | FloatingDict <- floatingDict t = F.sizeOf (undefined::t)
 

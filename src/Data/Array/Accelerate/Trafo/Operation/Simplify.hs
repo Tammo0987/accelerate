@@ -255,6 +255,7 @@ simplify' uniquenesses = \case
             awhileSimplifyInvariant us (cond' env') (step' env') $ simplifyReturnVars env us initial
       )
 
+
 variableIndices :: Uniquenesses t -> GroundVars env t -> IdxSet env
 variableIndices (TupRsingle Unique) (TupRsingle var) = IdxSet.singleton $ varIdx var
 variableIndices (TupRpair u1 u2) (TupRpair v1 v2) = variableIndices u1 v1 `IdxSet.union` variableIndices u2 v2
