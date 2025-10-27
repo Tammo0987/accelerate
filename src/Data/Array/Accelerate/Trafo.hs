@@ -19,9 +19,6 @@
 module Data.Array.Accelerate.Trafo (
 
   -- * HOAS -> de Bruijn conversion
-  -- ** Array computations
-  convertAcc, convertAccWith,
-
   -- ** Array functions
   Afunction, ArraysFunctionR,
   convertAfun, convertAfunWith,
@@ -33,7 +30,7 @@ module Data.Array.Accelerate.Trafo (
   Function, EltFunctionR,
   convertExp, convertFun,
 
-  test, testWithObjective, testBench, convertAccWithObj, convertAfunWithObj, convertAccBench, convertAfunBench,
+  test, testWithObjective, testBench, convertAfunWithObj,
 ) where
 
 import Data.Array.Accelerate.Sugar.Array                  ( ArraysR )
@@ -53,6 +50,12 @@ import qualified Data.Array.Accelerate.Trafo.Sharing      as Sharing
 import qualified Data.Array.Accelerate.Trafo.Operation.LiveVars as Operation
 import qualified Data.Array.Accelerate.Trafo.Operation.Simplify as Operation
 -- import qualified Data.Array.Accelerate.Trafo.Vectorise    as Vectorise
+
+#ifdef ACCELERATE_DEBUG
+import Data.Array.Accelerate.Debug.Internal
+import Formatting
+import System.IO.Unsafe (unsafePerformIO)
+#endif
 
 import Control.DeepSeq
 import qualified Data.Array.Accelerate.Trafo.Partitioning.ILP.Graph as Partitioning
@@ -111,52 +114,12 @@ testBench bench = snd . convertAfunFullOptions @sched @kernel defaultOptions (Be
 -- HOAS -> de Bruijn conversion
 -- ----------------------------
 
--- | Convert a closed array expression to de Bruijn form while also
---   incorporating sharing observation and array fusion.
---
-convertAcc
-  :: forall sched kernel arrs.
-     (DesugarAcc (KernelOperation kernel), BCOperation (KernelOperation kernel), Operation.SLVOperation (KernelOperation kernel), Operation.SimplifyOperation (KernelOperation kernel), Partitioning.MakesILP (KernelOperation kernel), Partitioned.SetOpIndices (KernelOperation kernel), Pretty.PrettyOp (KernelOperation kernel), IsSchedule sched, IsKernel kernel, Operation.NFData' (Graph.BackendClusterArg (KernelOperation kernel)),  Operation.ShrinkArg (Partitioning.BackendClusterArg (KernelOperation kernel)), Pretty.PrettySchedule sched, Pretty.PrettyKernel kernel)
-  => Acc arrs
-  -> sched kernel () (ScheduleOutput sched (DesugaredArrays (ArraysR arrs)) -> ())
-convertAcc = convertAccWith defaultOptions
-
-convertAccWith
-  :: forall sched kernel arrs.
-     (DesugarAcc (KernelOperation kernel), BCOperation (KernelOperation kernel), Operation.SLVOperation (KernelOperation kernel), Operation.SimplifyOperation (KernelOperation kernel), Partitioning.MakesILP (KernelOperation kernel), Partitioned.SetOpIndices (KernelOperation kernel), Pretty.PrettyOp (KernelOperation kernel), IsSchedule sched, IsKernel kernel, Operation.NFData' (Graph.BackendClusterArg (KernelOperation kernel)),  Operation.ShrinkArg (Partitioning.BackendClusterArg (KernelOperation kernel)), Pretty.PrettySchedule sched, Pretty.PrettyKernel kernel)
-  => Config
-  -> Acc arrs
-  -> sched kernel () (ScheduleOutput sched (DesugaredArrays (ArraysR arrs)) -> ())
-convertAccWith config = fst . convertAccFullOptions config defaultObjective (const ())
-
-convertAccBench
-  :: forall sched kernel arrs.
-     (Pretty.PrettySchedule sched, Pretty.PrettyKernel kernel, DesugarAcc (KernelOperation kernel), BCOperation (KernelOperation kernel), Operation.SLVOperation (KernelOperation kernel), Operation.SimplifyOperation (KernelOperation kernel), Partitioning.MakesILP (KernelOperation kernel), Partitioned.SetOpIndices (KernelOperation kernel), Pretty.PrettyOp (KernelOperation kernel), IsSchedule sched, IsKernel kernel, Operation.NFData' (Graph.BackendClusterArg (KernelOperation kernel)),  Operation.ShrinkArg (Partitioning.BackendClusterArg (KernelOperation kernel)))
-  => NewNewFusion.Benchmarking
-  -> Acc arrs
-  -> sched kernel () (ScheduleOutput sched (DesugaredArrays (ArraysR arrs)) -> ())
-convertAccBench b = fst . convertAccFullOptions defaultOptions (Benchmarking b) (const ())
-
-convertAfunBench
-  :: forall sched kernel f.
-     (Pretty.PrettySchedule sched, Pretty.PrettyKernel kernel, Afunction f, DesugarAcc (KernelOperation kernel), BCOperation (KernelOperation kernel), Operation.SLVOperation (KernelOperation kernel), Operation.SimplifyOperation (KernelOperation kernel), Partitioning.MakesILP (KernelOperation kernel), Partitioned.SetOpIndices (KernelOperation kernel), Pretty.PrettyOp (KernelOperation kernel), IsSchedule sched, IsKernel kernel, Operation.NFData' (Graph.BackendClusterArg (KernelOperation kernel)),  Operation.ShrinkArg (Partitioning.BackendClusterArg (KernelOperation kernel)))
-  => NewNewFusion.Benchmarking
-  -> f
-  -> sched kernel () (Scheduled sched (DesugaredAfun (ArraysFunctionR f)))
-convertAfunBench b = fst . convertAfunFullOptions defaultOptions (Benchmarking b) (const ())
-
-
-convertAccWithObj
-  :: forall sched kernel arrs.
-     (DesugarAcc (KernelOperation kernel), BCOperation (KernelOperation kernel), Operation.SLVOperation (KernelOperation kernel), Operation.SimplifyOperation (KernelOperation kernel), Partitioning.MakesILP (KernelOperation kernel), Partitioned.SetOpIndices (KernelOperation kernel), Pretty.PrettyOp (KernelOperation kernel), IsSchedule sched, IsKernel kernel, Operation.NFData' (Graph.BackendClusterArg (KernelOperation kernel)),  Operation.ShrinkArg (Partitioning.BackendClusterArg (KernelOperation kernel)), Pretty.PrettySchedule sched, Pretty.PrettyKernel kernel)
-  => Objective
-  -> Acc arrs
-  -> sched kernel () (ScheduleOutput sched (DesugaredArrays (ArraysR arrs)) -> ())
-convertAccWithObj obj = fst . convertAccFullOptions defaultOptions (Fusion obj) (const ())
-
-
--- | Convert a unary function over array computations, incorporating sharing
+-- | Convert an Acc function over array computations, incorporating sharing
 --   observation and array fusion
+--
+-- Note that we previously had a transformations for Acc and Afunction
+-- separately. Instead, we now always run the transformation via Afunction, as
+-- an Acc is also a Afunction (without arguments).
 --
 convertAfun
   :: forall sched kernel f.
@@ -181,25 +144,6 @@ convertAfunWithObj
   -> sched kernel () (Scheduled sched (DesugaredAfun (ArraysFunctionR f)))
 convertAfunWithObj obj = fst . convertAfunFullOptions defaultOptions (Fusion obj) (const ())
 
-
-convertAccFullOptions
-  :: forall sched kernel arrs m.
-     (Monoid m, DesugarAcc (KernelOperation kernel), BCOperation (KernelOperation kernel),  Operation.SLVOperation (KernelOperation kernel), Operation.SimplifyOperation (KernelOperation kernel), Partitioning.MakesILP (KernelOperation kernel), Partitioned.SetOpIndices (KernelOperation kernel), Pretty.PrettyOp (KernelOperation kernel), IsSchedule sched, IsKernel kernel, Operation.NFData' (Graph.BackendClusterArg (KernelOperation kernel)),  Operation.ShrinkArg (Partitioning.BackendClusterArg (KernelOperation kernel)), Pretty.PrettySchedule sched, Pretty.PrettyKernel kernel)
-  => Config -> FusionType -> (Pretty.Adoc -> m)
-  -> Acc arrs -> (sched kernel () (ScheduleOutput sched (DesugaredArrays (ArraysR arrs)) -> ()), m)
-convertAccFullOptions config ft pprint acc = runWriter $
-  (   phase'' "sharing-recovery"    (Sharing.convertAccWith config)                              (Pretty.prettyPreOpenAcc configPlain context0 prettyOpenAcc AST.runOpenAcc Empty . AST.runOpenAcc)
-  >=> phase'' "array-split-lets"    LetSplit.convertAcc                                          (Pretty.prettyPreOpenAcc configPlain context0 prettyOpenAcc AST.runOpenAcc Empty . AST.runOpenAcc)
-  >=> phase'' "desugar"             (Operation.simplify . desugar)                                Pretty.prettyAcc
-  >=> phase'' "operation-bounds"    (Operation.simplify . optimizeBounds)                         Pretty.prettyAcc
-  >=> phase'' "operation-live-vars" (Operation.simplify . Operation.stronglyLiveVariables)        Pretty.prettyAcc
-  >=> phase'' "array-fusion"        (Operation.simplify . NewNewFusion.convertAccWith config ft)  Pretty.prettyAcc
-  >=> phase'' "partition-live-vars" (Operation.simplify . Operation.stronglyLiveVariables)        Pretty.prettyAcc
-  >=> (\x -> let y = phase' "codegen" rnfSchedule convertSchedule x in writer (y, pprint $ vsep ["CODEGEN", Pretty.prettySchedule y]))
-  ) acc
-  where
-    phase'' :: NFData b => String -> (a -> b) -> (b -> Pretty.Adoc) -> a -> Writer m b
-    phase'' name f pp a = let b = phase name f a in writer (b, pprint $ Pretty.vsep [fromString $ map toUpper name, pp b, mempty, mempty])
 
 convertAfunFullOptions
   :: forall sched kernel f m.

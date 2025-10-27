@@ -58,7 +58,7 @@ import qualified Data.Array.Accelerate.AST.Partitioned as C
 import Data.Maybe
 import Prelude hiding (id, (.), read)
 import Control.Category
-import Control.DeepSeq
+import Control.DeepSeq hiding (Unit(..))
 import Control.Concurrent
 import Data.IORef
 import System.IO.Unsafe (unsafePerformIO)
@@ -398,9 +398,9 @@ transformWhile fenv us (Plam lhs (Pbody step)) groundInitial (CtxNormal finalDes
       (TupRpair (mapTupR (weaken $ skipWeakenIdx skip2) initial1) (initial2 SkipNone))
       buildReturn
   where
-    expectPair :: TupR s (t1, t2) -> (TupR s t1, TupR s t2)
+    expectPair :: Distributes s => TupR s (t1, t2) -> (TupR s t1, TupR s t2)
     expectPair (TupRpair t1 t2) = (t1, t2)
-    expectPair _ = internalError "Pair impossible"
+    expectPair (TupRsingle t) = pairImpossible t
 transformWhile _ _ _ _ _ = internalError "Function impossible"
 
 writeOutput

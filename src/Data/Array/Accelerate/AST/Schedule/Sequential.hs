@@ -162,6 +162,7 @@ convertSchedule' :: forall kernel env t. IsKernel kernel => Partition.Partitione
 convertSchedule' (Operation.Exec op args)
   | CompiledKernel kernel args' <- compileKernel' @env @kernel op args = Exec (kernelMetadata kernel) kernel args'
 convertSchedule' (Operation.Return vars) = Return vars
+convertSchedule' (Operation.Manifest var) = Return $ TupRsingle var
 convertSchedule' (Operation.Compute expr) = Compute expr
 convertSchedule' (Operation.Alet lhs us bnd expr) = Alet lhs us (convertSchedule' bnd) (convertSchedule' expr)
 convertSchedule' (Operation.Alloc shr tp sh) = Alloc shr tp sh

@@ -78,8 +78,8 @@ module Data.Array.Accelerate.Language (
   foreignAcc,
   foreignExp,
 
-  -- * Pipelining
-  (>->),
+  -- * Controlling execution
+  compute,
 
   -- * Index construction and destruction
   indexHead, indexTail, toIndex, fromIndex,
@@ -1136,24 +1136,44 @@ foreignExp
 foreignExp asm f (Exp x) = mkExp $ Foreign (eltR @y) asm (unExpFunction f) x
 
 
--- Composition of array computations
--- ---------------------------------
+-- Controlling execution
+-- ---------------------
 
--- | Pipelining of two array computations. The first argument will be fully
--- evaluated before being passed to the second computation. This can be used to
--- prevent the argument being fused into the function, for example.
+-- | Force an array expression to be evaluated, preventing it from fusing with
+-- other operations. Forcing operations to be computed to memory, rather than
+-- being fused into their consuming function, can sometimes improve performance.
+-- For example, computing a matrix 'transpose' could provide better memory
+-- locality for the subsequent operation. Preventing fusion to split large
+-- operations into several simpler steps could also help by reducing register
+-- pressure.
 --
--- Denotationally, we have
+-- Preventing fusion also means that the individual operations are available to
+-- be executed concurrently with other kernels. In particular, consider using
+-- this if you have a series of operations that are compute bound rather than
+-- memory bound.
 --
--- > (acc1 >-> acc2) arrs = let tmp = acc1 arrs
--- >                        in  tmp `seq` acc2 tmp
+-- Here is the synthetic example:
 --
--- For an example use of this operation see the 'Data.Array.Accelerate.compute'
--- function.
+-- > loop :: Exp Int -> Exp Int
+-- > loop ticks =
+-- >   let clockRate = 900000   -- kHz
+-- >   in  while (\i -> i < clockRate * ticks) (+1) 0
+-- >
+-- > test :: Acc (Vector Int)
+-- > test =
+-- >   zip3
+-- >     (compute $ map loop (use $ fromList (Z:.1) [10]))
+-- >     (compute $ map loop (use $ fromList (Z:.1) [10]))
+-- >     (compute $ map loop (use $ fromList (Z:.1) [10]))
+-- >
 --
-infixl 1 >->
-(>->) :: forall a b c. (Arrays a, Arrays b, Arrays c) => (Acc a -> Acc b) -> (Acc b -> Acc c) -> (Acc a -> Acc c)
-(>->) = Acc $$$ applyAcc $ Pipe (arraysR @a) (arraysR @b) (arraysR @c)
+-- Without the use of 'compute', the operations are fused together and the three
+-- long-running loops are executed sequentially in a single kernel. Instead, the
+-- individual operations can now be executed concurrently, potentially reducing
+-- overall runtime.
+--
+compute :: Arrays a => Acc a -> Acc a
+compute (Acc a) = Acc $ SmartAcc $ Manifest a
 
 
 -- Flow control constructs

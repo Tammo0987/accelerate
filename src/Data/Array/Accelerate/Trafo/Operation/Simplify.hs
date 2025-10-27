@@ -22,7 +22,7 @@
 --
 
 module Data.Array.Accelerate.Trafo.Operation.Simplify (
-  simplify, simplifyFun, SimplifyOperation(..), CopyOperation(..),
+  simplify, simplifyFun, SimplifyOperation(..), CopyOperation(..), isNoOp,
   copyOperationsForArray, detectMapCopies, detectBackpermuteCopies
 ) where
 
@@ -60,6 +60,18 @@ data CopyOperation env where
     -> Idx env (Buffer t) -- output
     -> CopyOperation env
 
+isNoOp :: SimplifyOperation op => op f -> Args env f -> Bool
+-- An operation is a no-op if all outputs are copies of themselves.
+-- For instance, 'map id xs xs' is a no-op.
+-- This pattern is created by in-place updates, on the copy of the defaults
+-- array of a permute.
+isNoOp op args = all (\(Exists idx) -> idx `IdxSet.member` copied) $ argsOutputs args
+  where
+    copied = IdxSet.fromList
+      $ map (\(CopyOperation idx _) -> Exists idx)
+      $ filter (\(CopyOperation i o) -> i == o)
+      $ detectCopy op args
+
 copyOperationsForArray :: forall env sh sh' t. Arg env (In sh t) -> Arg env (Out sh' t) -> [CopyOperation env]
 copyOperationsForArray (ArgArray _ (ArrayR _ tp) _ input) (ArgArray _ _ _ output) = go tp input output []
   where
@@ -72,7 +84,9 @@ copyOperationsForArray (ArgArray _ (ArrayR _ tp) _ input) (ArgArray _ _ _ output
 detectMapCopies :: forall genv sh t s. Args genv (Fun' (t -> s) -> In sh t -> Out sh s -> ()) -> [CopyOperation genv]
 detectMapCopies (ArgFun (Lam lhs (Body body)) :>: ArgArray _ _ _ input :>: ArgArray _ _ _ output :>: ArgsNil)
   = detectMapCopies' lhs body input output
-detectMapCopies _ = internalError "Function impossible"
+detectMapCopies (ArgFun (Body f) :>: _ ) = functionImpossible $ expType f
+detectMapCopies (ArgFun (Lam _ (Lam _ _)) :>: _ :>: ArgArray _ (ArrayR _ tp) _ _ :>: ArgsNil)
+  = functionImpossible tp
 
 detectMapCopies' :: forall genv env t s. ELeftHandSide t () env -> OpenExp env genv s -> GroundVars genv (Buffers t) -> GroundVars genv (Buffers s) -> [CopyOperation genv]
 detectMapCopies' lhs body input output = go Just body output []
@@ -195,6 +209,7 @@ simplify' uniquenesses = \case
     ( variableIndices uniquenesses vars
     , \env -> Return $ simplifyReturnVars env uniquenesses vars
     )
+  Manifest var -> ( IdxSet.empty, const $ Manifest var )
   Compute expr ->
     ( IdxSet.empty
     , \env ->
@@ -443,7 +458,7 @@ awhileSimplifyInvariant
   -> PreOpenAfun op env (a -> a)
   -> GroundVars     env a
   -> PreOpenAcc  op env a
-awhileSimplifyInvariant us cond step initial = case awhileDropInvariantFun step of
+awhileSimplifyInvariant us cond step initial = case awhileDropInvariantFun initial step of
   Exists SubTupRkeep -> Awhile us cond step initial
   Exists sub
     | Just Refl <- subTupPreserves tp sub -> Awhile us cond step initial
@@ -459,36 +474,52 @@ awhileSimplifyInvariant us cond step initial = case awhileDropInvariantFun step 
       Alam lhs _ -> lhsToTupR lhs
       Abody body -> groundFunctionImpossible $ groundsR body
 
-awhileDropInvariantFun :: OperationAfun op env (t -> t) -> Exists (SubTupR t)
-awhileDropInvariantFun (Alam lhs (Abody body)) = awhileDropInvariant (lhsMaybeVars lhs) body
-awhileDropInvariantFun (Alam lhs (Alam _ _))   = groundFunctionImpossible (lhsToTupR lhs)
-awhileDropInvariantFun (Abody body)            = groundFunctionImpossible (groundsR body)
+awhileDropInvariantFun :: GroundVars env t -> OperationAfun op env (t -> t) -> Exists (SubTupR t)
+awhileDropInvariantFun initial (Alam lhs (Abody body)) =
+  awhileDropInvariant (mapTupR (weaken $ weakenWithLHS lhs) initial) (lhsMaybeVars lhs) body
+awhileDropInvariantFun initial (Alam lhs (Alam _ _))   = groundFunctionImpossible (lhsToTupR lhs)
+awhileDropInvariantFun initial (Abody body)            = groundFunctionImpossible (groundsR body)
 
-awhileDropInvariant :: MaybeVars GroundR env t -> OperationAcc op env t -> Exists (SubTupR t)
-awhileDropInvariant argument = \case
+-- Computes a SubTupR that removes variables that are invariant in the while loop.
+-- Invariant here means that the step function of the loop returns the input unchanged,
+-- or returns the initial value in each step.
+-- This pattern often occurs with sizes of arrays.
+awhileDropInvariant :: GroundVars env t -> MaybeVars GroundR env t -> OperationAcc op env t -> Exists (SubTupR t)
+awhileDropInvariant initial argument = \case
   Return vars
-    -> matchReturn argument vars
+    -> matchReturn initial argument vars
   Alet (LeftHandSideWildcard _) _ _ body
-    -> awhileDropInvariant argument body
+    -> awhileDropInvariant initial argument body
   Alet lhs _ _ body
-    -> awhileDropInvariant (mapTupR (weaken $ weakenWithLHS lhs) argument) body
+    -> awhileDropInvariant
+      (mapTupR (weaken $ weakenWithLHS lhs) initial)
+      (mapTupR (weaken $ weakenWithLHS lhs) argument)
+      body
   Acond _ t f
-    | Exists subTupT <- awhileDropInvariant argument t
-    , Exists subTupF <- awhileDropInvariant argument f
+    | Exists subTupT <- awhileDropInvariant initial argument t
+    , Exists subTupF <- awhileDropInvariant initial argument f
+    -- Only remove variables if they are invariant in both branches.
+    -- Thus, preserve variables in the union of subTupT and subTupF.
     -> unionSubTupR subTupT subTupF
   _ -> Exists SubTupRkeep -- No invariant variables
   where
-    matchReturn :: MaybeVars GroundR env t' -> GroundVars env t' -> Exists (SubTupR t')
-    matchReturn (TupRpair a1 a2) (TupRpair v1 v2)
-      | Exists s1 <- matchReturn a1 v1
-      , Exists s2 <- matchReturn a2 v2
+    matchReturn :: GroundVars env t' -> MaybeVars GroundR env t' -> GroundVars env t' -> Exists (SubTupR t')
+    matchReturn (TupRpair i1 i2) (TupRpair a1 a2) (TupRpair v1 v2)
+      | Exists s1 <- matchReturn i1 a1 v1
+      , Exists s2 <- matchReturn i2 a2 v2
       = case (s1, s2) of
           (SubTupRskip, SubTupRskip) -> Exists SubTupRskip
           _ -> Exists $ subTupRpair s1 s2
-    matchReturn (TupRsingle (JustVar arg)) (TupRsingle var)
-      | Just Refl <- matchVar arg var = Exists SubTupRskip
-    matchReturn TupRunit _ = Exists SubTupRskip
-    matchReturn _ _ = Exists SubTupRkeep
+    matchReturn (TupRsingle i) (TupRsingle arg) (TupRsingle var)
+      | Just Refl <- matchVar i var
+      = Exists SubTupRskip
+      | JustVar arg' <- arg
+      , Just Refl <- matchVar arg' var
+      = Exists SubTupRskip
+      | otherwise
+      = Exists SubTupRkeep
+    matchReturn TupRunit _ _ = Exists SubTupRskip
+    matchReturn _ _ _ = internalError "Tuple mismatch"
 
 subTupFunctionResult :: SubTupR t t' -> OperationAfun op env (ta -> t) -> OperationAfun op env (ta -> t')
 subTupFunctionResult sub (Alam lhs (Abody body)) = Alam lhs $ Abody $ subTupAcc sub body

@@ -123,7 +123,7 @@ generateKernelNameAndDescription
   -- Returns a function name, a detailed description and a brief description
   -> (String, String, String)
 generateKernelNameAndDescription f cluster =
-  ( formatList False "-" "-" (take 2 sorted) ++ (if length sorted > 2 then "-etc" else "")
+  ( formatList False "_" "_" (take 2 sorted) ++ (if length sorted > 2 then "_etc" else "")
   , if trivial then "" else "Cluster with " ++
       formatList True ", then " (if length grouped == 2 then " and then " else " and finally ") (groupAndCount ops)
   , if trivial then "" else "Cluster with " ++

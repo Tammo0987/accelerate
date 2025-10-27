@@ -38,7 +38,7 @@ module Data.Array.Accelerate.Trafo.Schedule.Partial (
 
   UnitTuple, UpdateTuple(..), toPartialReturn,
 
-  compileKernel', CompiledKernel(..), 
+  compileKernel', CompiledKernel(..),
 ) where
 
 import Data.Array.Accelerate.Analysis.Match
@@ -164,13 +164,13 @@ data PrePartialSchedule schedule kernel env t where
     -> schedule kernel env t1
     -> PrePartialSchedule schedule kernel env t2
 
-  PAcond  
+  PAcond
     :: ExpVar env PrimBool
     -> schedule kernel env t
     -> schedule kernel env t
     -> PrePartialSchedule schedule kernel env t
 
-  PAwhile 
+  PAwhile
     :: Uniquenesses t
     -> PrePartialScheduleFun schedule kernel env (t -> Loop t)
     -> GroundVars env t
@@ -335,7 +335,8 @@ data Exists' (a :: (Type -> Type -> Type) -> Type) where
 combineMod :: Modifier m -> Modifier m' -> Exists' Modifier
 combineMod In  In  = Exists' In
 combineMod Out Out = Exists' Out
-combineMod _   _   = error "Remove this error once we add in place updates" -- Exists' Mut
+combineMod _   _   = Exists' Mut
+-- combineMod _   _   = error "Remove this error once we add in place updates"
 
 combineAccessGroundR :: AccessGroundR t -> AccessGroundR t -> AccessGroundR t
 combineAccessGroundR (AccessGroundRbuffer m1 tp) (AccessGroundRbuffer m2 _)
@@ -680,7 +681,7 @@ buildReturnValues updateTup next' available =
     hasOne
       | One <- updateCount updateTup = True
       | otherwise = False
-    
+
     allAvailable = varsSet `IdxSet.isSubsetOf` available
 
     thisAwaits

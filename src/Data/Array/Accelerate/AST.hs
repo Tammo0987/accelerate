@@ -150,7 +150,7 @@ import Data.Array.Accelerate.Representation.Type
 import Data.Array.Accelerate.Sugar.Foreign
 import Data.Array.Accelerate.Type
 
-import Control.DeepSeq
+import Control.DeepSeq                                              ( NFData(..) )
 import Data.Kind
 import Data.Maybe
 import Data.Text                                                    ( Text )
@@ -246,15 +246,10 @@ data PreOpenAcc (acc :: Type -> Type -> Type) aenv a where
 
   Anil        :: PreOpenAcc acc aenv ()
 
-  -- Array-function application.
-  --
-  -- The array function is not closed at the core level because we need access
-  -- to free variables introduced by 'run1' style evaluators. See Issue#95.
-  --
-  Apply       :: ArraysR arrs2
-              -> PreOpenAfun acc aenv (arrs1 -> arrs2)
-              -> acc             aenv arrs1
-              -> PreOpenAcc  acc aenv arrs2
+  -- Fusion boundary.
+  -- Corresponds to 'compute' in the user-facing language.
+  Manifest    :: acc            aenv as
+              -> PreOpenAcc acc aenv as
 
   -- Apply a backend-specific foreign function to an array, with a pure
   -- Accelerate version for use with other backends. The functions must be
@@ -555,7 +550,7 @@ instance HasArraysR acc => HasArraysR (PreOpenAcc acc) where
   arraysR (Apair as bs)               = TupRpair (arraysR as) (arraysR bs)
   arraysR Anil                        = TupRunit
   arraysR (Atrace _ _ bs)             = arraysR bs
-  arraysR (Apply aR _ _)              = aR
+  arraysR (Manifest as)               = arraysR as
   arraysR (Aforeign r _ _ _)          = r
   arraysR (Acond _ a _)               = arraysR a
   arraysR (Awhile _ (Alam lhs _) _)   = lhsToTupR lhs
@@ -640,7 +635,7 @@ rnfPreOpenAcc rnfA pacc =
     Apair as bs               -> rnfA as `seq` rnfA bs
     Anil                      -> ()
     Atrace msg as bs          -> rnfM msg `seq` rnfA as `seq` rnfA bs
-    Apply repr afun acc       -> rnfTupR rnfArrayR repr `seq` rnfAF afun `seq` rnfA acc
+    Manifest as               -> rnfA as
     Aforeign repr asm afun a  -> rnfTupR rnfArrayR repr `seq` rnf (strForeign asm) `seq` rnfAF afun `seq` rnfA a
     Acond p a1 a2             -> rnfE p `seq` rnfA a1 `seq` rnfA a2
     Awhile p f a              -> rnfAF p `seq` rnfAF f `seq` rnfA a
@@ -723,7 +718,7 @@ liftPreOpenAcc liftA pacc =
     Apair as bs               -> [|| Apair $$(liftA as) $$(liftA bs) ||]
     Anil                      -> [|| Anil ||]
     Atrace msg as bs          -> [|| Atrace $$(liftMessage (arraysR as) msg) $$(liftA as) $$(liftA bs) ||]
-    Apply repr f a            -> [|| Apply $$(liftArraysR repr) $$(liftAF f) $$(liftA a) ||]
+    Manifest as               -> [|| Manifest $$(liftA as) ||]
     Aforeign repr asm f a     -> [|| Aforeign $$(liftArraysR repr) $$(liftForeign asm) $$(liftPreOpenAfun liftA f) $$(liftA a) ||]
     Acond p t e               -> [|| Acond $$(liftE p) $$(liftA t) $$(liftA e) ||]
     Awhile p f a              -> [|| Awhile $$(liftAF p) $$(liftAF f) $$(liftA a) ||]
@@ -798,7 +793,7 @@ formatPreAccOp = later $ \case
   Avar (Var _ ix)   -> bformat ("Avar a" % int) (idxToInt ix)
   Use aR a          -> bformat ("Use " % string) (showArrayShort 5 (showsElt (arrayRtype aR)) aR a)
   Atrace{}          -> "Atrace"
-  Apply{}           -> "Apply"
+  Manifest{}        -> "Manifest"
   Aforeign{}        -> "Aforeign"
   Acond{}           -> "Acond"
   Awhile{}          -> "Awhile"

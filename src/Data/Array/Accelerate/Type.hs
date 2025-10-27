@@ -90,6 +90,11 @@ import Data.GADT.Compare
 
 -- Reified dictionaries
 --
+data ScalarDict a where
+  ScalarDict :: ( Eq a, Show a, Storable a )
+             => ScalarDict a
+
+
 data SingleDict a where
   SingleDict :: ( Eq a, Ord a, Show a, Storable a, Prim a )
              => SingleDict a
@@ -303,6 +308,12 @@ singleDict = single
     floating TypeFloat  = SingleDict
     floating TypeDouble = SingleDict
 
+scalarDict :: ScalarType a -> ScalarDict a
+scalarDict (SingleScalarType tp)
+  | SingleDict <- singleDict tp = ScalarDict
+scalarDict (VectorScalarType (VectorType _ tp))
+  | SingleDict <- singleDict tp = ScalarDict
+
 
 scalarTypeInt :: ScalarType Int
 scalarTypeInt = SingleScalarType $ NumSingleType $ IntegralNumType TypeInt
@@ -318,6 +329,9 @@ scalarTypeWord8 = SingleScalarType $ NumSingleType $ IntegralNumType TypeWord8
 
 scalarTypeWord32 :: ScalarType Word32
 scalarTypeWord32 = SingleScalarType $ NumSingleType $ IntegralNumType TypeWord32
+
+scalarTypeWord64 :: ScalarType Word64
+scalarTypeWord64 = SingleScalarType $ NumSingleType $ IntegralNumType TypeWord64
 
 rnfScalarType :: ScalarType t -> ()
 rnfScalarType (SingleScalarType t) = rnfSingleType t

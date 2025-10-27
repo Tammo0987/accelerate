@@ -21,7 +21,6 @@
 
 module Data.Array.Accelerate.Trafo.NewNewFusion (
 
-  convertAcc,  convertAccWith,
   convertAfun, convertAfunWith,
 
   Benchmarking(..)
@@ -32,6 +31,7 @@ import Data.Array.Accelerate.AST.Operation
 import Data.Array.Accelerate.AST.Partitioned
 import Data.Array.Accelerate.Trafo.Config
 import Data.Array.Accelerate.Error
+import Data.Array.Accelerate.Trafo.Operation.Simplify
 import Data.Array.Accelerate.Trafo.Partitioning.ILP
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Graph (MakesILP)
 import qualified Data.Array.Accelerate.Pretty.Operation as Pretty
@@ -49,26 +49,12 @@ defaultSolver :: Solver
 defaultSolver =
   MIPSolver CBC
 
--- | Apply the fusion transformation to a de Bruijn AST
---
-convertAccWith
-    :: (HasCallStack, MakesILP op, Pretty.PrettyOp (Cluster op))
-    => Config
-    -> FusionType
-    -> OperationAcc op () a
-    -> PartitionedAcc op () a
-convertAccWith _ (Fusion o)       = withSimplStats (ilpFusion'' defaultSolver o)
-convertAccWith _ (Benchmarking b) = withSimplStats (bench b FusedEdges)
-
-convertAcc :: (HasCallStack, MakesILP op, Pretty.PrettyOp (Cluster op)) => FusionType -> OperationAcc op () a -> PartitionedAcc op () a
-convertAcc = convertAccWith defaultOptions
-
 -- | Apply the fusion transformation to a function of array arguments
 --
-convertAfun :: (HasCallStack, MakesILP op, Pretty.PrettyOp (Cluster op)) => FusionType -> OperationAfun op () f -> PartitionedAfun op () f
+convertAfun :: (HasCallStack, MakesILP op, SimplifyOperation op, Pretty.PrettyOp (Cluster op)) => FusionType -> OperationAfun op () f -> PartitionedAfun op () f
 convertAfun = convertAfunWith defaultOptions
 
-convertAfunWith :: (HasCallStack, MakesILP op, Pretty.PrettyOp (Cluster op)) => Config -> FusionType -> OperationAfun op () f -> PartitionedAfun op () f
+convertAfunWith :: (HasCallStack, MakesILP op, SimplifyOperation op, Pretty.PrettyOp (Cluster op)) => Config -> FusionType -> OperationAfun op () f -> PartitionedAfun op () f
 convertAfunWith _ (Fusion o)       = withSimplStats (ilpFusionF'' defaultSolver o)
 convertAfunWith _ (Benchmarking b) = withSimplStats (benchF b FusedEdges)
 

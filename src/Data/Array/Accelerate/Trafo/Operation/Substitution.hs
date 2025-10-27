@@ -30,6 +30,7 @@ module Data.Array.Accelerate.Trafo.Operation.Substitution (
   reindexPartial,
   reindexPartialAfun,
   pair, pair', pairUnique, alet, aletUnique, alet',
+  makeManifest,
   weakenArrayInstr,
   strengthenArrayInstr,
   extractParams,
@@ -104,6 +105,7 @@ reindexA' :: forall op f env env' t. (Applicative f) => SunkReindexPartial f env
 reindexA' k = \case
     Exec op args -> Exec op <$> reindexArgs (reindex' k) args
     Return vars -> Return <$> reindexVars' k vars
+    Manifest var -> Manifest <$> reindexVar' k var
     Compute e -> Compute <$> reindexExp' k e
     Alet lhs uniqueness bnd body
       | Exists lhs' <- rebuildLHS lhs -> Alet lhs' uniqueness <$> travA bnd <*> reindexA' (sinkReindexWithLHS lhs lhs' k) body
@@ -150,6 +152,27 @@ pair' u a b = goA weakenId a
       | DeclareVars lhs k value <- declareVars $ groundsR b
                                = Alet lhs ((if u then unique else shared) $ groundsR b) acc $ Return (TupRpair (weakenVars k varsA) (value weakenId))
 
+makeManifest :: PreOpenAcc op env a -> PreOpenAcc op env a
+makeManifest acc = case acc of
+  Alet lhs uniqueness bnd x -> Alet lhs uniqueness bnd $ makeManifest x
+  Exec{} -> acc -- Doesn't return anything
+  Manifest{} -> acc -- Already manifest
+  Compute{} -> acc -- Doesn't return a buffer, only buffers should explicitely be marked as manifest
+  Alloc{} -> acc -- Can't fuse anyway
+  Use{} -> acc -- Can't fuse anyway
+  -- Acond can't fuse, but we still mark it explicitely as manifest in case the
+  -- condition is evaluated at compile time.
+  Acond c t f -> Acond c (makeManifest t) (makeManifest f)
+  Awhile{} -> acc -- Can't fuse anyway
+  Return vars -> go vars
+  where
+    go :: GroundVars env t -> PreOpenAcc op env t
+    go TupRunit = Return TupRunit
+    go (TupRpair v1 v2) = go v1 `pair` go v2
+    go (TupRsingle var@(Var tp _)) = case tp of
+      GroundRbuffer _ -> Manifest var
+      GroundRscalar _ -> Return $ TupRsingle var
+
 alet :: GLeftHandSide t env env' -> PreOpenAcc op env t -> PreOpenAcc op env' s -> PreOpenAcc op env s
 alet lhs = alet' lhs $ shared $ lhsToTupR lhs
 
@@ -162,11 +185,7 @@ alet' lhs1 us (Alet lhs2 uniqueness a1 a2) a3
 alet' lhs@(LeftHandSideWildcard TupRunit) _ bnd a = case bnd of
   Compute _ -> a
   Return _  -> a
-  Alloc{}   -> a
-  Use{}     -> a
-  Unit _    -> a
   _ -> Alet lhs TupRunit bnd a -- 'bnd' may have side effects
-alet' lhs@(LeftHandSideWildcard TupRunit) _ bnd a = Alet lhs TupRunit bnd a
 alet' lhs _ (Return vars)      a = weaken (substituteLHS lhs vars) a
 alet' lhs us (Compute e)       a
   | Just vars <- extractParams e = weaken (substituteLHS lhs vars) a

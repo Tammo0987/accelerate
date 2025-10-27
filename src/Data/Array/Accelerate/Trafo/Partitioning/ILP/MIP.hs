@@ -1,17 +1,13 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE UndecidableInstances #-}
-
-{-# OPTIONS_GHC -fno-warn-orphans #-} -- Shame on me!
-{-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE InstanceSigs #-}
-{-# LANGUAGE LambdaCase #-}
+{-# OPTIONS_GHC -fno-warn-orphans #-} -- Shame on me!
 
 module Data.Array.Accelerate.Trafo.Partitioning.ILP.MIP (
   -- Exports default paths to 6 solvers, as well as an instance to ILPSolver for all of them
@@ -23,7 +19,7 @@ import Data.Array.Accelerate.Trafo.Partitioning.ILP.Graph (MakesILP)
 import qualified Data.Array.Accelerate.Trafo.Partitioning.ILP.Graph as Graph (Var)
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.NameGeneration
 
-import Data.Array.Accelerate.Trafo.Partitioning.ILP.Solver
+import Data.Array.Accelerate.Trafo.Partitioning.ILP.Solver hiding (var)
 import qualified Data.Map as M
 
 import Numeric.Optimization.MIP hiding (Bounds, Constraint, Var, Solution, name)
@@ -37,6 +33,8 @@ import Numeric.Optimization.MIP.Solver
 import Data.Maybe (mapMaybe)
 import Control.Monad.State ( runState )
 import Control.Monad.Reader ( Reader, asks, runReader )
+import Data.String (fromString)
+import Data.Text (unpack)
 
 newtype MIP s = MIP s
 
@@ -45,19 +43,18 @@ instance (MakesILP op, MIP.IsSolver s IO) => ILPSolver (MIP s) op where
   solvePartial (MIP s) ilp@(ILP dir obj constr bnds n) = makeSolution names <$> MIP.solve s options problem
     where
       options = def { MIP.solveTimeLimit   = Nothing --Just 60
-                                -- , MIP.solveLogger      = putStrLn . ("AccILPSolver: "      ++)
-                                , MIP.solveErrorLogger = putStrLn . ("AccILPSolverError: " ++)
+                    -- , MIP.solveLogger      = putStrLn . ("AccILPSolver: "      ++)
+                    , MIP.solveErrorLogger = putStrLn . ("AccILPSolverError: " ++)
       } --, MIP.solveCondensedSolution = False }
       vs = allVars ilp
       ((),(names, _)) = runState (mapM_ var' vs) ((mempty, mempty),"")
 
-      readerProblem = Problem (Just "AccelerateILP") 
-        <$> (mkFun dir <$> expr n obj) 
+      readerProblem = Problem (Just "AccelerateILP") . mkFun dir
+        <$> expr n obj
         <*> cons n constr
-        <*> pure [] 
-        <*> pure [] 
-        <*> vartypes -- If any variables are not given a type, they won't get fixed by `solveCondensedSoluton` (and I'm also not sure whether Integer is the default).
-        <*> bounds bnds 
+        <*> pure []
+        <*> pure []
+        <*> (M.map (IntegerVariable,) <$> bounds bnds)
       problem = runReader readerProblem names
 
       -- varsOf :: [MIP.Constraint Scientific] -> [MIP.Var]
@@ -66,26 +63,24 @@ instance (MakesILP op, MIP.IsSolver s IO) => ILPSolver (MIP s) op where
       mkFun Maximise = ObjectiveFunction (Just "AccelerateObjective") OptMax
       mkFun Minimise = ObjectiveFunction (Just "AccelerateObjective") OptMin
 
-      vartypes = allIntegers -- assuming that all variables have bounds
-
 
       -- addZeroes :: MIP.Problem Scientific -> MIP.Solution Scientific -> MIP.Solution Scientific
-      -- addZeroes problem (MIP.Solution stat obj solmap) = 
+      -- addZeroes problem (MIP.Solution stat obj solmap) =
       --   -- Map.union is left-biased: only values not present in the solution are added.
       --   MIP.Solution stat obj $ M.union solmap (M.fromSet (const 0) (vars problem))
 
 var :: Ord (Graph.Var op) => Graph.Var op -> Reader (Names op) MIP.Var
-var y = asks (toVar . (M.! y) . snd)
+var y = asks (fromString . (M.! y) . snd)
 
--- MIP has a Num instance for expressions, but it's scary (because 
+-- MIP has a Num instance for expressions, but it's scary (because
 -- you can't guarantee linearity with arbitrary multiplications).
 -- We use that instance here, knowing that our own Expression can only be linear.
-expr :: MakesILP op => Int -> Expression op -> Reader (Names op) (MIP.Expr Scientific)
+expr :: MakesILP op => Constants -> Expression op -> Reader (Names op) (MIP.Expr Scientific)
 expr n (Constant (Number f)) = pure $ fromIntegral (f n)
 expr n (x :+ y) = (+) <$> expr n x <*> expr n y
 expr n ((Number f) :* y) = (fromIntegral (f n) *) . varExpr <$> var y
 
-cons :: MakesILP op => Int -> Constraint op -> Reader (Names op) [MIP.Constraint Scientific]
+cons :: MakesILP op => Constants -> Constraint op -> Reader (Names op) [MIP.Constraint Scientific]
 cons n (x :>= y) = (\a b -> [a MIP..>=. b]) <$> expr n x <*> expr n y
 cons n (x :<= y) = (\a b -> [a MIP..<=. b]) <$> expr n x <*> expr n y
 cons n (x :== y) = (\a b -> [a MIP..==. b]) <$> expr n x <*> expr n y
@@ -115,19 +110,20 @@ bounds NoBounds = pure mempty
 --   vs <- asks $ map toVar . M.keys . fst
 --   return [MIP.constExpr (-5) MIP..<=. MIP.varExpr x | x <- vs]
 
-allIntegers :: Reader (Names op) (M.Map MIP.Var VarType)
-allIntegers = asks $ M.fromList . map ((,IntegerVariable) . toVar) . M.keys . fst 
-
 
 
 makeSolution :: MakesILP op => Names op -> MIP.Solution Scientific -> Maybe (Solution op)
 --                                   ------- Matching on solutions with a value: If this is Nothing, the model was infeasable or unbounded.
 --                                   |    -- Instead matching on `MIP.Solution StatusOptimal _ m` often works too, but that doesn't work for
 --                                   v    -- e.g. the identity program (which has an empty ILP).
-makeSolution names (MIP.Solution _ (Just _) m) = Just . M.fromList . mapMaybe (sequence' . bimap (\v -> runReader (unvar' $ fromVar v) names) round) $ M.toList m
+makeSolution names (MIP.Solution _ (Just _) m) = Just . M.fromList . mapMaybe (sequence' . bimap (\v -> runReader (unvar' $ unpack $ varName v) names) round) $ M.toList m
 makeSolution _ _ = Nothing
 
 -- tuple's traversable instance works on the second argument, we need it on the first
 sequence' :: (Maybe a, b) -> Maybe (a, b)
 sequence' (Nothing, _) = Nothing
 sequence' (Just x, y) = Just (x, y)
+
+-- assume that both maps have exactly the same keys
+tupleup :: Ord k => M.Map k a -> M.Map k b -> M.Map k (a,b)
+tupleup as bs = M.mapWithKey (\k a -> (a, bs M.!k)) as

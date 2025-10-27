@@ -67,6 +67,7 @@ prettyOpenAcc :: PrettyOp op => Val' benv -> OperationAcc op benv t -> Adoc
 prettyOpenAcc env = \case
   Exec op args -> prettyOpWithArgs (val env) op args
   Return vars -> hang 2 $ group $ vsep [annotate Statement "return", prettyVars (val env) 10 vars]
+  Manifest var -> hang 2 $ group $ vsep [annotate Statement "manifest", prettyVar (val env) var]
   Compute exp -> hang 2 $ group $ vsep [annotate Statement "compute", prettyExp (val env) exp]
   Alet LeftHandSideUnit _ bnd body
     | notReturn bnd

@@ -44,7 +44,7 @@ module Data.Array.Accelerate.Pretty.Print (
   shiftwidth,
   context0,
   app,
-  manifest, delayed,
+  functionName,
   primOperator,
   isInfix,
   prj, sizeEnv,
@@ -77,19 +77,15 @@ type PrettyAcc acc =
 type ExtractAcc acc =
   forall aenv a. acc aenv a -> PreOpenAcc acc aenv a
 
-manifest :: Operator -> Adoc
-manifest = annotate Manifest . opName
-
-delayed :: Operator -> Adoc
-delayed = annotate Delayed . opName
+functionName :: Operator -> Adoc
+functionName = annotate FunctionName . opName
 
 ansiKeyword :: Keyword -> AnsiStyle
-ansiKeyword Statement   = colorDull Yellow
-ansiKeyword Conditional = colorDull Yellow
-ansiKeyword Manifest    = color Blue
-ansiKeyword Delayed     = color Green
-ansiKeyword Execute     = color Blue
-ansiKeyword Modifier    = colorDull Blue
+ansiKeyword Statement    = colorDull Yellow
+ansiKeyword Conditional  = colorDull Yellow
+ansiKeyword FunctionName = color Blue
+ansiKeyword Execute      = color Blue
+ansiKeyword Modifier     = colorDull Green
 
 -- Configuration for the pretty-printing functions
 newtype PrettyConfig acc
@@ -146,10 +142,7 @@ prettyPreOpenAcc config ctx prettyAcc extractAcc aenv pacc =
     Alet{}            -> prettyAlet config ctx prettyAcc extractAcc aenv pacc
     Apair{}           -> prettyAtuple config ctx prettyAcc extractAcc aenv pacc
     Anil              -> "()"
-    Apply _ f a       -> apply
-      where
-        op    = Operator ">->" Infix L 1
-        apply = sep [ ppAF f, group (sep [opName op, ppA a]) ]
+    Manifest as       -> ppN "manifest" .$ [ ppA as ]
 
     Acond p t e       -> flatAlt multi single
       where
@@ -192,7 +185,7 @@ prettyPreOpenAcc config ctx prettyAcc extractAcc aenv pacc =
     infixr 0 .$
     f .$ xs
       = parensIf (needsParens ctx f)
-      $ hang shiftwidth (sep (manifest f : xs))
+      $ hang shiftwidth (sep (functionName f : xs))
 
     ppN :: String -> Operator
     ppN = confOperator config pacc

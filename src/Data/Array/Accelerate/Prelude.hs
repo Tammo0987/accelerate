@@ -84,8 +84,8 @@ module Data.Array.Accelerate.Prelude (
   init, tail, take, drop, slit,
   initOn, tailOn, takeOn, dropOn, slitOn,
 
-  -- * Controlling execution
-  compute,
+  -- * Composition of array computations
+  (>->),
 
   -- * Flow control
   IfThenElse(..),
@@ -2235,7 +2235,7 @@ takeOn dim n xs =
       sh = shape xs
       m  = sh ^. dim
   in
-  backpermute (sh & dim .~ min m n) id xs
+  backpermute (sh & dim .~ min m (max 0 n)) id xs
 
 
 -- | Generalised version of 'drop' where the argument 'Lens'' specifies which
@@ -2287,44 +2287,23 @@ slitOn
 slitOn dim i n = takeOn dim n . dropOn dim i
 
 
--- Controlling execution
--- ---------------------
+-- Composition of array computations
+-- ---------------------------------
 
--- | Force an array expression to be evaluated, preventing it from fusing with
--- other operations. Forcing operations to be computed to memory, rather than
--- being fused into their consuming function, can sometimes improve performance.
--- For example, computing a matrix 'transpose' could provide better memory
--- locality for the subsequent operation. Preventing fusion to split large
--- operations into several simpler steps could also help by reducing register
--- pressure.
+-- | Pipelining of two array computations. The first argument will be fully
+-- evaluated before being passed to the second computation. This can be used to
+-- prevent the argument being fused into the function, for example.
 --
--- Preventing fusion also means that the individual operations are available to
--- be executed concurrently with other kernels. In particular, consider using
--- this if you have a series of operations that are compute bound rather than
--- memory bound.
+-- Denotationally, we have
 --
--- Here is the synthetic example:
+-- > (acc1 >-> acc2) arrs = let tmp = acc1 arrs
+-- >                        in  tmp `seq` acc2 tmp
 --
--- > loop :: Exp Int -> Exp Int
--- > loop ticks =
--- >   let clockRate = 900000   -- kHz
--- >   in  while (\i -> i < clockRate * ticks) (+1) 0
--- >
--- > test :: Acc (Vector Int)
--- > test =
--- >   zip3
--- >     (compute $ map loop (use $ fromList (Z:.1) [10]))
--- >     (compute $ map loop (use $ fromList (Z:.1) [10]))
--- >     (compute $ map loop (use $ fromList (Z:.1) [10]))
--- >
---
--- Without the use of 'compute', the operations are fused together and the three
--- long-running loops are executed sequentially in a single kernel. Instead, the
--- individual operations can now be executed concurrently, potentially reducing
--- overall runtime.
---
-compute :: Arrays a => Acc a -> Acc a
-compute = id >-> id
+infixl 1 >->
+(>->) :: forall a b c. (Arrays a, Arrays b, Arrays c) => (Acc a -> Acc b) -> (Acc b -> Acc c) -> (Acc a -> Acc c)
+acc1 >-> acc2 = acc2 . compute . acc1
+-- 'compute' used to be implemented in terms of this operator, but now that's
+-- the other way around: (>->) is implemented in terms of compute.
 
 
 -- Flow control
@@ -2362,10 +2341,10 @@ instance IfThenElse Bool a where
       True  -> t
       False -> e
 
-instance Elt a => IfThenElse (Exp Bool) (Exp a) where
+instance (Elt a, b ~ Bool) => IfThenElse (Exp b) (Exp a) where
   ifThenElse = cond
 
-instance Arrays a => IfThenElse (Exp Bool) (Acc a) where
+instance (Arrays a, b ~ Bool) => IfThenElse (Exp b) (Acc a) where
   ifThenElse = acond
 
 -- | Variant of 'awhile' that speculatively executes one iteration ahead.

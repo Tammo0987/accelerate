@@ -306,12 +306,13 @@ returnImplicationWeakenByLHS l (ReturnImpliedBy impliedBy) = ReturnImpliedBy $ I
 returnImplicationsWeakenByLHS :: LeftHandSide s t env1 env2 -> ReturnImplications env1 u -> ReturnImplications env2 u
 returnImplicationsWeakenByLHS lhs = mapTupR (returnImplicationWeakenByLHS lhs)
 
-returnVars :: ReturnImplications env t -> Vars s env t -> LivenessEnv env -> LivenessEnv env
+returnVars :: Distributes s => ReturnImplications env t -> Vars s env t -> LivenessEnv env -> LivenessEnv env
 returnVars (TupRsingle ReturnLive) vars = setVarsLive vars
 returnVars (TupRsingle (ReturnImpliedBy impliedBy)) vars = addLiveImplications impliedBy $ IdxSet.fromVars vars
-returnVars _ (TupRsingle _) = internalError "Pair or unit impossible"
 returnVars TupRunit TupRunit = id
 returnVars (TupRpair r1 r2) (TupRpair v1 v2) = returnVars r1 v1 . returnVars r2 v2
+returnVars TupRunit (TupRsingle tp) = unitImpossible tp
+returnVars TupRpair{} (TupRsingle tp) = pairImpossible tp
 
 returnIndices :: ReturnImplications env t -> IdxSet env -> LivenessEnv env -> LivenessEnv env
 returnIndices ret indices = case flattenReturnImplications ret of
@@ -546,7 +547,7 @@ subTupExp s      expr
 
 subTupFun :: IsArrayInstr arr => SubTupR t t' -> PreOpenFun arr env (s -> t) -> PreOpenFun arr env (s -> t')
 subTupFun s (Lam lhs (Body body)) = Lam lhs $ Body $ subTupExp s body
-subTupFun _      _                     = internalError "Function impossible"
+subTupFun _ _ = internalError "Expected unary function"
 
 subTupDBuf :: SubTupR t t' -> TupR s (Distribute Buffer t) -> TupR s (Distribute Buffer t')
 subTupDBuf SubTupRskip         _                = TupRunit

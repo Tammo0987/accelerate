@@ -52,7 +52,7 @@ module Data.Array.Accelerate.AST.Operation (
 
   ReindexPartial, reindexArg, reindexArgs, reindexExp, reindexPreArgs, reindexVar, reindexVars,
   weakenReindex,
-  argVars, argsVars, AccessGroundR(..),
+  argVars, argsVars, argsInputs, argsOutputs, AccessGroundR(..),
 
   mapAccExecutable, mapAfunExecutable,
 
@@ -78,6 +78,7 @@ import Data.Array.Accelerate.Trafo.Exp.Shrink
 import Data.Array.Accelerate.Type
 import Data.Array.Accelerate.Error
 import Data.Typeable                                                ( (:~:)(..) )
+import Data.Maybe
 
 import Language.Haskell.TH.Extra                                    ( CodeQ )
 import Data.Kind (Type)
@@ -115,6 +116,16 @@ data PreOpenAcc (op :: Type -> Type) env a where
   --
   Return  :: GroundVars env a
           -> PreOpenAcc op env a
+
+  -- | Fusion boundary.
+  -- Corresponds with 'compute' in the user-facing language. Internally we use
+  -- a different name as 'compute' already has a different meaning (computing
+  -- expressions).
+  --
+  -- This constructor may only occur before fusion.
+  --
+  Manifest :: GroundVar env (Buffer e)
+           -> PreOpenAcc op env (Buffer e)
 
   -- | Evaluates the expression and returns its value.
   --
@@ -206,6 +217,13 @@ data Uniqueness t where
   Shared :: Uniqueness t
 
 type Uniquenesses = TupR Uniqueness
+
+deriving instance Show (Uniqueness t)
+
+instance Semigroup (Uniqueness t) where
+  (<>) :: Uniqueness t -> Uniqueness t -> Uniqueness t
+  (<>) Unique Unique = Unique
+  (<>) _      _      = Shared
 
 shared :: TupR s t -> Uniquenesses t
 shared = mapTupR (const Shared)
@@ -345,6 +363,7 @@ class HasGroundsR f where
 instance HasGroundsR (PreOpenAcc op env) where
   groundsR (Exec _ _)          = TupRunit
   groundsR (Return vars)     = groundsR vars
+  groundsR (Manifest var)    = groundsR var     
   groundsR (Compute e)       = groundsR e
   groundsR (Alet _ _ _ a)    = groundsR a
   groundsR (Alloc _ tp _)    = TupRsingle $ GroundRbuffer tp
@@ -483,6 +502,7 @@ reindexPreArgs reindex k (a :>: as) = (:>:) <$> reindex k a <*> reindexPreArgs r
 reindexAcc :: Applicative f => ReindexPartial f env env' -> PreOpenAcc op env t -> f (PreOpenAcc op env' t)
 reindexAcc r (Exec opargs pa) = Exec opargs <$> reindexArgs r pa
 reindexAcc r (Return tr) = Return <$> reindexVars r tr
+reindexAcc r (Manifest var) = Manifest <$> reindexVar r var
 reindexAcc r (Compute poe) = Compute <$> reindexExp r poe
 reindexAcc r (Alet lhs tr poa poa') = reindexLHS r lhs $ \lhs' r' -> Alet lhs' tr <$> reindexAcc r poa <*> reindexAcc r' poa'
 reindexAcc r (Alloc sr st tr) = Alloc sr st <$> reindexVars r tr
@@ -535,6 +555,21 @@ argsVars :: Args env t -> [Exists (Var AccessGroundR env)]
 argsVars (a :>: as) = argVars a ++ argsVars as
 argsVars ArgsNil    = []
 
+argsInputs :: Args env t -> [Exists (Idx env)]
+argsInputs = mapMaybe input . argsVars
+  where
+    input :: Exists (Var AccessGroundR env) -> Maybe (Exists (Idx env))
+    input (Exists (Var (AccessGroundRbuffer Out _) _)) = Nothing
+    input (Exists (Var _ idx)) = Just $ Exists idx
+
+argsOutputs :: Args env t -> [Exists (Idx env)]
+argsOutputs = mapMaybe output . argsVars
+  where
+    output :: Exists (Var AccessGroundR env) -> Maybe (Exists (Idx env))
+    output (Exists (Var (AccessGroundRbuffer Out _) idx)) = Just $ Exists idx
+    output (Exists (Var (AccessGroundRbuffer Mut _) idx)) = Just $ Exists idx
+    output _ = Nothing
+
 expGroundVars :: OpenExp env benv t -> [Exists (GroundVar benv)]
 expGroundVars = map arrayInstrGroundVars . arrayInstrsInExp
 
@@ -549,6 +584,7 @@ mapAccExecutable :: (forall args benv'. op args -> Args benv' args -> op' args) 
 mapAccExecutable f = \case
   Exec op args                  -> Exec (f op args) args
   Return vars                   -> Return vars
+  Manifest var                  -> Manifest var
   Compute e                     -> Compute e
   Alet lhs uniqueness bnd body  -> Alet lhs uniqueness (mapAccExecutable f bnd) (mapAccExecutable f body)
   Alloc shr tp sh               -> Alloc shr tp sh
@@ -568,7 +604,7 @@ groundToExpVar TupRunit         TupRunit                = TupRunit
 groundToExpVar _                _                       = internalError "Impossible pair"
 expToGroundVar :: ExpVars env e -> GroundVars env e
 expToGroundVar  TupRunit = TupRunit
-expToGroundVar  (TupRsingle (Var a ix)) = TupRsingle $ Var (GroundRscalar a) ix 
+expToGroundVar  (TupRsingle (Var a ix)) = TupRsingle $ Var (GroundRscalar a) ix
 expToGroundVar  (TupRpair x y) = TupRpair (expToGroundVar x) (expToGroundVar y)
 
 class NFData' f where
@@ -577,6 +613,7 @@ class NFData' f where
 instance NFData' op => NFData (OperationAcc op env a) where
   rnf (Exec op args)                = rnf' op `seq` rnfArgs args
   rnf (Return vars)                 = rnfGroundVars vars
+  rnf (Manifest var)                = rnfGroundVar var
   rnf (Compute expr)                = rnfOpenExp expr
   rnf (Alet lhs us bnd a)           = rnfLeftHandSide rnfGroundR lhs `seq` rnfTupR rnfUniqueness us `seq` rnf bnd `seq` rnf a
   rnf (Alloc shr tp sh)             = rnfShapeR shr `seq` rnfScalarType tp `seq` rnfTupR rnfExpVar sh

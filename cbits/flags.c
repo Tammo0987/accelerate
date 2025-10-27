@@ -23,31 +23,46 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <string.h>
 
 #include "flags.h"
 #include "getopt.h"
 
 
-/* These globals will be accessed from the Haskell side to implement the
- * corresponding behaviour.
- */
+/* SEE: [layout of command line options bitfield]
+ * There are 7 default-enabled options, followed by 1 default-disabled option,
+ * followed by 17 debug options.
+ * Note the bit trick: ((1 << n) - 1) is a number with the lowest n bits set. */
+static const uint32_t def_enabled_opts_bitfield = { (1<<7) - 1 };
+#ifndef ACCELERATE_DEBUG
+static const uint32_t debug_opts_bitfield = { ((1<<17) - 1) << (7+1) };
+#endif
+static const int disable_opts_offset = (7+1+17);
 
-__flags_t __cmd_line_flags            = { 0xff };  // SEE: [layout of command line options bitfield]
-uint32_t  __unfolding_use_threshold   = 1;
-uint32_t  __max_simplifier_iterations = 25;
+/* This global is accessed from the Haskell side. */
+__flags_t __cmd_line_flags            = { def_enabled_opts_bitfield };
 
 enum {
   OPT_ENABLE = 1,
   OPT_DISABLE,
-  OPT_UNFOLDING_USE_THRESHOLD,
-  OPT_MAX_SIMPLIFIER_ITERATIONS
 };
 
 /* NOTE: [layout of command line options bitfield]
  *
- * When adding new options, make sure the offset value in the OPT_DISABLE branch
- * is updated, and that the flags are kept in order.
+ * HERE BE DRAGONS.
+ *
+ * When adding, removing, reordering, or changing options in ANY way, be aware
+ * of the following:
+ * - Various code relies on the fact (by bit hacks) that these options come in
+ *   this order: -f enablers, -d enablers, -f disablers.
+ * - The -f enablers and -f disablers lists must be exactly the same, including
+ *   the order.
+ * - The order of the options in __flags_t in flags.h must also be the same.
+ * - Data.Array.Accelerate.Debug.Internal.Flags contains 2 blocks of code
+ *   hard-coding offsets into this options list.
+ * - Some metrics about this options list used in the bit hacks are at the top
+ *   of this file (def_enabled_opts_bitfield etc.).
  */
 static const char*         shortopts  = "";
 static const struct option longopts[] =
@@ -55,11 +70,9 @@ static const struct option longopts[] =
   , { "facc-sharing",                   no_argument,       NULL, OPT_ENABLE                    }
   , { "fexp-sharing",                   no_argument,       NULL, OPT_ENABLE                    }
   , { "ffusion",                        no_argument,       NULL, OPT_ENABLE                    }
-  , { "fsimplify",                      no_argument,       NULL, OPT_ENABLE                    }
   , { "finplace",                       no_argument,       NULL, OPT_ENABLE                    }
   , { "ffast-math",                     no_argument,       NULL, OPT_ENABLE                    }
   , { "ffast-permute-const",            no_argument,       NULL, OPT_ENABLE                    }
-  , { "fflush-cache",                   no_argument,       NULL, OPT_ENABLE                    }
   , { "fforce-recomp",                  no_argument,       NULL, OPT_ENABLE                    }
 
   , { "ddebug",                         no_argument,       NULL, OPT_ENABLE                    }
@@ -84,15 +97,13 @@ static const struct option longopts[] =
   , { "fno-acc-sharing",                no_argument,       NULL, OPT_DISABLE                   }
   , { "fno-exp-sharing",                no_argument,       NULL, OPT_DISABLE                   }
   , { "fno-fusion",                     no_argument,       NULL, OPT_DISABLE                   }
-  , { "fno-simplify",                   no_argument,       NULL, OPT_DISABLE                   }
   , { "fno-inplace",                    no_argument,       NULL, OPT_DISABLE                   }
   , { "fno-fast-math",                  no_argument,       NULL, OPT_DISABLE                   }
   , { "fno-fast-permute-const",         no_argument,       NULL, OPT_DISABLE                   }
-  , { "fno-flush-cache",                no_argument,       NULL, OPT_DISABLE                   }
   , { "fno-force-recomp",               no_argument,       NULL, OPT_DISABLE                   }
 
-  , { "funfolding-use-threshold=INT",   required_argument, NULL, OPT_UNFOLDING_USE_THRESHOLD   }
-  , { "fmax-simplifier-iterations=INT", required_argument, NULL, OPT_MAX_SIMPLIFIER_ITERATIONS }
+  /* There were options that took arguments here before; see the git blame of
+   * this comment for how that looked. */
 
   /* required sentinel */
   , { NULL, 0, NULL, 0 }
@@ -125,28 +136,7 @@ static void parse_options(int argc, char *argv[])
       break;
 
     case OPT_DISABLE:
-      __cmd_line_flags.bitfield &= ~(1 << (longindex - 27));  // SEE: [layout of command line options bitfield]
-      break;
-
-    /* attempt to decode the argument to flags which require them */
-    case OPT_UNFOLDING_USE_THRESHOLD:
-      if (1 != sscanf(optarg, "%"PRIu32, &__unfolding_use_threshold)) {
-        fprintf(stderr, "%s: option `-%s' requires an integer argument, but got: %s\n"
-                      , basename(argv[0])
-                      , longopts[longindex].name
-                      , optarg
-                      );
-      }
-      break;
-
-    case OPT_MAX_SIMPLIFIER_ITERATIONS:
-      if (1 != sscanf(optarg, "%"PRIu32, &__max_simplifier_iterations)) {
-        fprintf(stderr, "%s: option `-%s' requires an integer argument, but got: %s\n"
-                      , basename(argv[0])
-                      , longopts[longindex].name
-                      , optarg
-                      );
-      }
+      __cmd_line_flags.bitfield &= ~(1 << (longindex - disable_opts_offset));
       break;
 
     /* option was ambiguous or was missing a required argument
@@ -195,7 +185,7 @@ static void parse_options(int argc, char *argv[])
     }
   }
 #if !defined(ACCELERATE_DEBUG)
-  if (__cmd_line_flags.bitfield & 0x7fffc00) {  // SEE: [layout of command line options bitfield]
+  if (__cmd_line_flags.bitfield & debug_opts_bitfield) {
     fprintf(stderr, "Data.Array.Accelerate: Debugging options are disabled.\n");
     fprintf(stderr, "Reinstall package 'accelerate' with '-fdebug' to enable them.\n");
   }
@@ -212,37 +202,100 @@ static void parse_options(int argc, char *argv[])
  * The input 'argv' vector is mutated to remove the entries processed by this
  * module. This prevents the flags from interfering with the regular Haskell
  * program (in the same way as the RTS options). Note however that since we can
- * not update the 'argc' length of the vector, the removed entries are simply
- * set to NULL (and moved to the end of the vector).
+ * not update the 'argc' length of the vector, the removed entries are replaced
+ * with "-RTS" (see the comment at the end of the function).
  */
-__attribute__((constructor)) void process_options(int argc, char *argv[])
+static void process_options(int argc, char *argv[])
 {
-  int i;
-
   /* Find the command line options which need to be processed. These will be
    * between +ACC ... [-ACC] (similar to the Haskell RTS options).
    *
-   * Note that this only recognises a single +ACC ... -ACC group. Should we be
-   * able to handle multiple (disjoint) groups of flags? To do this properly we
-   * probably want to collect the arguments (from both sources) into a linked
-   * list. This would not be particularly difficult, just tedious... \:
+   * First we collect the total number of command-line options. We also
+   * already store what occurs where in the argument list, so that we only have
+   * to do the complicated parsing once.
+   *
+   * Note that this function may well be called twice; this probably has
+   * something to do with runtime loading of binaries in e.g.
+   * accelerate-llvm-native (but I'm not sure). If so, we have already parsed
+   * out +ACC stuff the first time round, and the GHC RTS has already removed
+   * the +RTS flags including the -RTS drop-ins that we replaced the +ACC
+   * arguments with. It does that by reordering arguments so that the non-RTS
+   * ones come first, and by replacing the first not-an-argument-anymore with
+   * NULL.
+   *
+   * Long story short, if we encounter a NULL, we have encountered what is,
+   * according to the GHC RTS, de-facto the end of the argument list. So we
+   * update argc and exit the loop.
    */
-  int cl_start;
-  int cl_end;
-  int num_cl_options = 0;
+  typedef enum {
+    PROC_OPT_OTHER,   /* some non-accelerate argument */
+    PROC_OPT_MARKER,  /* +ACC or -ACC (not +/-RTS!) */
+    PROC_OPT_OPT,     /* an option for accelerate */
+  } cl_option_t;
+  cl_option_t *cl_option_type = malloc(argc * sizeof(cl_option_t));
+  if (argc > 0) cl_option_type[0] = PROC_OPT_OTHER;
 
-  for (cl_start = 1; cl_start < argc; ++cl_start) {
-    if (0 == strncmp("+ACC", argv[cl_start], 4)) {
-      break;
+  int num_cl_options = 0;  /* the number of PROC_OPT_OPT */
+
+  {
+    bool in_rts = false;
+    bool in_acc = false;
+    for (int i = 1; i < argc; ++i) {
+      if (NULL == argv[i]) {  /* see above */
+        argc = i;
+        break;
+      }
+
+      /* the default, overriden in the case analysis below */
+      cl_option_type[i] = PROC_OPT_OTHER;
+
+      if (0 == strncmp("+RTS", argv[i], 4)) {
+        if (in_acc) {
+          fprintf(stderr,
+            "accelerate: error: a '+RTS' option found inside a '+ACC' block. Close the '+ACC'\n"
+            "block using '-ACC' before opening a '+RTS' block. Continuing, assuming a '-ACC'.\n"
+          );
+          in_acc = false;
+        }
+        in_rts = true;  /* let's not error on +RTS +RTS */
+
+      } else if (0 == strncmp("-RTS", argv[i], 4)) {
+        if (in_acc) {
+          fprintf(stderr,
+            "accelerate: error: a '-RTS' option found inside a '+ACC' block. Close the '+ACC'\n"
+            "block using '-ACC' before opening a '+RTS' block. Continuing, assuming a '-ACC'.\n"
+          );
+          in_acc = false;
+        }
+        in_rts = false;
+
+      } else if (0 == strncmp("+ACC", argv[i], 4)) {
+        if (in_rts) {
+          fprintf(stderr,
+            "accelerate: error: a '+ACC' option found inside a '+RTS' block. Close the '+RTS'\n"
+            "block using '-RTS' before opening a '+ACC' block.\n"
+          );
+        } else {
+          in_acc = true;
+          cl_option_type[i] = PROC_OPT_MARKER;
+        }
+
+      } else if (0 == strncmp("-ACC", argv[i], 4)) {
+        /* inside +RTS, just leave them alone; the GHC RTS will error for us */
+        if (!in_rts) {
+          cl_option_type[i] = PROC_OPT_MARKER;
+          in_acc = false;
+        }
+
+      } else {
+        /* a normal argument */
+        if (in_acc) {
+          cl_option_type[i] = PROC_OPT_OPT;
+          ++num_cl_options;
+        }
+      }
     }
   }
-
-  for (cl_end = cl_start+1; cl_end < argc; ++cl_end) {
-    if (0 == strncmp("-ACC", argv[cl_end], 4)) {
-      break;
-    }
-  }
-  num_cl_options = cl_end-cl_start-1;
 
   /* Gather options from the ACCELERATE_FLAGS environment variable. Note that we
    * must not modify this variable, otherwise subsequent invocations of getenv()
@@ -272,18 +325,18 @@ __attribute__((constructor)) void process_options(int argc, char *argv[])
    * command line options for parsing. The command line options are placed at
    * the end, so that they may override environment options.
    */
-  int    argc2 = num_cl_options + num_env_options + 1;
+  int    argc2 = 1 + num_env_options + num_cl_options;
   char** argv2 = NULL;
 
   if (argc2 > 1) {
-    char*  p = env;
     char** r = argv2 = malloc(argc2 * sizeof(char*));
 
     /* program name */
     *r++ = argv[0];
 
     /* environment variables */
-    if (p) {
+    if (env) {
+      char* p = env;
       while (*p) {
         while (*p && isspace(*p)) ++p;
 
@@ -299,8 +352,11 @@ __attribute__((constructor)) void process_options(int argc, char *argv[])
     }
 
     /* command line flags */
-    for (i = cl_start+1; i < cl_end; ++i)
-      *r++ = argv[i];
+    for (int i = 1; i < argc; ++i) {
+      if (cl_option_type[i] == PROC_OPT_OPT) {
+        *r++ = argv[i];
+      }
+    }
 
     /* finally process command lines */
     parse_options(argc2, argv2);
@@ -311,32 +367,62 @@ __attribute__((constructor)) void process_options(int argc, char *argv[])
    * but we can pull a small sleight-of-hand by rewriting them to -RTS, so that
    * they will be deleted by the GHC RTS when it is initialised.
    *
-   * In this method, we can also updated them in place, without permuting the
+   * In this method, we can also update them in place, without permuting the
    * order of the options to place the (now unused) Accelerate flags at the end
-   * of the vector. This does create a slight change in behaviour though, where
-   * the application will become more lenient to the user not (correctly)
-   * closing the RTS group, for example:
+   * of the vector.
    *
-   * > ./foo +RTS -... +ACC -... -ACC
-   *
-   * is rewritten to:
-   *
-   * > ./foo +RTS -... -RTS -... -RTS
-   *
-   * Previously, since the RTS group was not terminated correctly the GHC RTS
-   * would complain that the trailing Accelerate options (+ACC -...) were
-   * unknown RTS flags.
+   * Note that we do not have to worry about a +RTS +ACC situation where this
+   * replacement would change semantics, because we did not parse +ACC arguments
+   * inside a +RTS block above.
    */
-  for (i = cl_start; i < cl_end+1 && i < argc; ++i) {
-    if (strlen(argv[i]) >= 4) {
-      strcpy(argv[i], "-RTS");
-    } else {
-      argv[i][0] = '\0';
+  for (int i = 1; i < argc; ++i) {
+    /* Replace markers _and_ accelerate options. */
+    if (cl_option_type[i] == PROC_OPT_MARKER ||
+          cl_option_type[i] == PROC_OPT_OPT) {
+      if (strlen(argv[i]) >= 4) {
+        strcpy(argv[i], "-RTS");
+      } else {
+        argv[i] = malloc(5);  /* 4 + the zero byte */
+        strcpy(argv[i], "-RTS");
+      }
     }
   }
 
   /* cleanup */
+  if (cl_option_type) free(cl_option_type);
   if (argv2) free(argv2);
-  if (env)   free(env);
+  if (env) free(env);
 }
 
+/* On Windows, the GHC RTS uses GetCommandLineW() to get the actual command line
+ * using the Windows API; the memory that this function reads from cannot easily
+ * be modified. Supposedly one can locate the PEB and modify the string
+ * in-place, but that is too much hackery. So we'll just disable +ACC parsing on
+ * Windows. */
+#ifndef _WIN32
+
+/* On MacOS, we use a constructor attribute, because .init_array seems to be a
+ * Linux-only thing. */
+#if defined(__APPLE__) && defined(__MACH__)
+__attribute__((constructor))
+static void process_options_constructor(int argc, char *argv[]) {
+  process_options(argc, argv);
+}
+#else
+/* On Linux(/BSD? Do we even support that?), register process_options() as a
+ * constructor function in the new style by putting a reference to it in the
+ * .init_array section. The advantage of this approach over simply using
+ * __attribute__((constructor)) is that this way, the function will predictably
+ * be called with the same arguments as main(). A simple constructor might
+ * _accidentally_ be called with the same arguments as main(), but it isn't
+ * defined to be, and sometimes will not be. (In particular, this failed with
+ * clang on Windows, which is a bad reason to do this on Linux, but whatever.)
+ * Source: https://stackoverflow.com/a/37358751 */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-variable"
+/* Add 'used' so that the variable is not optimised away. */
+__attribute__((section(".init_array"), used))
+  static void *process_options_ctor_entry = &process_options;
+#pragma GCC diagnostic pop
+#endif /* APPLE */
+#endif /* WIN32 */

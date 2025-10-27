@@ -28,10 +28,9 @@ module Data.Array.Accelerate.Trafo.Operation.LiveVars (
   reEnvArrayInstr,
   ShrinkArg(..), shrinkArgs, composeSubArgs,
 
-  defaultSlvGenerate, defaultSlvMap, defaultSlvBackpermute
+  defaultSlvGenerate, defaultSlvMap, defaultSlvBackpermute,
 ) where
 
-import Data.Array.Accelerate.AST.Idx
 import qualified Data.Array.Accelerate.AST.IdxSet as IdxSet
 import Data.Array.Accelerate.AST.Var
 import Data.Array.Accelerate.AST.LeftHandSide
@@ -43,7 +42,6 @@ import Data.Array.Accelerate.Trafo.Exp.Substitution
 import Data.Array.Accelerate.Trafo.LiveVars
 import Data.Array.Accelerate.Error
 
-import Data.Maybe
 import Data.Type.Equality
 
 stronglyLiveVariablesFun :: SLVOperation op => PreOpenAfun op () t -> PreOpenAfun op () t
@@ -82,7 +80,7 @@ stronglyLiveVariablesFun'' liveness us (Alam lhs (Abody body))
       $ \re -> if
         | BindLiveness lhs'' re' <- bind lhs' re ->
           Alam lhs'' $ Abody $ fromEither' $ body' re' SubTupRkeep
-stronglyLiveVariablesFun'' _ _ _ = internalError "Function impossible"
+stronglyLiveVariablesFun'' _ _ _ = internalError "Expected unary function"
 
 fromEither' :: Either a a -> a
 fromEither' (Left  x) = x
@@ -93,8 +91,8 @@ stronglyLiveVariables' liveness returns us = \case
   Exec op args
     | Just (ShrinkOperation shrinkOp) <- slvOperation op
     -- We can shrink this operation to output to part of its buffers.
-    , input <- IdxSet.fromList $ inputs args
-    , output <- IdxSet.fromList $ outputs args
+    , input <- IdxSet.fromList $ argsInputs args
+    , output <- IdxSet.fromList $ argsOutputs args
     , liveness1 <- addLiveImplications output input liveness ->
       LVAnalysis
         liveness1
@@ -112,7 +110,7 @@ stronglyLiveVariables' liveness returns us = \case
     -- Hence it's "all or nothing", if we use at least one of the output
     -- buffers, then the entire operation is live.
     | free <- IdxSet.fromList $ map (\(Exists (Var _ idx)) -> Exists idx) $ argsVars args
-    , output <- IdxSet.fromList $ outputs args
+    , output <- IdxSet.fromList $ argsOutputs args
     , liveness1 <- addLiveImplications output free liveness ->
       LVAnalysis
         liveness1
@@ -129,6 +127,13 @@ stronglyLiveVariables' liveness returns us = \case
       LVAnalysis
         liveness1
         $ \re s -> Right $ Return $ expectJust $ reEnvVars re $ subTupR s vars
+  Manifest var
+    | liveness1 <- returnVars returns (TupRsingle var) liveness ->
+      LVAnalysis
+        liveness1
+        $ \re s -> case s of
+          SubTupRskip -> Right $ Return TupRunit
+          SubTupRkeep -> Right $ Manifest $ expectJust $ reEnvVar re var
   Compute expr
     -- If the LHS of the binding is live, then all free variables of this
     -- expression are live as well.
@@ -296,21 +301,6 @@ defaultSlvBackpermute mkBackpermute = Just $ ShrinkOperation $ \subArgs args@(f 
 reEnvArrayInstr :: ReEnv env subenv -> ArrayInstr env t -> ArrayInstr subenv t
 reEnvArrayInstr re (Parameter var) = Parameter $ expectJust $ reEnvVar re var
 reEnvArrayInstr re (Index buffer)  = Index $ expectJust $ reEnvVar re buffer
-
-inputs :: Args env t -> [Exists (Idx env)]
-inputs = mapMaybe input . argsVars
-  where
-    input :: Exists (Var AccessGroundR env) -> Maybe (Exists (Idx env))
-    input (Exists (Var (AccessGroundRbuffer Out _) _)) = Nothing
-    input (Exists (Var _ idx)) = Just $ Exists idx
-
-outputs :: Args env t -> [Exists (Idx env)]
-outputs = mapMaybe output . argsVars
-  where
-    output :: Exists (Var AccessGroundR env) -> Maybe (Exists (Idx env))
-    output (Exists (Var (AccessGroundRbuffer Out _) idx)) = Just $ Exists idx
-    output (Exists (Var (AccessGroundRbuffer Mut _) idx)) = Just $ Exists idx
-    output _ = Nothing
 
 reEnvArgs :: ReEnv env subenv -> Args env t -> Args subenv t
 reEnvArgs re (a :>: as) = reEnvArg re a :>: reEnvArgs re as

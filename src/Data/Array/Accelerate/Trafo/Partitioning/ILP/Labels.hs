@@ -1,342 +1,676 @@
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE TypeApplications #-}
-{-# LANGUAGE TypeSynonymInstances #-}
-{-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE PatternSynonyms #-}
-{-# LANGUAGE EmptyCase #-}
+{-
+Module      : Data.Array.Accelerate.Trafo.Partitioning.ILP.LabelsNew
+Description : Nodes representing nodes in the graph.
+
+This module provides the labels that represent nodes in the graph. A node can
+either be a computation or a buffer.
+-}
 {-# LANGUAGE GADTs #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TemplateHaskell #-}
-{-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE InstanceSigs #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE ViewPatterns #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE BlockArguments #-}
 {-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE QuantifiedConstraints #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE PatternSynonyms #-}
 module Data.Array.Accelerate.Trafo.Partitioning.ILP.Labels where
 
-
--- accelerate imports
 import Data.Array.Accelerate.AST.Idx
-import Data.Array.Accelerate.AST.LeftHandSide ( LeftHandSide(..) )
+import Data.Array.Accelerate.AST.LeftHandSide
 import Data.Array.Accelerate.AST.Operation
-import Data.Array.Accelerate.Representation.Type
-import Data.Array.Accelerate.Type
-import Data.Array.Accelerate.Array.Buffer (Buffer, Buffers)
-import Data.Array.Accelerate.Representation.Array
 import Data.Array.Accelerate.Error
+import Data.Array.Accelerate.Array.Buffer
+import Data.Array.Accelerate.Representation.Type
 
--- In this file, order very often subly does matter.
--- To keep this clear, we use S.Set whenever it does not,
--- and [] only when it does. It's also often efficient
--- by removing duplicates.
+import Lens.Micro
+import Lens.Micro.Mtl
+
+import Data.Set (Set)
 import qualified Data.Set as S
 
-import Lens.Micro.TH ( makeLenses )
-import Control.Monad.State ( (>=>), State )
-import Lens.Micro.Mtl ((<%=))
-import qualified Data.Map as M
-import Lens.Micro ((^.))
-import Data.Bifunctor (first)
-import Data.Type.Equality
+import Data.Hashable (Hashable, hashWithSalt)
+import Prelude hiding (exp)
+
 import qualified Data.Functor.Const as C
-import qualified Debug.Trace
-
-{-
-Label is for each AST node: every exec, every let, every branch of control flow, etc has a unique label.
-Edge is a dependency between Labels
-
-ELabel is for Environments: the environment consists of array-level and expression-level values,
-we give each value a unique ELabel. This helps to re-index AST nodes and expressions and args into the new environment,
-provided that we have a LabelEnv with matching ELabels. We accomplish this by storing 'MyLHS's that contain ELabels, inside of Construction.
-
-LabelEnv also has a S.Set Label for each value, denoting the current outgoing edges from that value: This is volatile information, while all the rest is static.
-
-LabelArgs is the same as LabelEnv, except it is bound to Args. The ELabels in here point to the ELabels in Env
--}
+import Data.Coerce
+import Control.Monad.State.Strict
+import Data.Maybe (fromJust)
+import Data.List ( intercalate )
+import Debug.Trace
+import Data.Array.Accelerate.Analysis.Match
+import Data.Array.Accelerate.Representation.Ground (groundRelt)
+import qualified Data.Array.Accelerate.Pretty.Operation as P
+import qualified Data.Array.Accelerate.Pretty.Exp as P
+import Data.String (fromString)
 
 
 
+--------------------------------------------------------------------------------
+-- Nodes
+--------------------------------------------------------------------------------
 
--- identifies nodes with unique Ints. and tracks their dependencies
--- `Label x Nothing` means that label x is top-level.
--- `Label x (Just y)` means that label x is (at ilp-construction time determined to be) a subcomputation of label y
--- Invariant: for all x, there is at most one `Label x _`: the second field is not to discriminate vars but to log extra information.
-data Label = Label
-  { _labelId :: Int
-  , _parent :: Maybe Label
-  } -- deriving Show
-makeLenses ''Label
-instance Show Label where
-  -- show = ("Label"<>) . show . _labelId
-  show (Label i p) = "L" <> show i <> "{" <> show p <> "} "
-instance Eq Label where
-  (Label x a) == (Label y b)
-    | x == y = if a == b then True else error $ "same labelId but different parents: " <> show x <> show a <> " - " <> show b
-    | otherwise = False
-deriving instance Ord Label
-
-level :: Label -> Int
-level (Label _ Nothing)  = 0
-level (Label _ (Just l)) = 1 + level l
-
-type Labels = S.Set Label
-type ELabels = (ELabel, Labels)
-type ELabelTup = TupR (C.Const ELabel)
-data ALabel t where
-  Arr :: ELabelTup e -- elabel of buffer
-      -> ALabel (m sh e) -- only matches on arrays, but supports In, Out and Mut
-  NotArr :: ALabel (t e) -- matches on `Var' e`, `Exp' e` and `Fun' e` (is typecorrect on arrays, but wish it wasn't)
-deriving instance Show (ALabel t)
-
-type ALabels t = (ALabel t, Labels) -- An ELabel if it corresponds to an array, otherwise Nothing
-
--- Map identifiers to labels
-labelMap :: S.Set Label -> M.Map Int Label
-  -- TODO once it works, test M.fromDistinctAscList
-labelMap = M.fromList . map (\l -> (l^.labelId, l)) . S.toAscList
-
--- identifies elements of the environment with unique Ints.
-newtype ELabel = ELabel { runELabel :: Int }
-  deriving (Show, Eq, Ord, Num)
-
--- | Keeps track of which argument belongs to which labels
-data LabelledArg  env a = L (Arg env a) (ALabels a)
-type LabelledArgs env = PreArgs (LabelledArg env)
-
--- instance Show (LabelledArgs env args) where 
---   show ArgsNil = "ArgsNil"
---   show (L arg a :>: args) = "L " ++ x ++ " " ++ show a ++ " :>: " ++ show args
---     where x = case arg of
---             ArgVar tr -> "Var"
---             ArgExp poe -> "Exp"
---             ArgFun pof -> "Fun"
---             ArgArray mod ar tr tr' -> "Arr"
+data Comp  -- ^ The type of computation nodes.
+data GVal  -- ^ The type of ground value nodes.
 
 
--- instance Semigroup (LabelledArgs env args) where
---   ArgsNil <> ArgsNil = ArgsNil
---   -- TODO why am I perfectly fine with <> on an Arr with a NotArr?
---   (arg `L` (NotArr,l1)):>:largs1 <> (_ `L` (larg,   l2)):>:largs2 = arg `L` (larg, l1<>l2) :>: (largs1 <> largs2)
---   (arg `L` (larg,  l1)):>:largs1 <> (_ `L` (NotArr, l2)):>:largs2 = arg `L` (larg, l1<>l2) :>: (largs1 <> largs2)
---   _ <> _ = error "mappend for LabelArgs found two Arr labels"
-
-unLabel :: LabelledArgs env args -> Args env args
-unLabel ArgsNil              = ArgsNil
-unLabel (arg `L` _ :>: args) = arg :>: unLabel args
-
-reindexLabelledArg :: Applicative f => ReindexPartial f env env' -> LabelledArg env t -> f (LabelledArg env' t)
-reindexLabelledArg k (ArgVar vars                `L` l) = (`L` l)  .   ArgVar          <$> reindexVars k vars
-reindexLabelledArg k (ArgExp e                   `L` l) = (`L` l)  .   ArgExp          <$> reindexExp k e
-reindexLabelledArg k (ArgFun f                   `L` l) = (`L` l)  .   ArgFun          <$> reindexExp k f
-reindexLabelledArg k (ArgArray m repr sh buffers `L` l) = (`L` l) <$> (ArgArray m repr <$> reindexVars k sh <*> reindexVars k buffers)
-
-reindexLabelledArgs :: Applicative f => ReindexPartial f env env' -> LabelledArgs env t -> f (LabelledArgs env' t)
-reindexLabelledArgs = reindexPreArgs reindexLabelledArg
+-- | Nodes for referencing nodes.
+data Node t where
+  Node :: Int      -- ^ The computation node.
+       -> Parent   -- ^ The parent computation.
+       -> Node t
 
 
--- | Keeps track of which array in the environment belongs to which label
-data LabelEnv env where
-  LabelEnvNil :: LabelEnv ()
-  (:>>:)      :: ELabels -> LabelEnv t -> LabelEnv (t, s)
-instance Semigroup (LabelEnv env) where
-  LabelEnvNil <> LabelEnvNil = LabelEnvNil
-  (e1,l1):>>:lenv1 <> (e2,l2):>>:lenv2
-    | e1 == e2 = (e1, l1<>l2) :>>: (lenv1 <> lenv2)
-    | otherwise = error "mappend for LabelEnv found two different labels"
-
-instance Show (LabelEnv env) where
-  show LabelEnvNil = "LabelEnvNil"
-  show (e :>>: env) = show e ++ " :>>: " ++ show env
+-- | The parent of a node is either 'Nothing' (the root node) or 'Just' (a parent computation).
+type Parent = Maybe (Node Comp)
 
 
-freshE' :: State ELabel ELabel
+-- | Lens for getting and setting the nodes unique identifier.
+nodeId :: Lens' (Node t) Int
+nodeId f (Node i p) = f i <&> (`Node` p)
+
+
+-- | Lens for getting and setting the parent node.
+parent :: Lens' (Node t) Parent
+parent f (Node i p) = f p <&> Node i
+
+
+-- | Lens for setting and unsafely getting the parent.
+parent' :: Lens' (Node t) (Node Comp)
+parent' f (Node i p) = f (fromJust p) <&> (Node i . Just)
+
+
+-- | Lens for interpreting any node as a computation node.
+asComp :: Lens' (Node t) (Node Comp)
+asComp f l = coerce <$> f (coerce l)
+
+
+-- | Lens for interpreting any node as a buffer node.
+asBuff :: Lens' (Node t) (Node GVal)
+asBuff f l = coerce <$> f (coerce l)
+
+instance Show (Node Comp) where
+  show :: Node Comp -> String
+  show c = "C" ++ intercalate "." (map show . reverse $ nodeIds c)
+
+instance Show (Node GVal) where
+  show :: Node GVal -> String
+  show b = "B" ++ intercalate "." (map show . reverse $ nodeIds b)
+
+
+nodeIds :: Node t -> [Int]
+nodeIds l = l^.nodeId : maybe [] nodeIds (l^.parent)
+
+
+instance Eq (Node t) where
+  (==) :: Node t -> Node t -> Bool
+  (==) l1 l2 = (l1^.nodeId == l2^.nodeId) && checkMismatch (l1^.parent) (l2^.parent) True
+
+
+instance Ord (Node t) where
+  compare :: Node t -> Node t -> Ordering
+  compare l1 l2 = case compare (l1^.nodeId) (l2^.nodeId) of
+    EQ  -> checkMismatch (l1^.parent) (l2^.parent) EQ
+    ord -> ord
+
+
+-- | Checks if two parents are equal and throw an error if they are not.
+checkMismatch :: Parent -> Parent -> a -> a
+checkMismatch (Just l1) (Just l2) | l1 == l2 = id
+checkMismatch Nothing Nothing = id
+checkMismatch _ _ = internalError "mismatching nodes"
+
+
+instance Hashable (Node t) where
+  hashWithSalt :: Int -> Node t -> Int
+  hashWithSalt s l = hashWithSalt s (l^.nodeId)
+
+
+-- | Compute the nesting level of a 'Node'.
+level :: Node t -> Int
+level n = case n^.parent of
+  Nothing -> 0
+  Just p  -> 1 + level p
+
+
+-- | Compute the ancestry tree of a 'Node', staring with the ancestor underneath the root.
+ancestree :: Node Comp -> [Node Comp]
+ancestree n = ancestree' [n] n
+
+
+-- | Helper function for 'ancestree'.
+ancestree' :: [Node Comp] -> Node t -> [Node Comp]
+ancestree' ps n = case n^.parent of
+  Nothing -> ps
+  Just p  -> ancestree' (p:ps) p
+
+
+-- | Compute the difference between the 'ancestree's of two 'Node's.
+difftree :: Node Comp -> Node Comp -> ([Node Comp], [Node Comp])
+difftree n1 n2 = difftree' (ancestree n1) (ancestree n2)
+
+
+-- | Compute the difference between two 'ancestree's.
+difftree' :: [Node Comp] -> [Node Comp] -> ([Node Comp], [Node Comp])
+difftree' (x:xs) (y:ys) | x == y = difftree' xs ys
+difftree' xs ys = (xs, ys)
+
+
+-- | The first nodes in the 'ancestree's of the two 'Node's that differ, which
+--   may be one or both of the original 'Node's, but always two different 'Node's.
+ancestors :: Node Comp -> Node Comp -> Maybe (Node Comp, Node Comp)
+ancestors n1 n2 = case ancestors' n1 n2 of
+  (a1, a2) | a1 /= a2  -> Just (a1, a2)
+           | otherwise -> Nothing
+
+
+-- | The first nodes in the 'ancestree's of the two 'Node's that differ, which
+--   may be one or both of the original 'Node's.
+ancestors' :: Node Comp -> Node Comp -> (Node Comp, Node Comp)
+ancestors' n1 n2 = if n1^.parent == n2^.parent then (n1, n2)
+  else case compare (level n1) (level n2) of
+    LT -> ancestors'  n1           (n2^.parent')
+    GT -> ancestors' (n1^.parent')  n2
+    EQ -> ancestors' (n1^.parent') (n2^.parent')
+
+
+-- | Create a fresh 'Node'.
+freshL' :: State (Node t) (Node t)
+freshL' = id <%= (nodeId +~ 1)
+
+
+-- | Set of 'Node's.
+type Nodes t = Set (Node t)
+
+
+-- | A value consists of its type @s t@ and and the 'Node' that represents it.
+--
+-- This is probably redudant now, because we don't need the type information anymore,
+-- but I'll keep it for now because it might be useful for in-place updates accross while-loops.
+-- Then we'd need to know the value returned by the while-loop, which would need to be existentially quantified.
+data Val s t = Val { valType :: s t, valNodes :: Nodes GVal }
+
+
+-- | A 'TupR' of 'Val's.
+type Vals s = TupR (Val s)
+
+
+-- | The type of ground values.
+type GroundVal = Val GroundR
+
+
+-- | A 'TupR' of 'GroundVal's.
+type GroundVals = Vals GroundR
+
+
+val :: s t -> Node GVal -> Val s t
+val t = Val t . S.singleton
+
+
+-- | Get the nodes of 'Vals'.
+valsNodes :: Vals s t -> Nodes GVal
+valsNodes = foldMapTupR valNodes
+
+
+-- | Get the type of 'Vals'.
+valsType :: Vals s t -> TupR s t
+valsType = mapTupR valType
+
+
+-- | Match the types of two 'GroundVals'.
+matchGroundVals :: GroundVals s -> GroundVals t -> Maybe (s :~: t)
+matchGroundVals = matchTupR matchGroundVal
+
+
+-- | Match the types of two 'GroundVal's.
+matchGroundVal :: GroundVal s -> GroundVal t -> Maybe (s :~: t)
+matchGroundVal (Val t1 _) (Val t2 _) = matchGroundR t1 t2
+
+
+-- | Expect 'GroundVals' of the given type.
+expectGroundVals :: HasCallStack => GroundsR t -> Exists GroundVals -> GroundVals t
+expectGroundVals repr (Exists vals)
+  | Just Refl <- matchGroundsR repr (groundsR vals) = vals
+  | otherwise = internalError $ fromString $
+      "Result of lambda has unexpected type.\nExpected: "
+      ++ show (P.prettyTupR (const P.prettyGroundR) 0 repr)
+      ++ "\nActual: "
+      ++ show (P.prettyTupR (const P.prettyGroundR) 0 $ groundsR vals)
+
+
+instance HasGroundsR GroundVals where
+  groundsR :: GroundVals a -> GroundsR a
+  groundsR = valsType
+
+
+instance HasGroundsR GroundVal where
+  groundsR :: GroundVal a -> GroundsR a
+  groundsR (Val tp _) = TupRsingle tp
+
+
+instance Eq (Val s t) where
+  (==) :: Val s t -> Val s t -> Bool
+  (==) (Val _ n1) (Val _ n2) = n1 == n2
+
+
+instance Show (Val s t) where
+  show :: Val s t -> String
+  show (Val _ n) = "Val " ++ show n
+
+
+instance Semigroup (Val s t) where
+  (<>) :: Val s t -> Val s t -> Val s t
+  (<>) (Val tp n1) (Val _ n2) = Val tp (n1 <> n2)
+
+
+
+--------------------------------------------------------------------------------
+-- Labelled Environment
+--------------------------------------------------------------------------------
+
+-- | An 'EnvLabel' uniquely identifies an element of the environment.
+newtype EnvLabel = EnvLabel Int
+  deriving (Eq, Ord, Show, Num)
+
+
+-- | A 'TupR' of 'EnvLabel'.
+type EnvLabels = TupR (C.Const EnvLabel)
+
+
+-- | Create a fresh 'EnvLabel' from the current state.
+freshE' :: State EnvLabel EnvLabel
 freshE' = id <%= (+1)
 
 
--------------------------------
--- Traversals over stuff to add/extract Labels and ELabels,
--- or otherwise manipulate LabelArgs' or LabelEnvs
+-- | An environment value consists of a unique 'EnvLabel', the stored 'GroundVals'
+--   and the 'Uniquenesses' of the stored values.
+type EnvVal t = (EnvLabel, GroundVals t, Uniquenesses t)
 
 
--- | Note that this throws some info away: Pair (Wildcard, Single) and Pair (Single, Wildcard) give identical results.
--- Use sites need to store a LHS too.
-addLhs :: LeftHandSide s v env env' -> Labels -> LabelEnv env -> State ELabel (LabelEnv env')
-addLhs LeftHandSideWildcard{} _ = pure
-addLhs LeftHandSideSingle{}   l = \lenv -> freshE' >>= \e -> pure ((e, l) :>>: lenv)
-addLhs (LeftHandSidePair x y) l = addLhs x l >=> addLhs y l
+-- | A collection of multiple 'EnvVal's. Individual elements can be accessed by
+--   pattern matching on 'EnvLabels'.
+type EnvVals t = (EnvLabels t, GroundVals t, Uniquenesses t)
 
 
-weakLhsEnv :: LeftHandSide s v env env' -> LabelEnv env' -> LabelEnv env
-weakLhsEnv LeftHandSideSingle{} (_:>>: env) = env
-weakLhsEnv LeftHandSideWildcard{} env = env
-weakLhsEnv (LeftHandSidePair l r) env = weakLhsEnv l (weakLhsEnv r env)
-
-emptyLabelEnv :: LabelEnv env -> LabelEnv env
-emptyLabelEnv LabelEnvNil = LabelEnvNil
-emptyLabelEnv ((e,_):>>:env) = (e, mempty) :>>: emptyLabelEnv env
-
-getAllLabelsEnv :: LabelEnv env -> Labels
-getAllLabelsEnv LabelEnvNil = mempty
-getAllLabelsEnv ((_,set) :>>: lenv) = set <> getAllLabelsEnv lenv
-
-getLabelArgs :: Args env args -> LabelEnv env -> LabelledArgs env args
-getLabelArgs ArgsNil _ = ArgsNil
-getLabelArgs (arg :>: args) e = arg `L` getLabelsArg arg e :>: getLabelArgs args e
-
-getLabelsArg :: Arg env t -> LabelEnv env -> ALabels t
-getLabelsArg (ArgVar tup)                  env = first (const NotArr) (getLabelsTup tup env)
-getLabelsArg (ArgExp expr)                 env = getLabelsExp expr   env
-getLabelsArg (ArgFun fun)                  env = getLabelsFun fun    env
--- TODO this gets us the singleton label assigned to the buffer, check whether this doesn't make us use/write an array before we know its size
--- honestly, this just doesn't cut it. Need a better way to both label arguments (for reconstruction later) and track dependencies (for ILP solving),
--- using this one S.Set for both conflicts (as seen in 'const' vs 'insert')
-
--- The comment above is outdated, but I'm not sure what is going on here anymore. What are the two types of return arguments from getLabelsTup? Does it make sense that a TupRsingle always gives Right?
--- ALabels shouldn't contain a single ELabel for arrays, but a TupR of ELabels (one for each buffer)!
-
--- another update: adding the labels from the shapes now, and I see that there are tupr's of elabs already.
--- Maybe we should only return the sh labels for input arrays?
-getLabelsArg (ArgArray _ (ArrayR _ tp) shVars buVars) env =
-  let
-    (Arr x,             buLabs         ) = getLabelsTup buVars env
-    (Arr y,                      shLabs) = getLabelsTup shVars env
-  in ( --Debug.Trace.trace ("\n\ngetLabelsArg: buffer alabel:" <> show x <> "\nshape alabel:" <> show y <> "\nbuf labels:" <> show buLabs <> "\nshape labels:" <> show shLabs) $ 
-    unBuffers tp $ Arr x, buLabs <> shLabs)
-
-getLabelsTup :: TupR (Var a env) b -> LabelEnv env -> ALabels (m sh b)
-getLabelsTup TupRunit         _   = (Arr TupRunit, mempty)
-getLabelsTup (TupRsingle var) env = getLabelsVar var env
-getLabelsTup (TupRpair l r) env = let
-  (Arr l', lset) = getLabelsTup l env
-  (Arr r', rset) = getLabelsTup r env
-  in (Arr $ TupRpair l' r', lset <> rset)
--- getLabelsTup (TupRsingle var) env = Right $ getLabelsVar var env
--- getLabelsTup (TupRpair x y)   env = case (getLabelsTup x env, getLabelsTup y env) of
---   (Left  (_, a), Left  (_, b)) -> Left (NotArr, a <> b)
---   (Left  (_, a), Right (Arr z, b)) -> Right (Arr z, a <> b)
---   (Right (Arr z, a), Left  (_, b)) -> Right (Arr z, a <> b)
---   (Right (_, a), Right (_, b)) -> Left (NotArr, a <> b)
---   _ -> error "who?"
+-- | The environment used during graph construction.
+data Env env where
+  -- | The empty environment.
+  EnvNil :: Env ()
+  -- | The non-empty environment.
+  (:>>:) :: EnvVal t  -- ^ See 'EnvVal'.
+         -> Env env   -- ^ The rest of the environment.
+         -> Env (env, t)
 
 
-getLabelsVar :: Var s env t -> LabelEnv env -> ALabels (m sh t)
-getLabelsVar (varIdx -> idx) = getLabelsIdx idx
-
-getLabelsIdx :: Idx env a -> LabelEnv env -> ALabels (m sh a)
-getLabelsIdx ZeroIdx (el :>>: _) = first (Arr . TupRsingle . C.Const) el
-getLabelsIdx (SuccIdx idx) (_ :>>: env) = getLabelsIdx idx env
-
-getELabelIdx :: Idx env a -> LabelEnv env -> ELabel
-getELabelIdx ZeroIdx ((e,_) :>>: _) = e
-getELabelIdx (SuccIdx idx) (_ :>>: env) = getELabelIdx idx env
-
--- recurses through, only does interesting stuff at ArrayInstructions (first two cases)
-getLabelsExp :: OpenExp x env y -> LabelEnv env -> ALabels (Exp' y)
-getLabelsExp (ArrayInstr (Index var) poe') env     = let (_, a) = getLabelsVar var env
-                                                         (NotArr, b) = getLabelsExp poe' env
-                                                     in  (NotArr, a <> b)
-getLabelsExp (ArrayInstr (Parameter var) poe') env = let (_, a) = getLabelsVar var env
-                                                         (NotArr, b) = getLabelsExp poe' env
-                                                     in  (NotArr, a <> b)
-getLabelsExp (Let _ poe' poe2) env                 = let (NotArr, a) = getLabelsExp poe' env
-                                                         (NotArr, b) = getLabelsExp poe2 env
-                                                     in  (NotArr, a <> b)
-getLabelsExp (Evar _) _                            = (NotArr, mempty)
-getLabelsExp Foreign{} _                           = (NotArr, mempty) -- TODO the fallback can't do indexing, ignoring the foreign
-getLabelsExp (Pair poe' poe2) env                  = let (NotArr, a) = getLabelsExp poe' env
-                                                         (NotArr, b) = getLabelsExp poe2 env
-                                                     in  (NotArr, a <> b)
-getLabelsExp Nil _                                 = (NotArr, mempty)
-getLabelsExp (VecPack _ poe') env                  = first (\NotArr -> NotArr) $ getLabelsExp poe' env
-getLabelsExp (VecUnpack _ poe') env                = first (\NotArr -> NotArr) $ getLabelsExp poe' env
-getLabelsExp (IndexSlice _ poe' poe2) env   = let (NotArr, a) = getLabelsExp poe' env
-                                                  (NotArr, b) = getLabelsExp poe2 env
-                                              in  (NotArr, a <> b)
-getLabelsExp (IndexFull _ poe' poe2) env    = let (NotArr, a) = getLabelsExp poe' env
-                                                  (NotArr, b) = getLabelsExp poe2 env
-                                              in  (NotArr, a <> b)
-getLabelsExp (ToIndex _ poe' poe2) env      = let (NotArr, a) = getLabelsExp poe' env
-                                                  (NotArr, b) = getLabelsExp poe2 env
-                                              in  (NotArr, a <> b)
-getLabelsExp (FromIndex _ poe' poe2) env    = let (NotArr, a) = getLabelsExp poe' env
-                                                  (NotArr, b) = getLabelsExp poe2 env
-                                              in  (NotArr, a <> b)
-getLabelsExp (Case poe' x0 Nothing) env     = let (NotArr, a) = foldr (\((`getLabelsExp` env) . snd -> (NotArr, c)) (NotArr, d) -> (NotArr, c <> d))
-                                                                      (NotArr, mempty)
-                                                                      x0
-                                                  (NotArr, b) = getLabelsExp poe' env
-                                              in  (NotArr, a <> b)
-getLabelsExp (Case poe' x0 (Just poe)) env  = let (NotArr, a) = getLabelsExp (Case poe' x0 Nothing) env
-                                                  (NotArr, b) = getLabelsExp poe env
-                                              in  (NotArr, a <> b)
-getLabelsExp (Cond poe' poe2 poe3) env      = let (NotArr, a) = getLabelsExp poe' env
-                                                  (NotArr, b) = getLabelsExp poe2 env
-                                                  (NotArr, c) = getLabelsExp poe3 env
-                                              in  (NotArr, a <> b <> c)
-getLabelsExp (While pof pof' poe') env      = let (NotArr, a) = getLabelsFun pof env
-                                                  (NotArr, b) = getLabelsFun pof' env
-                                                  (NotArr, c) = getLabelsExp poe' env
-                                              in  (NotArr, a <> b <> c)
-getLabelsExp (Const _ _) _                  = (NotArr, mempty)
-getLabelsExp (PrimConst _) _                = (NotArr, mempty)
-getLabelsExp (PrimApp _ poe') env           = first (\NotArr -> NotArr) $ getLabelsExp poe' env
-getLabelsExp (ShapeSize _ poe') env         = first (\NotArr -> NotArr) $ getLabelsExp poe' env
-getLabelsExp (Undef _) _                    = (NotArr, mempty)
-getLabelsExp Coerce {} _                    = (NotArr, mempty)
-getLabelsExp (Assert poe' poe2) env         = let (NotArr, a) = getLabelsExp poe' env
-                                                  (NotArr, b) = getLabelsExp poe2 env
-                                              in  (NotArr, a <> b)
-getLabelsFun :: OpenFun x env y -> LabelEnv env -> ALabels (Fun' y)
-getLabelsFun (Body expr) lenv = first body $ getLabelsExp expr lenv
-getLabelsFun (Lam _ fun) lenv = first lam  $ getLabelsFun fun  lenv
-
--- | Replaces the labelset associated with the buffers of out-args with `S.singleton l`.
-updateLabelEnv :: Args env args -> LabelEnv env -> Label -> LabelEnv env
-updateLabelEnv ArgsNil lenv _ = lenv
-updateLabelEnv (arg :>: args) lenv l = case arg of
-  -- We only look at the 'Buffer' vars here, not the 'shape' ones.
-  ArgArray Out _ _ vars -> updateLabelEnv args (insertAtVars vars lenv $ const $ S.singleton l) l
-  ArgArray Mut _ _ vars -> updateLabelEnv args (insertAtVars vars lenv $ const $ S.singleton l) l
-  _ -> updateLabelEnv args lenv l
-
--- Updates the labels with a function. Currently, this is always `const (S.singleton l)`
-insertAtVars :: TupR (Var a env) b -> LabelEnv env -> (Labels -> Labels) -> LabelEnv env
-insertAtVars TupRunit lenv _ = lenv
-insertAtVars (TupRpair x y) lenv f = insertAtVars x (insertAtVars y lenv f) f
-insertAtVars (TupRsingle (Var t idx)) ((e,lset) :>>: lenv) f = case idx of
-  ZeroIdx -> (e, f lset) :>>: lenv
-  SuccIdx idx' ->       (e, lset) :>>: insertAtVars (TupRsingle (Var t idx')) lenv f
-insertAtVars (TupRsingle (Var _ idx)) LabelEnvNil _ = case idx of VoidIdx x -> x -- convincing the pattern coverage checker of the impossible case
-
--- | Like `getLabelArgs`, but ignores the `Out` arguments
-getInputArgLabels :: Args env args -> LabelEnv env -> Labels
-getInputArgLabels ArgsNil _ = mempty
-getInputArgLabels (arg :>: args) lenv = getInputArgLabels args lenv <> case arg of
-  ArgArray Out _ _ _ -> mempty
-  _ -> snd $ getLabelsArg arg lenv
-
-getOutputArgLabels :: Args env args -> LabelEnv env -> Labels
-getOutputArgLabels ArgsNil _ = mempty
-getOutputArgLabels (arg :>: args) lenv = getOutputArgLabels args lenv <> case arg of
-  ArgArray In _ _ _ -> mempty
-  _ -> snd $ getLabelsArg arg lenv
+instance Show (Env env) where
+  show :: Env env -> String
+  show EnvNil = "EnvNil"
+  show (envl :>>: env) = show envl ++ " :>>: " ++ show env
 
 
-body :: ALabel (Exp' e) -> ALabel (Fun' e)
-body NotArr = NotArr
-lam  :: ALabel (Fun' f) -> ALabel (Fun' (e->f))
-lam  NotArr = NotArr
+-- | Constructs a new 'Env' by prepending labels for each element in the left-hand side.
+weakenEnv :: LeftHandSide s v env env' -> GroundVals v -> Uniquenesses v -> Env env -> State EnvLabel (Env env')
+weakenEnv LeftHandSideWildcard{} _ _ = pure
+weakenEnv LeftHandSideSingle{} bs us = \lenv -> freshE' >>= \e -> return ((e, bs, us) :>>: lenv)
+weakenEnv (LeftHandSidePair l r) (TupRpair lbs rbs) (TupRpair lus rus) = weakenEnv l lbs lus >=> weakenEnv r rbs rus
+weakenEnv (LeftHandSidePair _ _) _ _ = internalError "mismatching left-hand side"
 
-unBuffers :: forall m sh e. TypeR e -> ALabel (m sh (Buffers e)) -> ALabel (m sh e)
-unBuffers TupRunit _ = Arr TupRunit
-unBuffers (TupRsingle t) (Arr (TupRsingle (C.Const e)))
-  | Refl <- reprIsSingle @ScalarType @e @Buffer t
-   = Arr (TupRsingle $ C.Const e)
-unBuffers (TupRpair t1 t2) (Arr (TupRpair l r))
-  | Arr l' <- unBuffers t1 (Arr l)
-  , Arr r' <- unBuffers t2 (Arr r)
-  = Arr (TupRpair l' r')
-unBuffers _ (Arr _) = internalError "Tuple mismatch"
-unBuffers _ _ = internalError "Not an array"
+
+-- | Look up 'Vars' in 'Env', returing 'EnvVals'.
+lookupVars :: Vars a env b -> Env env -> EnvVals b
+lookupVars TupRunit         _   = (TupRunit, TupRunit, TupRunit)
+lookupVars (TupRsingle var) env | (e, bs, u) <- lookupVar var env
+                                    = (TupRsingle (C.Const e), bs, u)
+lookupVars (TupRpair l r)   env | (el, bsl, ul) <- lookupVars l env
+                                    , (er, bsr, ur) <- lookupVars r env
+                                    = (TupRpair el er, TupRpair bsl bsr, TupRpair ul ur)
+
+
+-- | Look up a 'Var' in 'Env', returning an 'EnvVal'.
+lookupVar :: Var a env b -> Env env -> EnvVal b
+lookupVar = lookupIdx . varIdx
+
+
+-- | Look up an 'Idx' in 'Env', returning an 'EnvVal'.
+lookupIdx :: Idx env t -> Env env -> EnvVal t
+lookupIdx ZeroIdx       (bs :>>: _)   = bs
+lookupIdx (SuccIdx idx) (_  :>>: env) = lookupIdx idx env
+
+
+
+--------------------------------------------------------------------------------
+-- Bound left-hand side
+--------------------------------------------------------------------------------
+
+-- | A 'LeftHandSide' and the 'EnvVal' bound by it.
+data BoundLHS s v env env' where
+  BoundLHSsingle
+    :: EnvVal v
+    -> s v
+    -> BoundLHS s v env (env, v)
+
+  BoundLHSwildcard
+    :: TupR s v
+    -> BoundLHS s v env env
+
+  BoundLHSpair
+    :: BoundLHS s v1       env  env'
+    -> BoundLHS s v2       env' env''
+    -> BoundLHS s (v1, v2) env  env''
+
+instance Show (BoundLHS s v env env') where
+  show :: BoundLHS s v env env' -> String
+  show (BoundLHSsingle e _) = "BLHS(" ++ show e ++ ")"
+  show (BoundLHSwildcard _) = "BLHS_"
+  show (BoundLHSpair l r)   = "BLHS(" ++ show l ++ ", " ++ show r ++ ")"
+
+
+-- | The type of left-hand sides binding ground values.
+type BoundGLHS = BoundLHS GroundR
+
+
+-- | Bind values to the 'LeftHandSide' that produced the 'Env'
+bindLHS :: LeftHandSide s v env env' -> Env env' -> BoundLHS s v env env'
+bindLHS (LeftHandSideSingle sv) (l :>>: _) = BoundLHSsingle l sv
+bindLHS (LeftHandSideWildcard tr) _ = BoundLHSwildcard tr
+bindLHS (LeftHandSidePair l r) env = BoundLHSpair (bindLHS l (stripLHS r env)) (bindLHS r env)
+
+
+-- | Unbind values from the 'BoundLHS'.
+unbindLHS :: BoundLHS s v env env' -> LeftHandSide s v env env'
+unbindLHS (BoundLHSsingle _ sv) = LeftHandSideSingle sv
+unbindLHS (BoundLHSwildcard tr) = LeftHandSideWildcard tr
+unbindLHS (BoundLHSpair l r)    = LeftHandSidePair (unbindLHS l) (unbindLHS r)
+
+
+-- | Strip the values bound by the 'LeftHandSide' from the 'Env'.
+stripLHS :: LeftHandSide s v env env' -> Env env' -> Env env
+stripLHS (LeftHandSideSingle _) (_ :>>: le') = le'
+stripLHS (LeftHandSideWildcard _) le = le
+stripLHS (LeftHandSidePair l r) le = stripLHS l (stripLHS r le)
+
+
+createLHS :: BoundLHS s v _env _env'
+          -> Env env
+          -> (forall env'. Env env' -> LeftHandSide s v env env' -> r)
+          -> r
+createLHS (BoundLHSsingle e sv) env k = k (e :>>: env) (LeftHandSideSingle sv)
+createLHS (BoundLHSwildcard tr) env k = k env (LeftHandSideWildcard tr)
+createLHS (BoundLHSpair l r)    env k =
+  createLHS   l env  $ \env'  l' ->
+    createLHS r env' $ \env'' r' ->
+      k env'' (LeftHandSidePair l' r')
+
+
+
+--------------------------------------------------------------------------------
+-- Labelled Arguments
+--------------------------------------------------------------------------------
+
+-- | A label to add to function arguments.
+--
+-- If the argument is an array, then we need all information about the array and its
+-- shape from the environment.
+-- If the argument is not an array, e.g. a scalar, function or expression, then we only
+-- need 'Node's referenced by the scalar, function or expression.
+data ArgLabel t where
+  -- | The argument is an array.
+  Arr     :: EnvVals (Buffers e)  -- ^ The array values.
+          -> EnvVals sh           -- ^ The shape values.
+          -> ArgLabel (m sh e)
+  -- | The argument is a scalar 'Var'', 'Exp'' or 'Fun''.
+  NotArr  :: Nodes GVal  -- ^ The variables referenced by the argument.
+          -> ArgLabel (t e)
+
+deriving instance Show (ArgLabel t)
+
+
+-- | Get the set of dependent buffers of an 'ArgLabel'.
+getLabelDeps :: ArgLabel t -> Nodes GVal
+getLabelDeps (Arr (_, arr, _) (_, sh, _)) = valsNodes arr <> valsNodes sh
+getLabelDeps (NotArr deps) = deps
+
+
+-- | Get the set of unique array dependencies of an 'ArgLabel'.
+getLabelUniqueArrDeps :: ArgLabel t -> Nodes GVal
+getLabelUniqueArrDeps (Arr (_, arr, u) _) = uniqueNodes u arr
+getLabelUniqueArrDeps (NotArr _) = internalError "getLabelUniqueArrDeps: Expected Arr but got NotArr"
+
+
+-- | Given 'Uniquenesses', get the unique nodes from 'GroundVals'.
+uniqueNodes :: Uniquenesses e -> GroundVals e -> Nodes GVal
+uniqueNodes TupRunit TupRunit      = mempty
+uniqueNodes (TupRsingle Shared) _  = mempty
+uniqueNodes (TupRsingle Unique) bs = valsNodes bs
+uniqueNodes (TupRpair ul ur) (TupRpair l r) = uniqueNodes ul l <> uniqueNodes ur r
+uniqueNodes _ _ = internalError "uniqueNodes: Tuple mismatch "
+
+
+-- | Get the arrays of an 'ArgLabel'.
+getLabelArrays :: ArgLabel (m sh e) -> GroundVals (Buffers e)
+getLabelArrays (Arr (_, arr, _) (_, _, _)) = arr
+getLabelArrays (NotArr _) = internalError "getLabelArrays: Expected Arr but got NotArr"
+
+
+-- | Get the array dependencies of an 'ArgLabel'.
+getLabelArrDeps :: ArgLabel (m sh e) -> Nodes GVal
+getLabelArrDeps = valsNodes . getLabelArrays
+
+
+-- | Get a single array dependency of an 'ArgLabel'.
+getLabelArrDep :: ArgLabel (m sh e) -> Node GVal
+getLabelArrDep = foldr1 const . getLabelArrDeps
+
+
+-- | Get the shapes of an 'ArgLabel'.
+getLabelShape :: ArgLabel (m sh e) -> GroundVals sh
+getLabelShape (Arr (_, _, _) (_, sh, _)) = sh
+getLabelShape (NotArr _) = internalError "getLabelShape: Expected Arr but got NotArr"
+
+
+-- | Get the shape dependencies of an 'ArgLabel'.
+getLabelShDeps :: ArgLabel (m sh e) -> Nodes GVal
+getLabelShDeps = valsNodes . getLabelShape
+
+
+-- | Check if two arguments have the same shape.
+sameShape :: ArgLabel (m1 sh1 e1) -> ArgLabel (m2 sh2 e2) -> Bool
+sameShape (getLabelShape -> sh1) (getLabelShape -> sh2)
+  | Just Refl <- matchGroundVals sh1 sh2 = sh1 == sh2
+  | otherwise = False
+
+
+-- | The argument to a function paired with an 'ArgLabel'
+data LabelledArg env t = L (Arg env t) (ArgLabel t)
+  deriving (Show)
+
+
+-- | Arguments to a function paired with their 'ArgLabel's.
+type LabelledArgs env = PreArgs (LabelledArg env)
+
+
+-- | Node the arguments to a function using the given environment.
+labelArgs :: Args env args -> Env env -> LabelledArgs env args
+labelArgs (arg :>: args) env = labelArg arg env :>: labelArgs args env
+labelArgs ArgsNil _ = ArgsNil
+
+
+-- | Get the 'ArgLabels' associated with 'Arg' from 'Env'.
+labelArg :: Arg env t -> Env env -> LabelledArg env t
+labelArg arg env = L arg $ case arg of
+  (ArgVar vars) -> NotArr $ getVarsDeps vars env
+  (ArgExp exp)  -> NotArr $ getExpDeps  exp  env
+  (ArgFun fun)  -> NotArr $ getFunDeps  fun  env
+  (ArgArray _ _ sh arr) ->
+    Arr (lookupVars arr env) (lookupVars sh env)
+
+
+
+-- | Get the dependencies of a tuple of variables.
+getVarsDeps :: Vars s env t -> Env env -> Nodes GVal
+getVarsDeps vars = valsNodes . (^._2) . lookupVars vars
+
+
+-- | Get the dependencies of a tuple of variables.
+getVarDeps :: Var s env t -> Env env -> Nodes GVal
+getVarDeps var = valsNodes . (^._2) . lookupVar var
+
+
+-- | Get the dependencies of an expression.
+getExpDeps :: OpenExp x env y -> Env env -> Nodes GVal
+getExpDeps (ArrayInstr (Index     var) poe) env = getVarDeps var  env <> getExpDeps poe  env
+getExpDeps (ArrayInstr (Parameter var) poe) env = getVarDeps var  env <> getExpDeps poe  env
+getExpDeps (Let _ poe1 poe2)                env = getExpDeps poe1 env <> getExpDeps poe2 env
+getExpDeps (Evar _)                         _   = mempty
+getExpDeps  Foreign{}                       _   = mempty
+getExpDeps (Pair  poe1 poe2)                env = getExpDeps poe1 env <> getExpDeps poe2 env
+getExpDeps  Nil                             _   = mempty
+getExpDeps (VecPack _ poe)                  env = getExpDeps poe  env
+getExpDeps (VecUnpack _ poe)                env = getExpDeps poe  env
+getExpDeps (IndexSlice _ poe1 poe2)         env = getExpDeps poe1 env <> getExpDeps poe2 env
+getExpDeps (IndexFull  _ poe1 poe2)         env = getExpDeps poe1 env <> getExpDeps poe2 env
+getExpDeps (ToIndex    _ poe1 poe2)         env = getExpDeps poe1 env <> getExpDeps poe2 env
+getExpDeps (FromIndex  _ poe1 poe2)         env = getExpDeps poe1 env <> getExpDeps poe2 env
+getExpDeps (Case poe1 poes poe2)            env = getExpDeps poe1 env <>
+                                                  foldMap ((`getExpDeps` env) . snd) poes <>
+                                                  maybe mempty (`getExpDeps` env) poe2
+getExpDeps (Cond poe1 poe2 exp3)            env = getExpDeps poe1 env <>
+                                                  getExpDeps poe2 env <>
+                                                  getExpDeps exp3 env
+getExpDeps (While pof1 pof2 poe)            env = getFunDeps pof1 env <>
+                                                  getFunDeps pof2 env <>
+                                                  getExpDeps poe  env
+getExpDeps (Const _ _)                      _   = mempty
+getExpDeps (PrimConst _)                    _   = mempty
+getExpDeps (PrimApp   _ poe)                env = getExpDeps poe  env
+getExpDeps (ShapeSize _ poe)                env = getExpDeps poe  env
+getExpDeps (Undef _)                        _   = mempty
+getExpDeps  Coerce{}                        _   = mempty
+
+
+-- | Get the dependencies of a function.
+getFunDeps :: OpenFun x env y -> Env env -> Nodes GVal
+getFunDeps (Body  poe) env = getExpDeps poe env
+getFunDeps (Lam _ fun) env = getFunDeps fun env
+
+
+
+--------------------------------------------------------------------------------
+-- Helpers for Labelled Arguments
+--------------------------------------------------------------------------------
+
+-- | Map a function over the labelled arguments.
+mapLArgs :: (forall s. LabelledArg env s -> LabelledArg env s) -> LabelledArgs env t -> LabelledArgs env t
+mapLArgs _ ArgsNil = ArgsNil
+mapLArgs f (larg :>: largs) = f larg :>: mapLArgs f largs
+
+-- | Fold over the labelled arguments and combine the resulting monoidal values.
+foldMapLArgs :: Monoid m => (forall s. LabelledArg env s -> m) -> LabelledArgs env t -> m
+foldMapLArgs _ ArgsNil = mempty
+foldMapLArgs f (larg :>: largs) = f larg <> foldMapLArgs f largs
+
+-- | Map a monadic function over the labelled arguments.
+mapLArgsM :: Monad m => (forall s. LabelledArg env s -> m (LabelledArg env s)) -> LabelledArgs env t -> m (LabelledArgs env t)
+mapLArgsM _ ArgsNil = return ArgsNil
+mapLArgsM f (larg :>: largs) = do
+  larg'  <- f larg
+  largs' <- mapLArgsM f largs
+  return (larg' :>: largs')
+
+-- | Flipped version of 'mapLArgsM'.
+forLArgsM :: Monad m => LabelledArgs env t -> (forall s. LabelledArg env s -> m (LabelledArg env s)) -> m (LabelledArgs env t)
+forLArgsM largs f = mapLArgsM f largs
+{-# INLINE forLArgsM #-}
+
+-- | Map a monadic action over the labelled arguments and discard the result.
+mapLArgsM_ :: Monad m => (forall s. LabelledArg env s -> m ()) -> LabelledArgs env t -> m ()
+mapLArgsM_ _ ArgsNil = return ()
+mapLArgsM_ f (larg :>: largs) = f larg >> mapLArgsM_ f largs
+
+-- | Flipped version of 'mapLArgsM_'.
+forLArgsM_ :: Monad m => LabelledArgs env t -> (forall s. LabelledArg env s -> m ()) -> m ()
+forLArgsM_ largs f = mapLArgsM_ f largs
+{-# INLINE forLArgsM_ #-}
+
+-- | Map a monadic function over the labelled arguments and accumulate the result.
+mapAccumLArgsM :: Monad m => (forall s. a -> LabelledArg env s -> m (a, LabelledArg env s)) -> a -> LabelledArgs env t -> m (a, LabelledArgs env t)
+mapAccumLArgsM _ a ArgsNil = return (a, ArgsNil)
+mapAccumLArgsM f a (larg :>: largs) = do
+  (acc' , larg')  <- f a larg
+  (acc'', largs') <- mapAccumLArgsM f acc' largs
+  return (acc'', larg' :>: largs')
+
+-- | Flipped version of 'mapAccumLArgsM'.
+forAccumLArgsM :: Monad m => a -> LabelledArgs env t -> (forall s. a -> LabelledArg env s -> m (a, LabelledArg env s)) -> m (a, LabelledArgs env t)
+forAccumLArgsM a largs f = mapAccumLArgsM f a largs
+{-# INLINE forAccumLArgsM #-}
+
+-- | Traverse over the labelled arguments.
+traverseLArgs :: Applicative f => (forall s. LabelledArg env s -> f (LabelledArg env s)) -> LabelledArgs env t -> f (LabelledArgs env t)
+traverseLArgs _ ArgsNil = pure ArgsNil
+traverseLArgs f (larg :>: largs) = (:>:) <$> f larg <*> traverseLArgs f largs
+
+-- | Flipped version of 'traverseLArgs'.
+forLArgs :: Applicative f => LabelledArgs env t -> (forall s. LabelledArg env s -> f (LabelledArg env s)) -> f (LabelledArgs env t)
+forLArgs largs f = traverseLArgs f largs
+{-# INLINE forLArgs #-}
+
+-- | Traverse over the labelled arguments and discard the result.
+traverseLArgs_ :: Applicative f => (forall s. LabelledArg env s -> f ()) -> LabelledArgs env t -> f ()
+traverseLArgs_ _ ArgsNil = pure ()
+traverseLArgs_ f (larg :>: largs) = f larg *> traverseLArgs_ f largs
+
+-- | Flipped version of 'traverseLArgs_'.
+forLArgs_ :: Applicative f => LabelledArgs env t -> (forall s. LabelledArg env s -> f ()) -> f ()
+forLArgs_ largs f = traverseLArgs_ f largs
+{-# INLINE forLArgs_ #-}
+
+-- | All arrays that the function reads from.
+inputArrays :: LabelledArgs env t -> Nodes GVal
+inputArrays = foldMapLArgs \case
+  L (ArgArray In  _ _ _) (Arr (_,arr,_) _) -> valsNodes arr
+  L (ArgArray Mut _ _ _) (Arr (_,arr,_) _) -> valsNodes arr
+  _ -> mempty
+
+-- | All arrays that the function writes to.
+outputArrays :: LabelledArgs env t -> Nodes GVal
+outputArrays = foldMapLArgs \case
+  L (ArgArray Out _ _ _) (Arr (_,arr,_) _) -> valsNodes arr
+  L (ArgArray Mut _ _ _) (Arr (_,arr,_) _) -> valsNodes arr
+  _ -> mempty
+
+-- | All non-array arguments and array shapes.
+notArrays :: LabelledArgs env t -> Nodes GVal
+notArrays = foldMapLArgs \case
+  L _ (Arr _ (_,sh,_)) -> valsNodes sh
+  L _ (NotArr deps)    -> deps
+
+-- | Fold map over all inputs.
+foldMapInputLabels :: Monoid m => (forall sh e. ArgLabel (In sh e) -> m) -> LabelledArgs env t -> m
+foldMapInputLabels f = foldMapLArgs \case
+  L (ArgArray In _ _ _) l -> f l
+  _ -> mempty
+
+-- | Fold map over all outputs.
+foldMapOutputLabels :: Monoid m => (forall sh e. ArgLabel (Out sh e) -> m) -> LabelledArgs env t -> m
+foldMapOutputLabels f = foldMapLArgs \case
+  L (ArgArray Out _ _ _) l -> f l
+  _ -> mempty
+
+
+
+--------------------------------------------------------------------------------
+-- Debugging
+--------------------------------------------------------------------------------
+
+-- | Trace a value using a function to format the output.
+traceWith :: (Show a) => (a -> String) -> a -> a
+traceWith f x = trace (f x) x
+{-# INLINE traceWith #-}

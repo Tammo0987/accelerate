@@ -1,5 +1,4 @@
 {-# LANGUAGE AllowAmbiguousTypes #-}
-{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE KindSignatures #-}
@@ -11,34 +10,39 @@
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE ViewPatterns #-}
-{-# LANGUAGE PatternSynonyms #-}
-{-# LANGUAGE EmptyCase #-}
+
+
 
 -- _Significantly_ speeds up compilation of this file, but at an obvious cost!
 -- Even in GHC 9.0.1, which has Lower Your Guards, these checks take some time (though no longer quite as long).
 -- Recommended to disable these options when working on this file, and restore them when you're done.
-{-# OPTIONS_GHC 
-  -Wno-overlapping-patterns 
-  -Wno-incomplete-patterns 
-#-}
+-- {-# OPTIONS_GHC
+--   -Wno-overlapping-patterns
+--   -Wno-incomplete-patterns
+-- #-}
 {-# LANGUAGE BlockArguments #-}
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE InstanceSigs #-}
+{-# LANGUAGE BangPatterns #-}
 
 module Data.Array.Accelerate.Trafo.Partitioning.ILP.Clustering where
 
 import Data.Array.Accelerate.AST.LeftHandSide ( Exists(..), LeftHandSide (..), lhsToTupR )
 import Data.Array.Accelerate.AST.Partitioned
 import Data.Array.Accelerate.AST.Var
+import Data.Array.Accelerate.AST.Operation ( ReindexPartial )
 import Data.Array.Accelerate.Representation.Type
 import Data.Array.Accelerate.Type ( scalarType )
-import Data.Array.Accelerate.Trafo.Partitioning.ILP.Graph hiding (info)
-import Data.Array.Accelerate.Trafo.Partitioning.ILP.Labels hiding (ELabels)
+import Data.Array.Accelerate.Trafo.Operation.Simplify
+import Data.Array.Accelerate.Trafo.Partitioning.ILP.Graph hiding (readEdges, writeEdges, strictEdges, dataflowEdges, symbols, graph)
+import Data.Array.Accelerate.Trafo.Partitioning.ILP.Labels hiding (EnvLabelTupF)
 import Data.Array.Accelerate.Analysis.Match
 import Data.Array.Accelerate.Error
 
 import qualified Data.Map as M
 import qualified Data.Graph as G
 import qualified Data.Set as S
-import Data.Maybe (fromJust)
+import Data.Maybe (fromJust, fromMaybe)
 import Data.Type.Equality ( type (:~:)(Refl) )
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Solve (ClusterLs (Execs, NonExec))
 import Data.Array.Accelerate.AST.Environment (weakenWithLHS)
@@ -55,14 +59,9 @@ import Data.String (fromString)
 import qualified Data.Array.Accelerate.Pretty.Operation as P
 import qualified Data.Array.Accelerate.Pretty.Exp as P
 
--- "open research question"
--- -- Each set of ints corresponds to a set of Constructions, which themselves contain a set of ints (the things they depend on).
--- -- Some of those ints will refer to nodes in previous clusters, others to nodes in this cluster.
--- One pass over these datatypes (back-to-front) should identify the 'output type' of each cluster: which nodes are needed in later clusters?
--- Then, we can construct the clusters front-to-back:
---    identify the nodes that only depend on nodes outside of the cluster, they are the initials
---    the `output type` indicates which nodes we will need to keep: they are all either a final node in the cluster, or get diagonally fused
--- How exactly we can use this information (and a dep. graph) to construct a cluster of ver,hor,diag is not clear.. Will also depend on the exact cluster definition.
+import Lens.Micro
+import Debug.Trace
+import Data.Foldable (fold)
 
 {-
 Within each cluster (Labels), we do a topological sort using the edges in Graph
@@ -70,10 +69,10 @@ Within each cluster (Labels), we do a topological sort using the edges in Graph
 Data.Graph (containers) has a nice topological sort.
 -}
 
-(!??) :: (Ord a1, Show a1) => M.Map a1 a2 -> a1 -> a2
+(!??) :: (Ord a1, Show a1, HasCallStack) => M.Map a1 a2 -> a1 -> a2
 map' !?? key = case map' M.!? key of
   Just x -> x
-  Nothing -> error $ ("error: map with keys " <> show (M.keys map') <> " does not contain key " <> show key)
+  Nothing -> error ("error: map with keys " <> show (M.keys map') <> " does not contain key " <> show key)
 
 -- instance Show (Exists a) where
 --   show (Exists x) = "exis"
@@ -82,169 +81,176 @@ map' !?? key = case map' M.!? key of
 -- (namely, what it was before fusion), via an GroundsR.
 -- Since fusion goes via an untyped ILP, during reconstruction we need to rebuild the program and temporarily
 -- fulfill this contract: if something goes wrong during fusion or at the caller, bad things happen.
-reconstruct :: forall op a. MakesILP op => GroundsR a -> Bool -> Graph -> [ClusterLs] -> M.Map Label [ClusterLs] -> M.Map Label (Construction op) -> PreOpenAcc (Clustered op) () a
-reconstruct repr a b c d e = case openReconstruct a LabelEnvNil b c d e of
+reconstruct :: forall op a. (MakesILP op, SimplifyOperation op) => GroundsR a -> Bool -> FusionGraph -> [ClusterLs] -> M.Map (Node Comp) [ClusterLs] -> Symbols op -> ReadDirM -> InplaceM -> PreOpenAcc (Clustered op) () a
+reconstruct repr a b c d e f g = case openReconstruct a EnvNil b c d e f g of
           Exists res -> expectType repr res
 
-reconstructF :: forall op a. MakesILP op => PreOpenAfun op () a -> Bool -> Graph -> [ClusterLs] -> M.Map Label [ClusterLs] -> M.Map Label (Construction op)  -> PreOpenAfun (Clustered op) () a
-reconstructF original a b c d e = case openReconstructF a LabelEnvNil b c (Label 1 Nothing) d e of
+reconstructF :: forall op a. (MakesILP op, SimplifyOperation op) => PreOpenAfun op () a -> Bool -> FusionGraph -> [ClusterLs] -> M.Map (Node Comp) [ClusterLs] -> Symbols op -> ReadDirM -> InplaceM -> PreOpenAfun (Clustered op) () a
+reconstructF original a b c d e f g = case openReconstructF a EnvNil b c (Node 1 Nothing) d e f g of
           Exists res -> expectFunTypeEqual original res
 
 
 -- ordered list of labels
-data ClusterL = ExecL [Label] | NonExecL Label
+data ClusterL = ExecL [Node Comp] | NonExecL (Node Comp)
   deriving Show
 
-foldC :: (Label -> b -> b) -> b -> ClusterL -> b
+foldC :: (Node Comp -> b -> b) -> b -> ClusterL -> b
 foldC f x (ExecL ls) = foldr f x ls
 foldC f x (NonExecL l) = f l x
 
-topSort :: forall op. MakesILP op => Bool -> Graph -> Labels -> M.Map Label (Construction op) -> [ClusterL]
-topSort _ _ (S.toList -> [l]) _ = [ExecL [l]]
-topSort singletons (Graph _ fedges fpedges) cluster construct = if singletons then concatMap (map (ExecL . pure)) topsorteds else map ExecL topsorteds
+type ReadDirM = M.Map ReadEdge Int
+type InplaceM = M.Map (Node GVal) (Node GVal)
+
+topSort :: Bool -> FusionGraph -> Nodes Comp -> ReadDirM -> [ClusterL]
+topSort _ _ (S.toList -> [l]) _ = [ExecL [l]]  -- If the cluster is empty.
+topSort singletons (FusionGraph _ _ strictEdges dataflowEdges _) cluster readDirM =
+  if singletons then concatMap (map (ExecL . pure)) topsorteds else map ExecL topsorteds
   where
     buildGraph =
             G.graphFromEdges
           . map (\(a,b) -> (a,a,b))
           . M.toList
-          . flip (S.fold (\(x,i,y) -> M.adjust ((y,defaultBA @op):) (x,i))) edges
+          . flip (S.fold (\(x,i,y) -> M.adjust ((y,defaultDir):) (x,i))) edges
           . M.fromList
           . map (,[])
           . S.toList
-          
+
+    fedges, fpedges :: S.Set (Node Comp, Node GVal, Node Comp)
+    (fedges, fpedges) = S.partition (\(c1, _, c2) -> S.notMember (c1, c2) strictEdges) dataflowEdges
 
     -- Make a graph of all these labels and their incoming edges (for horizontal fusion)...
     fpparents =                    S.unions $ S.map (\l -> (S.\\ cluster) $ S.map (\(a:->_)->a) $ S.filter (\(_:->b)->l==b) fpedges) cluster
     parents   = (S.\\ fpparents) $ S.unions $ S.map (\l -> (S.\\ cluster) $ S.map (\(a:->_)->a) $ S.filter (\(_:->b)->l==b) fedges ) cluster
-    parentsPlusEdges :: S.Set (Label, BackendArg op, Label) -- (Parent, Order, Target)
+    parentsPlusEdges :: S.Set (Node Comp, Int, Node Comp) -- (Parent, Order, Target)
     parentsPlusEdges = S.unions $ S.unions $ S.map (\l -> let relevantEdges = S.filter (\(a:->b)->l==a && b `S.member` cluster) (fedges S.\\ fpedges)
-                                                              orders :: S.Set (BackendArg op)
+                                                              -- TODO: why not just `ordersWithEdges = S.map (\e@(_ :->b) -> (l,readOrderOf e,b)) relevantEdges`?
                                                               orders = S.map readOrderOf relevantEdges
                                                               ordersWithEdges = S.map (\o -> S.map (\(_:->b) -> (l,o,b)) $ S.filter (\e-> readOrderOf e == o) relevantEdges) orders
                                                           in ordersWithEdges) parents
-    nodes = S.map (,defaultBA @op) cluster <> S.map (\(x,y,_)-> (x,y)) parentsPlusEdges
-    edges = S.union parentsPlusEdges $ S.map (\(a:->b) -> (a,defaultBA @op,b)) fedges
+
+    nodes = S.map (,defaultDir) cluster <> S.map (\(x,y,_)-> (x,y)) parentsPlusEdges
+    edges = S.union parentsPlusEdges $ S.map (\(a,_,b) -> (a,defaultDir,b)) dataflowEdges
     (graph, getAdj, _) = buildGraph nodes
 
     -- .. split it into connected components and remove those parents from last step,
-    components = map (S.filter (\(l,_)->l `S.member` cluster) . S.fromList . map ((\(x,_,_)->x) . getAdj) . T.flatten) $ G.components graph
+    components = map (S.filter (\(l,_)->l `S.member` cluster) . S.fromList . map ((^._1) . getAdj) . T.flatten) $ G.components graph
     -- and make a graph of each of them...
-    graphs = if singletons then [buildGraph $ S.map (,defaultBA @op) cluster] else map buildGraph components
+    graphs = if singletons then [buildGraph $ S.map (,defaultDir) cluster] else map buildGraph components
     -- .. and finally, topologically sort each of those to get the labels per cluster sorted on dependencies
     topsorteds = map (\(graph', getAdj', _) -> map (view (_1 . _1) . getAdj') $ G.topSort graph') graphs
 
-    readOrderOf :: Edge -> BackendArg op
-    readOrderOf (p:->l) = case construct M.!? l of
-      Just (CExe _ args _) -> getOrder args p
-      _ -> error "can't get readorder"
-    getOrder :: LabelledArgsOp op env args -> Label -> BackendArg op
-    getOrder ArgsNil _ = error "can't get readorder"
-    getOrder (LOp (ArgArray In _ _ _) (_,ls) b :>: args) p
-      | p `S.member` ls = b
-      | otherwise = getOrder args p
-    getOrder (_ :>: args) p = getOrder args p
+    readOrderOf :: HasCallStack => DataflowEdge -> Int
+    readOrderOf (_,b,r) = case readDirM M.!? (b,r) of
+      Just i  -> i
+      Nothing -> error $ "can't get readorder " ++ show (b,r)
+
+    defaultDir = 0
 
 
-openReconstruct   :: MakesILP op
+openReconstruct   :: (MakesILP op, SimplifyOperation op)
                   => Bool
-                  -> LabelEnv aenv
-                  -> Graph
+                  -> Env aenv
+                  -> FusionGraph
                   -> [ClusterLs]
-                  -> M.Map Label [ClusterLs]
-                  -> M.Map Label (Construction op)
+                  -> M.Map (Node Comp) [ClusterLs]
+                  -> Symbols op
+                  -> ReadDirM
+                  -> InplaceM
                   -> Exists (PreOpenAcc (Clustered op) aenv)
-openReconstruct  a b c d   e f = (\(Left x) -> x) $ openReconstruct' a b c d Nothing e f
-openReconstructF  :: MakesILP op
+openReconstruct  a b c d   e f g h = (\(Left x) -> x) $ openReconstruct' a b c d Nothing e f g h
+openReconstructF  :: (MakesILP op, SimplifyOperation op)
                   => Bool
-                  -> LabelEnv aenv
-                  -> Graph
+                  -> Env aenv
+                  -> FusionGraph
                   -> [ClusterLs]
-                  -> Label
-                  -> M.Map Label [ClusterLs]
-                  -> M.Map Label (Construction op)
+                  -> Node Comp
+                  -> M.Map (Node Comp) [ClusterLs]
+                  -> Symbols op
+                  -> ReadDirM
+                  -> InplaceM
                   -> Exists (PreOpenAfun (Clustered op) aenv)
-openReconstructF a b c d l e f = (\(Right x) -> x) $ openReconstruct' a b c d (Just l) e f
+openReconstructF a b c d l e f g h = (\(Right x) -> x) $ openReconstruct' a b c d (Just l) e f g h
 
-openReconstruct' :: forall op aenv. MakesILP op => Bool -> LabelEnv aenv -> Graph -> [ClusterLs] -> Maybe Label -> M.Map Label [ClusterLs] -> M.Map Label (Construction op)  -> Either (Exists (PreOpenAcc (Clustered op) aenv)) (Exists (PreOpenAfun (Clustered op) aenv))
-openReconstruct' singletons labelenv graph clusterslist mlab subclustersmap construct = 
+openReconstruct' :: forall op aenv. (MakesILP op, SimplifyOperation op) => Bool -> Env aenv -> FusionGraph -> [ClusterLs] -> Maybe (Node Comp) -> M.Map (Node Comp) [ClusterLs] -> Symbols op -> ReadDirM -> InplaceM -> Either (Exists (PreOpenAcc (Clustered op) aenv)) (Exists (PreOpenAfun (Clustered op) aenv))
+openReconstruct' singletons labelenv graph clusterslist mlab subclustersmap symbols readDirM inplaceM =
   case mlab of
-  Just l  -> Right $ makeASTF labelenv l mempty
-  Nothing -> Left $ makeAST labelenv clusters mempty
+  Just l  -> Right $ makeASTF labelenv l
+  Nothing -> Left $ makeAST labelenv clusters
   where
+    mkReindexPartial' :: Env env -> Env env' -> ReindexPartial Maybe env env'
+    mkReindexPartial' = mkReindexPartial inplaceM
+
     -- Make a tree of let bindings
 
     -- In mkFullGraph, we make sure that the bound body of a let will be in an earlier cluster.
     -- Those are stored in the 'prev' argument.
     -- Note also that we currently assume that the final cluster is the return argument: If all computations are relevant
     -- and our analysis is sound, the return argument should always appear last. If not.. oops
-    makeAST :: forall env. LabelEnv env -> [ClusterL] -> M.Map Label (Exists (PreOpenAcc (Clustered op) env)) -> Exists (PreOpenAcc (Clustered op) env)
-    makeAST _ [] _ = error "empty AST"
-    makeAST env [cluster] prev = case makeCluster env cluster of
+    makeAST :: forall env. Env env -> [ClusterL] -> Exists (PreOpenAcc (Clustered op) env)
+    makeAST _ [] = error "empty AST"
+    makeAST env [cluster] = case makeCluster env cluster of
       Fold c args -> Exists $ Exec c $ unLabelOp args
       InitFold o l args -> singleton l args o $
                             \c args' ->
                                 Exists $ Exec c (mapArgs (\(LOp a _ _) -> a) args')
+      EmptyFold -> Exists $ Return TupRunit
       NotFold con -> case con of
-        CExe {}    -> error "should be Fold/InitFold!"
-        CExe'{}    -> error "should be Fold/InitFold!"
-        CUse se  n be             -> Exists $ Use se n be
-        CITE env' c t f   -> case (makeAST env (subcluster t) prev, makeAST env (subcluster f) prev) of
+        SExe {}    -> error "should be Fold/InitFold!"
+        SExe'{}    -> error "should be Fold/InitFold!"
+        SUse se  n be             -> Exists $ Use se n be
+        SITE env' c t f   -> case (makeAST env (subcluster t), makeAST env (subcluster f)) of
           (Exists tacc, Exists facc) -> Exists $ tryBuildAcond
-            (fromJust $ reindexVar (mkReindexPartial env' env) c)
+            (fromJust $ reindexVar (mkReindexPartial' env' env) c)
             tacc
             facc
-        CWhl env' c b i u -> case (subcluster c, subcluster b) of
-          (findTopOfF -> c', findTopOfF -> b') -> case (makeASTF env c' prev, makeASTF env b' prev) of
+        SWhl env' c b i u -> case (subcluster c, subcluster b) of
+          (findTopOfF -> c', findTopOfF -> b') -> case (makeASTF env c', makeASTF env b') of
             (Exists cfun, Exists bfun) -> Exists $ tryBuildAwhile
               u
               cfun
               bfun
-              (fromJust $ reindexVars (mkReindexPartial env' env) i)
-        CLHS {} -> error "let without scope"
-        CFun {} -> error "wrong type: function"
-        CBod {} -> error "wrong type: function"
-        CRet env' vars     -> Exists $ Return      (fromJust $ reindexVars (mkReindexPartial env' env) vars)
-        CCmp env' expr     -> Exists $ Compute     (fromJust $ reindexExp  (mkReindexPartial env' env) expr)
-        CAlc env' shr e sh -> Exists $ Alloc shr e (fromJust $ reindexVars (mkReindexPartial env' env) sh)
-        CUnt env' evar     -> Exists $ Unit        (fromJust $ reindexVar  (mkReindexPartial env' env) evar)
-    makeAST env (cluster:ctail) prev = 
+              (fromJust $ reindexVars (mkReindexPartial' env' env) i)
+        SLet {} -> error "let without scope"
+        SFun {} -> error "wrong type: function"
+        SBod {} -> error "wrong type: function"
+        SBlk {} -> error "wrong type: block"
+        SRet env' vars     -> Exists $ Return      (fromJust $ reindexVars (mkReindexPartial' env' env) vars)
+        SCmp env' expr     -> Exists $ Compute     (fromJust $ reindexExp  (mkReindexPartial' env' env) expr)
+        SAlc env' shr e sh -> Exists $ Alloc shr e (fromJust $ reindexVars (mkReindexPartial' env' env) sh)
+        SUnt env' evar     -> Exists $ Unit        (fromJust $ reindexVar  (mkReindexPartial' env' env) evar)
+    makeAST env (cluster:ctail) =
       -- TODO: use guards to fuse these two identical cases
       case makeCluster env cluster of
-      NotFold con -> case con of
-        CLHS (mylhs :: MyGLHS a) b u -> case makeAST env [NonExecL b] prev of
-          -- case prev !?? b of
-          Exists bnd -> createLHS mylhs env $ \env' lhs ->
-            case makeAST env' ctail (M.map (\(Exists acc) -> Exists $ weakenAcc lhs acc) $ M.insert b (Exists bnd) prev) of
-              Exists scp
-                 -> Exists $ tryBuildAlet lhs u bnd scp
-        _ -> let res = makeAST env [cluster] prev in case cluster of
-                ExecL _ -> case (res, makeAST env ctail prev) of
-                  (Exists exec@Exec{}, Exists scp) -> Exists $ Alet LeftHandSideUnit (shared TupRunit) exec scp
-                  _ -> error "nope"
-                NonExecL _ -> makeAST env ctail $ foldC (`M.insert` res) prev cluster
-      _   -> let res = makeAST env [cluster] prev in case cluster of
-                ExecL _ -> case (res, makeAST env ctail prev) of
-                  (Exists exec@Exec{}, Exists scp) -> Exists $ Alet LeftHandSideUnit (shared TupRunit) exec scp
-                  _ -> error "nope"
-                NonExecL _ -> makeAST env ctail $ foldC (`M.insert` res) prev cluster
+        NotFold con
+          | SLet mylhs b u <- con ->
+            case makeAST env [NonExecL b] of
+              Exists bnd -> createLHS mylhs env $ \env' lhs ->
+                case makeAST env' ctail of
+                  Exists scp
+                    -> Exists $ tryBuildAlet lhs u bnd scp
+        _ -> let res = makeAST env [cluster] in case cluster of
+              ExecL _ -> case (res, makeAST env ctail) of
+                (Exists exec@Exec{}, Exists scp) -> Exists $ Alet LeftHandSideUnit (shared TupRunit) exec scp
+                (Exists (Return TupRunit), Exists scp) -> Exists scp
+                _ -> error "nope"
+              NonExecL _ -> makeAST env ctail
 
-    makeASTF :: forall env. LabelEnv env -> Label -> M.Map Label (Exists (PreOpenAcc (Clustered op) env)) -> Exists (PreOpenAfun (Clustered op) env)
-    makeASTF env l prev = case makeCluster env (NonExecL l) of
-      NotFold (CBod l') -> case makeAST env (subcluster l) prev of
-        --  fromJust $ l' ^. parent) prev of 
+    makeASTF :: forall env. Env env -> Node Comp -> Exists (PreOpenAfun (Clustered op) env)
+    makeASTF env l = case makeCluster env (NonExecL l) of
+      NotFold (SBod l') -> case makeAST env (subcluster l) of
           Exists acc -> Exists $ Abody acc
-      NotFold (CFun lhs l') -> createLHS lhs env $ \env' lhs' -> 
-        case makeASTF env' l' (M.map (\(Exists acc) -> Exists $ weakenAcc lhs' acc) $ M.insertWith (flip const) l' (Exists undefined) prev) of
+      NotFold (SFun lhs l') -> createLHS lhs env $ \env' lhs' ->
+        case makeASTF env' l' of
           Exists fun -> Exists $ Alam lhs' fun
-      NotFold {} -> error "wrong type: acc"
+      NotFold sym -> error $ "wrong type: acc"
       _ -> error "not a notfold"
 
-    findTopOfF :: [ClusterL] -> Label
+    findTopOfF :: [ClusterL] -> Node Comp
     findTopOfF [] = error "empty list"
     findTopOfF [NonExecL x] = x
-    findTopOfF (x@(NonExecL l):xs) = case construct !?? l of
-      CBod l' -> findTopOfF xs
-      CFun _ l' -> findTopOfF $ filter (\(NonExecL l'') -> l'' /= l') xs ++ [x]
+    findTopOfF (x@(NonExecL l):xs) = case symbols !?? l of
+      SBod _    -> findTopOfF xs
+      SFun _ l' -> findTopOfF $ filter (\(NonExecL l'') -> l'' /= l') xs ++ [x]
       _ -> error "should be a function"
       -- findTopOfF $ filter (\(NonExecL l) -> Just l /= p) xs ++ [x]
     findTopOfF _ = error "should be a function"
@@ -252,28 +258,41 @@ openReconstruct' singletons labelenv graph clusterslist mlab subclustersmap cons
     -- do the topological sorting for each set
     -- TODO: add 'backend-specific' edges to the graph for sorting, see 3.3.1 in the PLDI paper
     clusters = concatMap (\case
-                      Execs ls -> topSort singletons graph ls construct
+                      Execs ls -> topSort singletons graph ls readDirM
                       NonExec l -> [NonExecL l]) clusterslist
     subclusters = M.map (concatMap ( \case
-                      Execs ls -> topSort singletons graph ls construct
+                      Execs ls  -> topSort singletons graph ls readDirM
                       NonExec l -> [NonExecL l])) subclustersmap
+
+    subcluster :: HasCallStack => Node Comp -> [ClusterL]
     subcluster l = subclusters !?? l
 
-    makeCluster :: LabelEnv env -> ClusterL -> FoldType op env
+    makeCluster :: HasCallStack => Env env -> ClusterL -> FoldType op env
     makeCluster env (ExecL ls) =
        foldr1 (flip fuseCluster)
-                    $ map ( \l -> case construct !?? l of
-                              -- At first thought, this `fromJust` might error if we fuse an array away.
-                              -- It does not: The array will still be in the environment, but after we finish
-                              -- the `foldr1`, the input argument will dissapear. The output argument does not:
-                              -- we clean that up in the SLV pass, if this was vertical fusion. If this is diagonal fusion,
-                              -- it stays.
-                              CExe env' args op -> InitFold op l (fromJust $ reindexLabelledArgsOp (mkReindexPartial env' env) args)
+                    $ map ( \l -> case symbols !?? l of
+                              SExe' env' args op ->
+                                -- At first thought, this `fromJust` might error if we fuse an array away.
+                                -- It does not: The array will still be in the environment, but after we finish
+                                -- the `foldr1`, the input argument will dissapear. The output argument does not:
+                                -- we clean that up in the SLV pass, if this was vertical fusion. If this is diagonal fusion,
+                                -- it stays.
+                                let args' = fromJust $ reindexLabelledArgsOp (mkReindexPartial inplaceM env' env) args
+                                in
+                                  if isNoOp op (unLabelOp args') then
+                                    -- Remove operations that became a no-op by in-place updates.
+                                    -- For instance, 'map id xs ys' may become 'map id xs xs',
+                                    -- which is a no-op.
+                                    EmptyFold
+                                  else
+                                    InitFold op l args'
                               _                 -> error "avoid this next refactor" -- c -> NotFold c
                           ) ls
-    makeCluster _ (NonExecL l) = NotFold $ construct !?? l
+    makeCluster _ (NonExecL l) = NotFold $ symbols !?? l
 
     fuseCluster :: FoldType op env -> FoldType op env -> FoldType op env
+    fuseCluster EmptyFold f = f
+    fuseCluster f EmptyFold = f
     fuseCluster (Fold cluster cargs) (InitFold op l largs) =
       consCluster l largs op cargs cluster Fold
     fuseCluster (InitFold op l largs) x = singleton l largs op $ \c cargs -> fuseCluster (Fold c cargs) x
@@ -288,12 +307,13 @@ weakenAcc lhs =  runIdentity . reindexAcc (weakenReindex $ weakenWithLHS lhs)
 
 data FoldType op env
   = forall args. Fold (Clustered op args) (LabelledArgsOp op env args)
-  | forall args. InitFold (op args) Label (LabelledArgsOp op env args)
-  | NotFold (Construction op)
+  | forall args. InitFold (op args) (Node Comp) (LabelledArgsOp op env args)
+  | EmptyFold
+  | NotFold (Symbol op)
 
 
 louttovar :: LabelledArgOp op env (Out sh e) -> LabelledArgOp op env (Var' sh)
-louttovar (LOp a (_,ls) b) = LOp (outvar a) (NotArr, ls) b -- unsafe marker: maybe this NotArr ends up a problem?
+louttovar (LOp a l b) = LOp (outvar a) (NotArr $ getLabelDeps l) b -- unsafe marker: maybe this NotArr ends up a problem?
 
 tryUpdateList :: (a -> Bool) -> (a -> a) -> [a] -> Maybe [a]
 tryUpdateList _ _ [] = Nothing
@@ -306,7 +326,7 @@ tryUpdateList p f (x : xs)
 
 consCluster :: forall env args extra op r
              . MakesILP op
-            => Label
+            => Node Comp
             -> LabelledArgsOp op env extra
             -> op extra
             -> LabelledArgsOp op env args
@@ -314,28 +334,24 @@ consCluster :: forall env args extra op r
             -> (forall args'. Clustered op args' -> LabelledArgsOp op env args' -> r)
             -> r
 consCluster l lop op lcluster cluster k = singleton l lop op $ \c lop' ->
-  fuse 
+  fuse
     lop'
-    lcluster 
-    lop' 
-    lcluster 
-    c 
-    cluster 
-    fuseVertically 
+    lcluster
+    lop'
+    lcluster
+    c
+    cluster
+    fuseVertically
     $ flip k
-
-foo :: M.Map Edge Int -> Label -> ALabels a -> Int
-foo orderinfo l (_, ls)
-  | S.null ls = 0
-  | otherwise = orderinfo M.! (S.findMin ls :-> l)
 
 fuseVertically :: LabelledArgOp op env (Out sh e) -> LabelledArgOp op env (In sh e) -> LabelledArgOp op env (Var' sh)
 fuseVertically
-  (LOp (ArgArray Out (ArrayR shr _) sh _) ((_, ls)) b)
-  (LOp (ArgArray In _ _ _) ((_, ls')) _)
-  = LOp (ArgVar $ groundToExpVar (shapeType shr) sh) ((NotArr, ls<>ls')) b
+  (LOp (ArgArray Out (ArrayR shr _) sh _) (getLabelDeps -> bs)  b)
+  (LOp (ArgArray In  _              _  _) (getLabelDeps -> bs') _)
+  = LOp (ArgVar $ groundToExpVar (shapeType shr) sh) (NotArr $ bs <> bs') b
 
 instance NFData' op => NFData' (Clustered op) where
+  rnf' :: NFData' op => Clustered op a -> ()
   rnf' c = () -- TODO
 
 expectType :: HasCallStack => GroundsR t -> PreOpenAcc op env s -> PreOpenAcc op env t
@@ -381,7 +397,7 @@ tryBuildAlet lhs u bnd next
   | otherwise
   = internalError "Cannot reconstruct Alet: left hand side and binding have incompatible types"
 
-tryBuildAwhile 
+tryBuildAwhile
   :: Uniquenesses a
   -> PreOpenAfun op env c
   -> PreOpenAfun op env s

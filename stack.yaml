@@ -2,7 +2,7 @@
 # For advanced use and comprehensive documentation of the format, please see:
 # https://docs.haskellstack.org/en/stable/yaml_configuration/
 
-resolver: lts-21.7
+resolver: lts-21.25
 
 packages:
 - .
@@ -11,11 +11,7 @@ extra-deps:
 - OptDir-0.0.4
 - bytestring-encoding-0.1.2.0
 - fclabels-2.0.5.1
-# - MIP-0.1.1.0
-- github: msakai/haskell-MIP
-  commit: 4295aa21a24a30926b55770c55ac00f749fb8a39
-  subdirs:
-  - MIP
+- MIP-0.2.0.0
 
 
 
@@ -44,4 +40,3 @@ extra-deps:
 # compiler-check: newer-minor
 #
 # vim: nospell
-
