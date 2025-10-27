@@ -64,16 +64,18 @@ optimizeBoundsExp instr@(While g it init)
     (g', urGuard) <- optimizeBoundsFun' gArgs g
     let rGuard = mkFunRes1 urGuard
 
-    -- see if the guard is always true/false
     redundant <- valOfBool (getSingle $ rGuard ^. rCS . rData)
 
     -- optimize the loop body
-    let ((it', _), a') = runState (optimizeWhileBody (rGuard ^. rSCEV . rArgIdxs) (rGuard ^. rCS . rControl) it) (newLoopScope a)
-    put $ popLoopScope a'
     case redundant of
+      -- if the guard is always false, the results are the initial value
       Just False -> do
-        return (While g' it' init', rInit)
-      _ -> return $ identityResult $ While g' it' init'
+        return (While g' it init', rInit)
+      -- otherwise, optimize the body. If hoisting is ever implemented, the (Just True) marks the trip count is > 0
+      _ -> do
+        let ((it', _), a') = runState (optimizeWhileBody (rGuard ^. rSCEV . rArgIdxs) (rGuard ^. rCS . rControl) it) (newLoopScope a)
+        put $ popLoopScope a'
+        return $ identityResult $ While g' it' init'
 
 optimizeBoundsExp (Let lhs bnd e) = do
     (bnd', arD) <- optimizeBoundsExp bnd
@@ -122,10 +124,12 @@ optimizeBoundsExp (Cond g t e) = do
     redundant  <- valOfBool (getSingle $ arG ^. rCS . rData)
 
     case redundant of
+      -- if the guard is always true, only "then" branch is optimized
       Just True -> do
         (t', arT) <- withPi True optimizeBoundsExp t (arG ^. rCS . rControl)
         return (t', arT)
 
+      -- if the guard is always false, only "else" branch is optimized
       Just False -> do
         (e', arE) <- withPi False optimizeBoundsExp e (arG ^. rCS . rControl)
         return (e', arE)

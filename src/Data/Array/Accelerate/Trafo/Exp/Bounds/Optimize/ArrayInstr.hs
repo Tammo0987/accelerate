@@ -156,8 +156,8 @@ defaultBCPermuteWithIndices mkPermute = AbstInterpOperation $
           cInput = bccsToScalar itp $ bccsEmpty input'
       sInput <- mkInvarVars dInput
 
-      let dAcc = bccsToScalar dtp $ hfmap (varToDataConstraint    env) def'
-          cAcc = bccsToScalar dtp $ bccsEmpty def'
+      let dAcc = bccsToScalar dtp $ hfmap (varToDataConstraint    env) input'
+          cAcc = bccsToScalar dtp $ bccsEmpty input'
       (sAcc, iAcc) <- mkInductionVars dAcc
 
       -- Optimize the combination function (same args shape as scan/permute-with-fun)
@@ -170,13 +170,15 @@ defaultBCPermuteWithIndices mkPermute = AbstInterpOperation $
       -- Compute SCEV / trip-count results similarly to scan1/permute-with-fun
       a'' <- get
       dSize <- bcShapeSize shr (hfmap (varToDataConstraint env) sh)
-      let shSpan' = bccPutInLower dSize (fromConst (0 :: Int))
+      let dSpan = interpretData (a'' ^. ig) interpretPrimAdd dSize (bccPut (toCGType dSize) $ pure $ fromConst (-1 :: Int))
+          shSpan' = bccPutInLower dSpan (fromConst (0 :: Int))
       shSpan <- dataToBasic shSpan'
       let tripCount = Exists <$> unwrapBCConstraint shSpan
 
       -- compute chains & closed forms for the induction vars wrt the function's SCEV result
       let chains       = hzipWith (computeChains (a'' ^. ig)) iAcc (rOut ^. rSCEV . rSCEVExp)
-          closedForms = hfmap (computeClosedForm (a'' ^. ig) tripCount) chains
+          dDef         = bccsToScalar itp $ hfmap (varToDataConstraint    env) def'
+          closedForms = phi dDef $ hfmap (computeClosedForm (a'' ^. ig) tripCount) chains
 
       -- Build the analysis result: lower bound = elements' own bounds; upper bound = everything folded
       let args'   = ArgFun f' :>: def :>: flags :>: input :>: ArgsNil
@@ -357,7 +359,7 @@ defaultBCFold mkFold = AbstInterpOperation $
 
       -- the input array is not loop variant; data and control constraints hold
       let dInput = bccsToScalar itp $ hfmap (varToDataConstraint    env) input'
-          cInput = bccsToScalar itp $ hfmap (varToControlConstraint env) input'
+          cInput = bccsToScalar itp $ bccsEmpty input'
           -- empty SCEVConstraints to model loop invariant
       sInput <- mkInvarVars dInput
 
