@@ -940,14 +940,14 @@ any f = or . map f
 and :: Shape sh
     => Acc (Array (sh:.Int) Bool)
     -> Acc (Array sh Bool)
-and = fold (&&) True_
+and = fold (&&!) True_
 
 -- | Check if any element along the innermost dimension is 'True'.
 --
 or :: Shape sh
    => Acc (Array (sh:.Int) Bool)
    -> Acc (Array sh Bool)
-or = fold (||) False_
+or = fold (||!) False_
 
 -- | Compute the sum of elements along the innermost dimension of the array. To
 -- find the sum of the entire array, 'flatten' it first.
@@ -2701,41 +2701,41 @@ expand :: (Elt a, Elt b)
        -> Acc (Vector b)
 expand f g xs =
   let
-      szs           = map f xs
-      T2 offset len = scanl' (+) 0 szs
-      m             = the len
+    szs            = map f xs
+    T2 offsets len = scanl' (+) 0 szs
+    -- TODO: Make the OperationAcc simplifier better and remove 'the $ unit $'.
+    -- Our simplifier currently only knows that multiple array of size 'm' are
+    -- the same if we first store that size in a separate scalar array. We
+    -- should improve the simplifier by for instance doing more common
+    -- subexpression elimination of Compute terms.
+    --
+    -- Until we do that, we have this tiny hack here. This way the compiler
+    -- detects that several arrays have the same size, which allows fusion to
+    -- fuse more operations.
+    m              = the $ unit $ the len
+
+    head_flags :: Acc (Vector Int)
+    head_flags = permuteUnique' (fill (I1 m) 0)
+                $ zipWith
+                    (\sz offset -> if sz == 0 ||! offset >= m then Nothing_ else Just_ $ T2 (I1 offset) 1)
+                    szs offsets
+
+    idxs       = map (subtract 1)
+                 $ map snd
+                 $ scanl1 (segmentedL (+))
+                 $ zip head_flags
+                 $ fill (I1 m) 1
+
+    iotas      = map snd
+                 $ scanl1 (segmentedL const)
+                 $ zip head_flags
+                 $ permuteUnique' (fill (I1 m) undef)
+                 $ zipWith3 (\ix sz offset -> if sz == 0 ||! offset >= m then Nothing_ else Just_ $ T2 (I1 offset) ix)
+                   (enumFromN (shape xs) 0)
+                   szs
+                   offsets
   in
-  if length xs == 0 || m == 0
-     then use $ fromList (Z:.0) []
-     else
-      let
-          n          = m + 1
-          put ix     = Just_ (I1 (offset ! ix))
-
-          head_flags :: Acc (Vector Int)
-          head_flags = permute const (fill (I1 n) 0) put (fill (shape szs) 1)
-
-          idxs       = map (subtract 1)
-                     $ map snd
-                     $ scanl1 (segmentedL (+))
-                     $ zip head_flags
-                     $ fill (I1 m) 1
-
-          iotas      = map snd
-                     $ scanl1 (segmentedL const)
-                     $ zip head_flags
-                     $ permute const
-                               (fill (I1 n) undef)
-                               -- If any of the elements expand to zero new
-                               -- elements then this would result in multiple
-                               -- writes to the same index since the offsets are
-                               -- also the same, which is undefined behaviour
-                               (\ix -> if szs ! ix > 0
-                                         then put ix
-                                         else Nothing_)
-                     $ enumFromN (shape xs) 0
-      in
-      zipWith g (gather iotas xs) idxs
+    zipWith g (gather iotas xs) idxs
 
 
 {--

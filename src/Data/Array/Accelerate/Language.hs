@@ -700,14 +700,14 @@ permute'
     :: forall sh sh' a. (Shape sh, Shape sh', Elt a)
     => (Exp a -> Exp a -> Exp a)        -- ^ combination function
     -> Acc (Array sh' a)                -- ^ array of default values
-    -> Acc (Array sh  (Maybe (sh', a)))  -- ^ array of source values to be permuted, alongside their target index
+    -> Acc (Array sh  (Maybe (sh', a))) -- ^ array of source values to be permuted, alongside their target index
     -> Acc (Array sh' a)
 permute' f = Acc $$ applyAcc $ Permute (arrayR @sh @a) (Just $ unExpBinaryFunction f)
 
 permuteUnique'
     :: forall sh sh' a. (Shape sh, Shape sh', Elt a)
     => Acc (Array sh' a)                -- ^ array of default values
-    -> Acc (Array sh  (Maybe (sh', a)))  -- ^ array of source values to be permuted, alongside their target index
+    -> Acc (Array sh  (Maybe (sh', a))) -- ^ array of source values to be permuted, alongside their target index
     -> Acc (Array sh' a)
 permuteUnique' = Acc $$ applyAcc (Permute (arrayR @sh @a) Nothing)
 
