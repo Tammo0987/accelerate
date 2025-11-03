@@ -553,6 +553,8 @@ getExpDeps (PrimApp   _ poe)                env = getExpDeps poe  env
 getExpDeps (ShapeSize _ poe)                env = getExpDeps poe  env
 getExpDeps (Undef _)                        _   = mempty
 getExpDeps  Coerce{}                        _   = mempty
+getExpDeps (Assert g e)                     env = getExpDeps g env <> getExpDeps e env
+getExpDeps (Assume g e)                     env = getExpDeps g env <> getExpDeps e env
 
 
 -- | Get the dependencies of a function.

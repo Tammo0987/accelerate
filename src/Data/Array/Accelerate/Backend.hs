@@ -74,6 +74,7 @@ import Data.Type.Equality
 import System.IO.Unsafe (unsafePerformIO)
 import qualified Data.Array.Accelerate.AST.Operation as Operation
 import qualified Data.Array.Accelerate.Trafo.Partitioning.ILP.Graph as Graph
+import Data.Array.Accelerate.Trafo.Exp.Bounds.ArrayInstr (BCOperation)
 
 
 class

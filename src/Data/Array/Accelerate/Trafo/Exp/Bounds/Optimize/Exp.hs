@@ -37,9 +37,17 @@ import Data.Array.Accelerate.Analysis.Match (matchSingleType)
 import Data.Type.Equality
 import Data.Array.Accelerate.Representation.Shape (ShapeR (..))
 
+-------------------------------------------------------------
+-- Expression level bounds inference and assertion removal --
+-------------------------------------------------------------
+
 optimizeBoundsExp :: forall benv env t l ls .
     PreOpenExp (ArrayInstr benv) env t -> BCState ScalarType (ArrayInstr benv) (ls:l) '(benv, env) (PreOpenExp (ArrayInstr benv) env t, AnalysisResult t ())
 
+-- Get the constraints of the guard. If it is lower bounded by 1,
+-- the boolean expression is always true, which results in a safe removal of the assertion.
+-- The variables that are constrianed by the assertion are redefined persistently, 
+-- to assure dominant checks remove further weaker checks
 optimizeBoundsExp (Assert g e) = do
     (g', arG) <- optimizeBoundsExp g
     (e', arE) <- withPiPersist True optimizeBoundsExp e (arG ^. rCS.rControl)
@@ -47,36 +55,41 @@ optimizeBoundsExp (Assert g e) = do
     if redundant then Debug.trace "REDUNDANT" $ return (e', arE)
                  else Debug.trace "NOT REDUNDANT" $ return (Assert g' e', arE)
 
+-- Optimize the guard and non-persistently pi-constrain the variables. The lack of persistence
+-- is meant to contain the unsafe effect of an assumtion within intended scope
 optimizeBoundsExp (Assume g e) = do
     (_, arG) <- optimizeBoundsExp g
     (e', arE) <- withPi True optimizeBoundsExp e (arG ^. rCS.rControl)
     return (e', arE)
 
+-- TODO: Implement SCEV/Hoisting?
 optimizeBoundsExp instr@(While g it init)
   | BCBodyDict <- oneParamFunc it
   , BCBodyDict <- oneParamFunc g = do
     a <- get
-    -- optimize the init expression
+    -- Optimize the init expression
     (init', rInit) <- optimizeBoundsExp init
 
-    -- optimize the guard once on init state
+    -- Optimize the guard with init values as arguments.
     let gArgs = diffArg1 (rInit ^. rCS . rData) (bccsEmpty instr) (bccsEmpty instr)
     (g', urGuard) <- optimizeBoundsFun' gArgs g
     let rGuard = mkFunRes1 urGuard
 
     redundant <- valOfBool (getSingle $ rGuard ^. rCS . rData)
-
-    -- optimize the loop body
     case redundant of
-      -- if the guard is always false, the results are the initial value
+      -- if the guard is always false when analyzed with init values, then the loop never iterates and we can safely
+      -- restrict the constrants to init
       Just False -> do
         return (While g' it init', rInit)
-      -- otherwise, optimize the body. If hoisting is ever implemented, the (Just True) marks the trip count is > 0
+
+      -- Otherwise, optimize the body. If hoisting is implemented, the (Just True) marks the trip count is > 0
       _ -> do
         let ((it', _), a') = runState (optimizeWhileBody (rGuard ^. rSCEV . rArgIdxs) (rGuard ^. rCS . rControl) it) (newLoopScope a)
         put $ popLoopScope a'
+        -- Without SCEV, no data constraints are returned for a non-trivial loop 
         return $ identityResult $ While g' it' init'
 
+-- The binded value is optimized and all its constraints are associated to the left hand side
 optimizeBoundsExp (Let lhs bnd e) = do
     (bnd', arD) <- optimizeBoundsExp bnd
     a <- get
@@ -88,6 +101,7 @@ optimizeBoundsExp (Let lhs bnd e) = do
 optimizeBoundsExp (Case expr eqs def) = do
     (expr', _) <- optimizeBoundsExp expr
 
+    -- gathera list of analysis results
     aEqs <- mapM (\(tag, e) -> do
                      (e', arE) <- optimizeBoundsExp e
                      return ((tag, e'), arE)
@@ -96,6 +110,7 @@ optimizeBoundsExp (Case expr eqs def) = do
     let eqs' = fmap fst aEqs
         altArs = fmap snd aEqs
 
+    -- analyize default
     tDef <- traverse optimizeBoundsExp def
     let (def', mDefAr) = case tDef of
             Just (d, arD) -> (Just d, Just arD)
@@ -110,6 +125,7 @@ optimizeBoundsExp (Case expr eqs def) = do
       [ar] -> return (Case expr' eqs' def', ar)
       _ ->
         let
+            -- phi-combine constraints
             d = foldl1 phi (map (^. rCS . rData) allArs)
             c = foldl1 (hzipWith (hzipWith $ zipControlMaps
                                       (Map.intersectionWith PhiDiff)
@@ -135,6 +151,7 @@ optimizeBoundsExp (Cond g t e) = do
         return (e', arE)
 
       Nothing -> do
+        -- phi-combine constraints
         (t', arT) <- withPi True  optimizeBoundsExp t (arG ^. rCS . rControl)
         (e', arE) <- withPi False optimizeBoundsExp e (arG ^. rCS . rControl)
         let d = phi (arT ^. rCS . rData) (arE ^. rCS . rData)
@@ -153,10 +170,10 @@ optimizeBoundsExp (Pair expr1 expr2) = do
 optimizeBoundsExp (Evar v) = do
     a <- get
     let expEnv = a ^. essaEnvs.essaEnvExp
-    let (EnvElem _ cD) = getESSAEnv (varIdx v) expEnv
     let d = varToDataConstraint expEnv v
+        c = varToControlConstraint expEnv v
         ch = fromMaybe (hfmap (hfmap SCEVInvar) (varToClosedForm expEnv v)) (indexLoopScopeStackExpVar v (a ^. stack))
-    return (Evar v, analysisResult (t d) (t cD) (t ch))
+    return (Evar v, analysisResult (t d) (t c) (t ch))
         where t = TupRsingle
 
 optimizeBoundsExp instr@(Const tp val) | BCScalarDict <- reprBCScalar tp = do
@@ -188,6 +205,7 @@ optimizeBoundsExp (ArrayInstr instr@(Parameter v) n) = do
         (dArr, _) = getArrayInstrCSConstraints instr env
     let c    = varToClosedForm env v
         sArr = case st of
+            -- if there is an expression level loop, then a parameter is invariant to it
             (ConsLoopScopeStack _ _) -> TupRsingle $ hfmap (hfmap SCEVInvar) c
             _ -> TupRsingle $ hfmap (const hnothing) c
     return (ArrayInstr instr n, analysisResult dArr (TupRsingle $ hfmap (const empty) c) sArr)
@@ -201,6 +219,7 @@ optimizeBoundsExp (ArrayInstr instr@(Index v@(Var tp _)) expr) =
 
                 (dArr, _) = getArrayInstrCSConstraints instr env
 
+            -- allocate new ESSA for the indexed value to avoid encoding a[i] == a[j] in the graph
             bdIndex <- traverseTupR indexToBasic dArr
             let dIndex = hfmap (hfmap (hfmap Diff)) bdIndex
             (expr', _) <- optimizeBoundsExp expr
@@ -305,6 +324,7 @@ optimizeWhileBody idxs ctrl (Lam lhs (Body body)) | BCBodyDict <- isBody body = 
     a <- get
     let a' = rebind lhs idxs (bccsEmpty body) a
     let ((body', _), a'') = runState (withPi True optimizeBoundsExp body ctrl) a'
+    -- The guard arugments and body arguments have the same ESSA-indices
     () <- putPiAssignment False (getSingle ctrl)
     let (argIdxs, a''') = popBind lhs a''
         d = hfmap (hfmap (hfmap fromESSA)) argIdxs
@@ -590,6 +610,7 @@ primFunControl g pf d (TupRpair (TupRsingle maps1) (TupRsingle maps2)) =
         PrimLAnd     -> return $ TupRsingle maps
             where maps    = bccBind maps1 $ \(ControlMaps true1 false1) ->
                             bccBind maps2 $ \(ControlMaps true2 false2) ->
+                                -- to avoid the need for multiple pi-assignments of the same variable caused by a single guard we Xor over controlMaps.
                                 bccPut (toCGType maps) $ pure $ ControlMaps (mapXor true1 true2) (Map.intersectionWith PhiDiff false1 false2)
         PrimLOr      -> return $ TupRsingle maps
             where maps    = bccBind maps1 $ \(ControlMaps true1 false1) ->

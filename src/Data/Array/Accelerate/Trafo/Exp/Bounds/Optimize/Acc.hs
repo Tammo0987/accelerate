@@ -1,6 +1,7 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE CPP #-}
 module Data.Array.Accelerate.Trafo.Exp.Bounds.Optimize.Acc where
 import Data.Array.Accelerate.Trafo.Exp.Bounds.ArrayInstr
 import Data.Array.Accelerate.Trafo.Exp.Bounds.BCState
@@ -15,20 +16,24 @@ import Lens.Micro
 import Data.Array.Accelerate.Trafo.Exp.Bounds.CAS.ConstraintArgs
 import Data.Array.Accelerate.Trafo.Exp.Bounds.SCEV.RecChain
 import Data.Array.Accelerate.Representation.Type (TupR(..))
-import Data.Maybe
 import Data.Array.Accelerate.Trafo.Exp.Bounds.SCEV.LoopStack
 import Data.Array.Accelerate.Trafo.Exp.Bounds.Optimize.Pi (withPi, putPiAssignment)
 import qualified Data.Map as Map
 import Data.Array.Accelerate.Array.Buffer (indexBuffer)
 import Data.Array.Accelerate.Type
 import Data.Array.Accelerate.Trafo.Exp.Bounds.ESSA.ESSAIdx
-import qualified Debug.Trace as Debug
+import Debug.Trace as Debug
 
 -- Top function to optimize Closed Acc code
+#ifdef ACCELERATE_OPTIMIZE_ASSERTIONS
 optimizeBounds :: BCOperation op => PreOpenAcc op () t -> PreOpenAcc op () t
 optimizeBounds acc =
     let ((optimizedFun, _), a) = runState (optimizeBounds' acc) emptyAnalysis
         in Debug.trace (show $ a ^. ig) optimizedFun
+#else
+optimizeBounds :: BCOperation op => PreOpenAcc op () t -> PreOpenAcc op () t
+optimizeBounds acc = acc
+#endif
 
 optimizeBounds'
     :: forall benv op t loops
@@ -112,7 +117,6 @@ optimizeBounds' instr@(Awhile un g it init)
         return (Awhile un g' it' init, analysisResult dInit (bccsEmpty instr) (bccsEmpty instr))
       _ -> return $ identityResult $ Awhile un g' it' init
 
-
 optimizeBounds' instr@(Unit v@(Var tp _)) =
     case tp of
         (SingleScalarType (NumSingleType (IntegralNumType TypeInt))) -> do
@@ -142,8 +146,17 @@ optimizeBounds' instr@(Return e) = do
     let env = a ^. essaEnvs . essaEnvArr
         d   = hfmap (varToDataConstraint  env) e
         c   = hfmap (varToControlConstraint env) e
-        s   = hfmap (\v -> fromMaybe (hfmap (hfmap SCEVInvar) (varToClosedForm env v)) (indexLoopScopeStackGroundVar v (a ^. stack))) e
+        s   = bccsEmpty e
     return (instr, analysisResult d c s)
+
+optimizeBounds' instr@(Manifest e) = do
+    a <- get
+    let env = a ^. essaEnvs . essaEnvArr
+        d   = varToDataConstraint  env e
+        c   = varToControlConstraint env e
+        s   = bccsEmpty e
+    return (instr, analysisResult (TupRsingle d) (TupRsingle c) s)
+
 
 optimizeBoundsAFun :: BCOperation op => PreOpenAfun op () t -> PreOpenAfun op () t
 optimizeBoundsAFun acc =

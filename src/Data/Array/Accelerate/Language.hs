@@ -88,6 +88,7 @@ module Data.Array.Accelerate.Language (
   -- * Flow-control
   acond, awhile,
   cond,  while,
+  assert, assume,
 
   -- * Array operations with a scalar result
   (!), (!!), shape, size, shapeSize,
@@ -123,10 +124,11 @@ import Data.Array.Accelerate.Classes.Ord
 import Prelude                                                      ( ($), (.), Maybe(..), Char )
 #if __GLASGOW_HASKELL__ >= 904
 import Data.Type.Equality
-import Data.Array.Accelerate.Smart (unExpBinaryFunction, PreSmartExp (Tag))
+import Data.Array.Accelerate.Smart (unExpBinaryFunction, PreSmartExp (Tag), mkExp, mkCoerce)
 #endif
 
 import qualified Prelude
+
 -- $setup
 -- >>> :seti -XFlexibleContexts
 -- >>> :seti -XScopedTypeVariables
@@ -1278,6 +1280,18 @@ while c f (Exp e) =
   mkExp $ While @(EltR e) (eltR @e)
             (mkCoerce' . unExp . c . Exp)
             (unExp . f . Exp) e
+
+assert :: Elt t
+       => Exp Bool
+       -> Exp t
+       -> Exp t
+assert (Exp g) (Exp e) = mkExp $ Assert (mkCoerce' g) e
+
+assume :: Elt t
+       => Exp Bool
+       -> Exp t
+       -> Exp t
+assume (Exp g) (Exp e) = mkExp $ Assume (mkCoerce' g) e
 
 
 -- Array operations with a scalar result

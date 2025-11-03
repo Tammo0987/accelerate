@@ -10,7 +10,6 @@ module Data.Array.Accelerate.Trafo.Exp.Bounds.Optimize.ArrayInstr where
 import Data.Array.Accelerate.AST.Operation
 import Prelude hiding (snd, fst, init, exp)
 import Control.Monad.State hiding (guard)
-import Data.Array.Accelerate.Type
 import Data.Array.Accelerate.Representation.Type
 import Data.Array.Accelerate.Representation.Array (ArrayR (ArrayR))
 import Data.Array.Accelerate.Trafo.Exp.Bounds.Utils
@@ -35,11 +34,13 @@ defaultBCMap mkMap = AbstInterpOperation $
         a <- get
         let env = a ^. essaEnvs . essaEnvArr
             st  = a ^. stack
+            -- unlift array constraints to point-wise argument
             dInput = bccsToScalar itp $ hfmap (varToDataConstraint    env) input'
             cInput = bccsToScalar itp $ hfmap (varToControlConstraint env) input'
             sInput = bccsToScalar itp $ hfmap (varToSCEVConstraint st env) input'
         let comp = optimizeBoundsFun' (diffArg1 dInput cInput sInput) f
             ((f', rOut), a') = runState comp (enterExpScope a)
+            -- output array is constrained by the point-wise result
             iOut = hfmap (varToESSA env) output'
         put $ popLoopScope a' 
         let args' = ArgFun f' :>: input :>: output :>: ArgsNil
@@ -54,6 +55,8 @@ defaultBCBackpermute mkBackpermute = AbstInterpOperation $
         a <- get
         let env = a ^. essaEnvs . essaEnvArr
             iSh = hfmap (varToESSA env) sh
+
+            -- the iterator is between [0,size-1]
             dSh = hfmap (\i -> bccBind i (\i' -> bccPut (toCGType i) $ Bounds (hjust $ Diff $ fromConst (0 :: Int)) (hpure (Diff $ BDiff (Just i') (-1))))) iSh
             cSh = bccsEmpty sh
             sSh = bccsEmpty sh
@@ -63,6 +66,7 @@ defaultBCBackpermute mkBackpermute = AbstInterpOperation $
             args' = ArgFun f' :>: input :>: output :>: ArgsNil
         put $ popLoopScope a'
 
+        -- input constraints flow to output, as its only source
         let iOut = hfmap (varToESSA env) output'
             dOut = bccsToScalar itp $ hfmap (varToDataConstraint    env) input'
             cOut = bccsToScalar itp $ bccsEmpty input'
@@ -79,11 +83,12 @@ defaultBCGenerate mkGenerate = AbstInterpOperation $
         a <- get
         let env = a ^. essaEnvs . essaEnvArr
             iSh = hfmap (varToESSA env) sh
-
+            -- the iterator is between [0,size-1]
             dIx = hfmap (\i -> bccBind i (\i' -> bccPut (toCGType i) $ Bounds (hjust $ Diff $ fromConst (0 :: Int)) (hpure (Diff $ BDiff (Just i') (-1))))) iSh
             cIx = bccsEmpty sh
             sIx = bccsEmpty sh
 
+        -- rOut, the pointwise result is associated to output
         let comp = do optimizeBoundsFun' (diffArg1 dIx cIx sIx) f
             ((f', rOut), a') = runState comp (enterExpScope a)
         put $ popLoopScope a'
@@ -95,10 +100,10 @@ getInputArray :: TupR a (tag, ((), (t1, t2))) -> TupR a t2
 getInputArray (TupRpair _ (TupRpair _ (TupRpair _ a))) = a
 getInputArray _ = error "malformed primMaybe"
 
-defaultBCPermuteWithFun
+defaultBCPermute
   :: (forall sh1 e1. op (Fun' (e1 -> e1 -> e1) -> Mut sh1 e1 -> In sh (PrimMaybe (sh1, e1)) -> ()))
   -> AbstInterpOperation op (Fun' (e -> e -> e) -> Mut sh' e -> In sh (PrimMaybe (sh', e)) -> ())
-defaultBCPermuteWithFun mkPermute = AbstInterpOperation $
+defaultBCPermute mkPermute = AbstInterpOperation $
   \(ArgFun f :>: def@(ArgArray _ (ArrayR _ dtp) _ def') :>: input@(ArgArray _ (ArrayR shr mItp) sh mInput') :>: ArgsNil) -> case f of
     _ | BCBodyDict <- twoParamFunc f, BCScalarDict <- reprBCScalar dtp, BCScalarDict <- reprBCScalar mItp -> do
       a <- get
@@ -107,13 +112,17 @@ defaultBCPermuteWithFun mkPermute = AbstInterpOperation $
       let itp    = getInputArray mItp
           input' = getInputArray mInput'
 
+      -- incoming elements are invariant, sourced from the input
       let dInput = bccsToScalar itp $ hfmap (varToDataConstraint    env) input'
           cInput = bccsToScalar itp $ bccsEmpty input'
       sInput <- mkInvarVars dInput
 
-      -- Accumulator (the slot that may receive many elements) is loop-variant.
-      let dAcc = bccsToScalar dtp $ hfmap (varToDataConstraint    env) def'
-          cAcc = bccsToScalar dtp $ bccsEmpty def'
+      -- first element that replaces default becomes a loop-variant accumulator
+      let dAcc = bccsToScalar dtp $ hfmap (varToDataConstraint    env) input'
+          cAcc = bccsToScalar dtp $ bccsEmpty input'
+
+      -- Default array data constraints
+          dDef         = bccsToScalar itp $ hfmap (varToDataConstraint    env) def'
       (sAcc, iAcc) <- mkInductionVars dAcc
 
       a' <- get
@@ -122,71 +131,23 @@ defaultBCPermuteWithFun mkPermute = AbstInterpOperation $
       put $ popLoopScope aOut
 
       a'' <- get
-      dSize <- bcShapeSize shr (hfmap (varToDataConstraint env) sh)
-      let shSpan' = bccPutInLower dSize (fromConst (0 :: Int))
-      shSpan <- dataToBasic shSpan'
-      let tripCount = Exists <$> unwrapBCConstraint shSpan
+      inputSize <- bcShapeSize shr (hfmap (varToDataConstraint env) sh)
+      -- first element set the accumulator, so there are [0,size-1] elements still to come
+      let inputSpan' = interpretData (a'' ^. ig) interpretPrimAdd inputSize (bccPut (toCGType inputSize) $ pure $ fromConst (-1 :: Int))
+      let inputSpan = bccPutInLower inputSpan' (fromConst (0 :: Int))
+      dInputSpan <- dataToBasic inputSpan
+      let tripCount = Exists <$> unwrapBCConstraint dInputSpan
 
-      -- compute chains & closed forms for the induction vars wrt the function's SCEV result
+      
       let chains       = hzipWith (computeChains (a'' ^. ig)) iAcc (rOut ^. rSCEV . rSCEVExp)
           closedForms' = hfmap (computeClosedForm (a'' ^. ig) tripCount) chains
-          closedForms  = phi dAcc closedForms'
+          -- phi-join default case with replace+accumulate case
+          closedForms  = phi dDef closedForms'
 
-      -- Build the analysis result: lower bound = elements' own bounds; upper bound = everything folded
       let args' = ArgFun f' :>: def :>: input :>: ArgsNil
           res   = analysisResult closedForms (bccsToScalar dtp $ bccsEmpty def') (bccsToScalar dtp $ bccsEmpty def')
       iOut <- traverseTupR bccReallocateMut $ hfmap (varToESSA env) def'
-      -- Debug trace the closed forms (same style as scan1) and return optimized op + analysis
       return (BCOptOperation mkPermute args', iOut, def', mkArrayFuncRes dtp res, False)
-
-
-defaultBCPermuteWithIndices
-  :: (forall sh1 e1. op (Fun' (e1 -> e1 -> e1) -> Mut sh1 e1 -> Mut sh1 Word8 -> In sh (PrimMaybe (sh1, e1)) -> ()))
-  -> AbstInterpOperation op (Fun' (e -> e -> e) -> Mut sh' e -> Mut sh' Word8 -> In sh (PrimMaybe (sh', e)) -> ())
-defaultBCPermuteWithIndices mkPermute = AbstInterpOperation $
-  \(ArgFun f :>: def@(ArgArray _ (ArrayR _ dtp) _ def') :>: flags@(ArgArray _ _ _ flags') :>: input@(ArgArray _ (ArrayR shr mItp) sh mInput') :>: ArgsNil) -> case f of
-    _ | BCBodyDict <- twoParamFunc f, BCScalarDict <- reprBCScalar dtp, BCScalarDict <- reprBCScalar mItp -> do
-      a <- get
-      let env = a ^. essaEnvs . essaEnvArr
-
-      let itp    = getInputArray mItp
-          input' = getInputArray mInput'
-
-      let dInput = bccsToScalar itp $ hfmap (varToDataConstraint    env) input'
-          cInput = bccsToScalar itp $ bccsEmpty input'
-      sInput <- mkInvarVars dInput
-
-      let dAcc = bccsToScalar dtp $ hfmap (varToDataConstraint    env) input'
-          cAcc = bccsToScalar dtp $ bccsEmpty input'
-      (sAcc, iAcc) <- mkInductionVars dAcc
-
-      -- Optimize the combination function (same args shape as scan/permute-with-fun)
-      a' <- get
-      let args = diffArg2 dInput cInput sInput dAcc cAcc sAcc
-      -- \dInput dAcc -> dInput
-          ((f', rOut), aOut) = runState (optimizeBoundsFun' args f) (enterExpScope a')
-      put $ popLoopScope aOut
-
-      -- Compute SCEV / trip-count results similarly to scan1/permute-with-fun
-      a'' <- get
-      dSize <- bcShapeSize shr (hfmap (varToDataConstraint env) sh)
-      let dSpan = interpretData (a'' ^. ig) interpretPrimAdd dSize (bccPut (toCGType dSize) $ pure $ fromConst (-1 :: Int))
-          shSpan' = bccPutInLower dSpan (fromConst (0 :: Int))
-      shSpan <- dataToBasic shSpan'
-      let tripCount = Exists <$> unwrapBCConstraint shSpan
-
-      -- compute chains & closed forms for the induction vars wrt the function's SCEV result
-      let chains       = hzipWith (computeChains (a'' ^. ig)) iAcc (rOut ^. rSCEV . rSCEVExp)
-          dDef         = bccsToScalar itp $ hfmap (varToDataConstraint    env) def'
-          closedForms = phi dDef $ hfmap (computeClosedForm (a'' ^. ig) tripCount) chains
-
-      -- Build the analysis result: lower bound = elements' own bounds; upper bound = everything folded
-      let args'   = ArgFun f' :>: def :>: flags :>: input :>: ArgsNil
-          output' = TupRpair def' flags'
-          res     = mkArrayFuncRes dtp $ analysisResult closedForms (bccsToScalar dtp $ bccsEmpty def') (bccsToScalar dtp $ bccsEmpty def')
-          ret     = extendResWithEmpty res flags'
-      iOut <- traverseTupR bccReallocateMut $ hfmap (varToESSA env) output'
-      return (BCOptOperation mkPermute args', iOut, output', ret, False)
 
 defaultBCPermuteUnique
   :: (forall sh1 e1. op (Mut sh1 e1 -> In sh (PrimMaybe (sh1, e1)) -> ()))
@@ -198,6 +159,7 @@ defaultBCPermuteUnique mkPermute' = AbstInterpOperation $
           input' = getInputArray mInput
           dDef = hfmap (varToDataConstraint env) def'  
           dInput = hfmap (varToDataConstraint env) input'
+          -- either default or (uniquely) replaced
           dRes = phi dDef dInput
           cRes = bccsEmpty def'
           sRes = bccsEmpty def'
@@ -220,17 +182,16 @@ defaultBCScan mkScan = AbstInterpOperation $
       a <- get
       let env = a ^. essaEnvs . essaEnvArr
       
-      -- optimize the initial accumulator
+      -- optimize the accumulator
       let ((init', rInit), aInit) = runState (optimizeBoundsExp init) (enterExpScope a)
       put $ popLoopScope aInit
 
       -- the input array is not loop variant; data and control constraints hold
       let dInput = bccsToScalar itp $ hfmap (varToDataConstraint    env) input'
           cInput = bccsToScalar itp $ hfmap (varToControlConstraint env) input'
-          -- empty SCEVConstraints to model loop invariant
       sInput <- mkInvarVars dInput
 
-      -- accumulator is loop variant; data and control constraints varry;
+      -- accumulator is loop variant; data and control constraints are not consistent
       let dInit = bccsEmpty init'
           cInit = bccsEmpty init'
       -- get new ESSAIdx to indetify induction variable and make accumulator variable
@@ -243,10 +204,11 @@ defaultBCScan mkScan = AbstInterpOperation $
 
       -- compute scev results
       a'' <- get
-      dSize <- bcShapeSize shr (hfmap (varToDataConstraint env) sh)
-      let shSpan = bccPutInLower dSize (fromConst (0 :: Int))
-      basicShSpan <- dataToBasic shSpan
-      let tripCount = Exists <$> unwrapBCConstraint basicShSpan
+      -- a scan tracks the evolution from 0 to all elements folded within the accumulator
+      inputSize <- bcShapeSize shr (hfmap (varToDataConstraint env) sh)
+      let inputSpan' = bccPutInLower inputSize (fromConst (0 :: Int))
+      inputSpan <- dataToBasic inputSpan'
+      let tripCount = Exists <$> unwrapBCConstraint inputSpan
           chains      = hzipWith (computeChains (a'' ^. ig)) iInit (rOut ^. rSCEV . rSCEVExp) 
           closedForms = hfmap (computeClosedForm (a'' ^. ig) tripCount) chains
 
@@ -264,12 +226,12 @@ defaultBCScan1 mkScan1 = AbstInterpOperation $
         a <- get
         let env = a ^. essaEnvs . essaEnvArr
 
-        -- Convert input to BC constraints
+        -- the input array is not loop variant; data and control constraints hold
         let dInput = bccsToScalar itp $ hfmap (varToDataConstraint env) input'
             cInput = bccsToScalar itp $ hfmap (varToControlConstraint env) input'
         sInput <- mkInvarVars dInput
 
-        -- Accumulator is loop-variant
+        -- accumulator is loop variant; data and control constraints are not consistent
         let dAcc = bccsToScalar itp $ bccsEmpty input'
             cAcc = bccsToScalar itp $ bccsEmpty input'
         (sAcc, iAcc) <- mkInductionVars dInput
@@ -282,11 +244,12 @@ defaultBCScan1 mkScan1 = AbstInterpOperation $
 
         -- Compute SCEV results
         a'' <- get
-        dSize <- bcShapeSize shr (hfmap (varToDataConstraint env) sh)
-        let dSpan = interpretData (a'' ^. ig) interpretPrimAdd dSize (bccPut (toCGType dSize) $ pure $ fromConst (-1 :: Int))
-            shSpan' = bccPutInLower dSpan (fromConst (0 :: Int))
-        shSpan <- dataToBasic shSpan'
-        let tripCount = Exists <$> unwrapBCConstraint shSpan
+        inputSize <- bcShapeSize shr (hfmap (varToDataConstraint env) sh)
+        -- first element was used as accumulator, so we subtract it
+        let inputSpan' = interpretData (a'' ^. ig) interpretPrimAdd inputSize (bccPut (toCGType inputSize) $ pure $ fromConst (-1 :: Int))
+            inputSpan = bccPutInLower inputSpan' (fromConst (0 :: Int))
+        dInputSpan <- dataToBasic inputSpan
+        let tripCount = Exists <$> unwrapBCConstraint dInputSpan
             chains      = hzipWith (computeChains (a'' ^. ig)) iAcc (rOut ^. rSCEV . rSCEVExp)
             closedForms = hfmap (computeClosedForm (a'' ^. ig) tripCount) chains
 
@@ -306,25 +269,25 @@ defaultBCScan' mkScan' = AbstInterpOperation $
             ((init', rInit), aInit) = runState (optimizeBoundsExp init) (enterExpScope a)
         put $ popLoopScope aInit
 
-        -- input constraints
+        -- the input array is not loop variant; data and control constraints hold
         let dInput = bccsToScalar itp $ hfmap (varToDataConstraint    env) input'
             cInput = bccsToScalar itp $ hfmap (varToControlConstraint env) input'
         sInput <- mkInvarVars dInput
 
-            -- init is loop-variant (empty constraints initially)
+        -- accumulator is loop variant; data and control constraints are not consistent
         let dInit = bccsEmpty init'
             cInit = bccsEmpty init'
         (sInit, iInit) <- mkInductionVars (rInit ^. rCS . rData)
 
-        -- optimize the folding function under these argument constraints
         a' <- get
         let args = diffArg2 dInput cInput sInput dInit cInit sInit
             ((f', rOut), aOut) = runState (optimizeBoundsFun' args f) (newLoopScope $ enterExpScope a')
         put $ popLoopScope $ popLoopScope aOut
 
-        -- compute SCEV/closed-forms using a trip-count between 0 and size-1
+        -- SCAN
         a'' <- get
         dSize <- bcShapeSize shr (hfmap (varToDataConstraint env) sh)
+        -- scan between 0 and inputSize-1
         let dSpan    = interpretData (a'' ^. ig) interpretPrimAdd dSize (bccPut (toCGType dSize) $ pure $ fromConst (-1 :: Int))
             shSpan'  = bccPutInLower dSpan (fromConst (0 :: Int))
         shSpan <- dataToBasic shSpan'
@@ -332,15 +295,17 @@ defaultBCScan' mkScan' = AbstInterpOperation $
             chains      = hzipWith (computeChains (a'' ^. ig)) iInit (rOut ^. rSCEV . rSCEVExp)
             closedForms = hfmap (computeClosedForm (a'' ^. ig) tripCount) chains
 
+        -- FOLD
         a''' <- get
         shSize <- dataToBasic dSize
+        -- folding all elements gives the output scalar
         let tripCount' = Exists <$> unwrapBCConstraint shSize
             closedForms' = hfmap (computeClosedForm (a''' ^. ig) tripCount') chains
 
         let args'   = ArgFun f' :>: ArgExp init' :>: input :>: scanned :>: acc :>: ArgsNil
             output' = TupRpair scanned' acc'
             iOut    = hfmap (varToESSA env) output'
-            -- assume scanned/acc element types match input's `itp` (as in scan/scan1)
+
             res     = analysisResult (TupRpair closedForms closedForms') (bccsToScalar (TupRpair itp rtp) $ bccsEmpty (TupRpair scanned' acc')) (bccsToScalar (TupRpair itp rtp) $ bccsEmpty (TupRpair scanned' acc'))
         return (BCOptOperation mkScan' args', iOut, output', mkArrayFuncRes (TupRpair itp rtp) res, False)
 
@@ -360,7 +325,6 @@ defaultBCFold mkFold = AbstInterpOperation $
       -- the input array is not loop variant; data and control constraints hold
       let dInput = bccsToScalar itp $ hfmap (varToDataConstraint    env) input'
           cInput = bccsToScalar itp $ bccsEmpty input'
-          -- empty SCEVConstraints to model loop invariant
       sInput <- mkInvarVars dInput
 
       -- accumulator is loop variant; data and control constraints varry;
@@ -378,6 +342,7 @@ defaultBCFold mkFold = AbstInterpOperation $
       a'' <- get
       dSize <- bcShapeSize shr (hfmap (varToDataConstraint env) sh)
       shSize <- dataToBasic dSize
+      -- All elements are folded within the accumulator => tripCount = [size(input), size(input)]
       let tripCount = Exists <$> unwrapBCConstraint shSize
           chains      = hzipWith (computeChains (a'' ^. ig)) iInit (rOut ^. rSCEV . rSCEVExp) 
           closedForms = hfmap (computeClosedForm (a'' ^. ig) tripCount) chains
@@ -397,17 +362,16 @@ defaultBCFold1 mkFold1 = AbstInterpOperation $
         a <- get
         let env = a ^. essaEnvs . essaEnvArr
 
-        -- Convert input to BC constraints
+        -- the input array is not loop variant; data and control constraints hold
         let dInput = bccsToScalar itp $ hfmap (varToDataConstraint env) input'
             cInput = bccsToScalar itp $ hfmap (varToControlConstraint env) input'
         sInput <- mkInvarVars dInput
 
-        -- Accumulator is loop-variant
+        -- first element becomes the accumulator
         let dAcc = bccsToScalar itp $ bccsEmpty input'
             cAcc = bccsToScalar itp $ bccsEmpty input'
         (sAcc, iAcc) <- mkInductionVars dInput
 
-        -- Optimize the folding function
         a' <- get
         let args = diffArg2 dInput cInput sInput dAcc cAcc sAcc
             ((f', rOut), aOut) = runState (optimizeBoundsFun' args f) (newLoopScope $ enterExpScope a')
@@ -415,9 +379,10 @@ defaultBCFold1 mkFold1 = AbstInterpOperation $
 
         -- Compute SCEV results
         a'' <- get
-        dSize <- bcShapeSize shr (hfmap (varToDataConstraint env) sh)
-        shSize <- dataToBasic (interpretData (a'' ^. ig) interpretPrimAdd dSize (bccPut (toCGType dSize) $ pure $ fromConst (-1 :: Int)))
-        let tripCount = Exists <$> unwrapBCConstraint shSize
+        inputSize <- bcShapeSize shr (hfmap (varToDataConstraint env) sh)
+        -- exactly size(input)-1 more incoming elements
+        dInputSize <- dataToBasic (interpretData (a'' ^. ig) interpretPrimAdd inputSize (bccPut (toCGType inputSize) $ pure $ fromConst (-1 :: Int)))
+        let tripCount = Exists <$> unwrapBCConstraint dInputSize
             chains      = hzipWith (computeChains (a'' ^. ig)) iAcc (rOut ^. rSCEV . rSCEVExp)
             closedForms = hfmap (computeClosedForm (a'' ^. ig) tripCount) chains
 

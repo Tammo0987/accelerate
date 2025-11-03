@@ -580,6 +580,14 @@ data PreSmartExp acc exp t where
                 -> exp a
                 -> PreSmartExp acc exp b
 
+  Assert        :: exp PrimBool
+                -> exp a
+                -> PreSmartExp acc exp a
+
+  Assume        :: exp PrimBool
+                -> exp a
+                -> PreSmartExp acc exp a
+
 
 -- Smart constructors for stencils
 -- -------------------------------
@@ -893,6 +901,8 @@ instance HasTypeR exp => HasTypeR (PreSmartExp acc exp) where
     Foreign tp _ _ _                -> tp
     Undef tp                        -> TupRsingle tp
     Coerce _ tp _                   -> TupRsingle tp
+    Assert _ e                      -> typeR e
+    Assume _ e                      -> typeR e
 
 
 -- Smart constructors
@@ -1389,4 +1399,6 @@ formatPreExpOp = later $ \case
   ShapeSize{}   -> "ShapeSize"
   Foreign{}     -> "Foreign"
   Coerce{}      -> "Coerce"
+  Assert{}      -> "Assert" 
+  Assume{}      -> "Assume"
 

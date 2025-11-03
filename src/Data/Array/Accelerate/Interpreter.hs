@@ -95,6 +95,8 @@ import Data.Array.Accelerate.Trafo.Operation.Substitution (alet, aletUnique, wea
 import Data.Map (Map)
 import Data.Functor.Identity
 import System.IO.Unsafe (unsafePerformIO)
+import Data.Array.Accelerate.Trafo.Exp.Bounds.ArrayInstr
+import Data.Array.Accelerate.Trafo.Exp.Bounds.Optimize.ArrayInstr
 
 data Interpreter
 -- instance Backend Interpreter where
@@ -229,7 +231,7 @@ instance BCOperation InterpretOp where
   bcOperation IGenerate        = defaultBCGenerate IGenerate
   bcOperation IMap             = defaultBCMap IMap
   bcOperation IBackpermute     = defaultBCBackpermute IBackpermute
-  bcOperation IPermute         = defaultBCPermuteWithFun IPermute
+  bcOperation IPermute         = defaultBCPermute IPermute
   bcOperation IPermuteUnique   = defaultBCPermuteUnique IPermuteUnique
   bcOperation (IFold1 ref)     = defaultBCFold1 (IFold1 ref)
   bcOperation (IScan1 dir ref) = defaultBCScan1 (IScan1 dir ref)
@@ -908,6 +910,12 @@ evalOpenExp pexp env arr@(EvalArrayInstr runArrayInstr) =
     Coerce t1 t2 e -> do
       x <- evalE e
       return $ evalCoerceScalar t1 t2 x
+
+    Assert g e -> do
+      g' <- evalE g
+      (if toBool g' then evalE e else error "Memory Access Violation!")
+
+    Assume _ e -> evalE e
 
 
 -- Coercions
