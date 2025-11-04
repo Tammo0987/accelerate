@@ -152,7 +152,7 @@ defaultBCPermute mkPermute = AbstInterpOperation $
 defaultBCPermuteUnique
   :: (forall sh1 e1. op (Mut sh1 e1 -> In sh (PrimMaybe (sh1, e1)) -> ()))
   -> AbstInterpOperation op (Mut sh' e -> In sh (PrimMaybe (sh', e)) -> ())
-defaultBCPermuteUnique mkPermute' = AbstInterpOperation $
+defaultBCPermuteUnique mkPermuteUnique = AbstInterpOperation $
   \(def@(ArgArray _ (ArrayR _ _) _ def') :>: input@(ArgArray _ _ _ mInput) :>: ArgsNil) -> do
       a <- get
       let env = a ^. essaEnvs . essaEnvArr
@@ -166,7 +166,7 @@ defaultBCPermuteUnique mkPermute' = AbstInterpOperation $
           iMut = hfmap (varToESSA env) def'
           rMut = analysisResult dRes cRes sRes
       let args' = def :>: input :>: ArgsNil
-      return (BCOptOperation mkPermute' args', iMut, def', rMut, False)
+      return (BCOptOperation mkPermuteUnique args', iMut, def', rMut, False)
 
 bccPutInLower :: BCConstraint c Int -> c Int -> BCConstraint c Int
 bccPutInLower bc c =
@@ -390,15 +390,3 @@ defaultBCFold1 mkFold1 = AbstInterpOperation $
             iOut  = hfmap (varToESSA env) output'
             res   = analysisResult closedForms (bccsToScalar itp $ bccsEmpty output') (bccsToScalar itp $ bccsEmpty output')
         return (BCOptOperation mkFold1 args', iOut, output', mkArrayFuncRes itp res, False)
-
-
-showTupR' :: TupR (BCConstraint (HMaybe (DiffExp ESSAIdx))) t -> String
-showTupR' TupRunit           = ""
-showTupR' (TupRsingle x)     = show $ Showable (unwrapBCConstraint x)
-showTupR' (TupRpair a b)     = "(" ++ showTupR' a ++ "," ++ showTupR' b ++ ")"
-
-data Showable where
-  Showable :: Show x => x -> Showable
-
-instance Show Showable where
-  show (Showable x) = show x

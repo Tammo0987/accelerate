@@ -22,19 +22,8 @@ import qualified Data.Map as Map
 import Data.Array.Accelerate.Array.Buffer (indexBuffer)
 import Data.Array.Accelerate.Type
 import Data.Array.Accelerate.Trafo.Exp.Bounds.ESSA.ESSAIdx
-import Debug.Trace as Debug
 
 -- Top function to optimize Closed Acc code
-#ifdef ACCELERATE_OPTIMIZE_ASSERTIONS
-optimizeBounds :: BCOperation op => PreOpenAcc op () t -> PreOpenAcc op () t
-optimizeBounds acc =
-    let ((optimizedFun, _), a) = runState (optimizeBounds' acc) emptyAnalysis
-        in Debug.trace (show $ a ^. ig) optimizedFun
-#else
-optimizeBounds :: BCOperation op => PreOpenAcc op () t -> PreOpenAcc op () t
-optimizeBounds acc = acc
-#endif
-
 optimizeBounds'
     :: forall benv op t loops
     .  BCOperation op => PreOpenAcc op benv t
@@ -75,11 +64,11 @@ optimizeBounds' (Acond g t e) = do
     case redundant of
       Just True -> do
         (t', arT) <- withPi True  optimizeBounds' t b
-        return (t', arT)
+        return (Acond g t' e, arT)
 
       Just False -> do
         (e', arE) <- withPi False optimizeBounds' e b
-        return (e', arE)
+        return (Acond g t e', arE)
 
       Nothing -> do
         (t', arT) <- withPi True  optimizeBounds' t b
@@ -157,11 +146,15 @@ optimizeBounds' instr@(Manifest e) = do
         s   = bccsEmpty e
     return (instr, analysisResult (TupRsingle d) (TupRsingle c) s)
 
-
+#ifdef ACCELERATE_OPTIMIZE_ASSERTIONS
 optimizeBoundsAFun :: BCOperation op => PreOpenAfun op () t -> PreOpenAfun op () t
 optimizeBoundsAFun acc =
   let ((optimizedFun, _), _) = runState (optimizeBoundsAFun' (emptyConstraintsArgs acc) acc) emptyAnalysis
   in optimizedFun
+#else
+optimizeBoundsAFun :: BCOperation op => PreOpenAfun op () t -> PreOpenAfun op () t
+optimizeBoundsAFun acc = acc
+#endif
 
 optimizeBoundsAFun'
     :: (BCOperation op)

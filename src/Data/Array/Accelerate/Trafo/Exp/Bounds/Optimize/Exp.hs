@@ -143,12 +143,12 @@ optimizeBoundsExp (Cond g t e) = do
       -- if the guard is always true, only "then" branch is optimized
       Just True -> do
         (t', arT) <- withPi True optimizeBoundsExp t (arG ^. rCS . rControl)
-        return (t', arT)
+        return (Cond g t' e, arT)
 
       -- if the guard is always false, only "else" branch is optimized
       Just False -> do
         (e', arE) <- withPi False optimizeBoundsExp e (arG ^. rCS . rControl)
-        return (e', arE)
+        return (Cond g t e', arE)
 
       Nothing -> do
         -- phi-combine constraints
@@ -492,8 +492,12 @@ primFunData g pf (TupRpair (TupRsingle x) (TupRsingle y)) =
                 always <- alwaysGTEQ x y;
                 never  <- neverGTEQ x y;
                 return $ TupRsingle $ boolData ((True <$ guard always) <|> (False <$ guard never))
+            (PrimEq   _) -> return $ TupRsingle (boolData Nothing)
             _             -> return $ bccsEmpty g
-primFunData _ _ _ = error "misaligned TupR"
+                                                    -- temporary, will traverse and replace types of ESSA indices
+primFunData g (PrimFromIntegral tp a) x = return $ unsafeCoerce x
+primFunData g _ _ = return $ bccsEmpty g
+
 
 alwaysGT :: DataConstraint t -> DataConstraint t
          -> BCState ScalarType (ArrayInstr benv) (loopEnv : loops) '(benv, env) Bool

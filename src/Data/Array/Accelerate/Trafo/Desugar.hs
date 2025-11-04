@@ -1782,11 +1782,7 @@ checkPositive (ShapeRsnoc ShapeRz) (TupRpair TupRunit (TupRsingle v)) =
   Pair Nil (Assert (mkBinary (PrimGtEq singleType) (ArrayInstr (Parameter v) Nil) (Const scalarTypeInt 0)) (ArrayInstr (Parameter v) Nil))
 checkPositive (ShapeRsnoc shr') (TupRpair v' (TupRsingle v)) = 
   Pair (checkPositive shr' v') (Assert (mkBinary (PrimGtEq singleType) (ArrayInstr (Parameter v) Nil) (Const scalarTypeInt 0)) (ArrayInstr (Parameter v) Nil))
-checkPositive shr _ = error ("error building bounds checks " ++ show (countR shr))
-
-countR :: ShapeR sh -> Int
-countR ShapeRz = 0
-countR (ShapeRsnoc sh') = 1 + countR sh'
+checkPositive _ _ = error ("error building bounds checks")
 
 #else
 addBCAssertion :: ShapeR sh -> TupR (Var GroundR benv) sh -> ExpVars env sh -> Maybe (PreOpenExp (ArrayInstr benv) env sh)
