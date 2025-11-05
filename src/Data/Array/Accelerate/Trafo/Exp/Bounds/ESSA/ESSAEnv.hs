@@ -33,8 +33,17 @@ import Lens.Micro.TH
 import Data.Array.Accelerate.AST.Operation
 import Data.Array.Accelerate.Trafo.Exp.Bounds.SCEV.RecChain (ClosedFormConstraint)
 import Data.Array.Accelerate.Type
+import qualified Debug.Trace as Debug
 
 data EnvElem t = EnvElem {essaIdx :: BCConstraint ESSAIdx t, ctrlCnstr :: ControlConstraint t}
+
+instance Show (EnvElem t) where
+    show (EnvElem i c) =
+        let
+            i' = unwrapBCConstraint i
+            c' = unwrapBCConstraint c
+            in "(" ++ show i' ++ " " ++ show c' ++ ")"
+
 type ESSAEnv t = HList EnvElem t
 
 data ESSAEnvs envs = ESSAEnvs
@@ -131,11 +140,11 @@ remapEnv mappings (HCons (EnvElem i c) env) =
         idxs     = hfmap (\(HPair a _) -> a) bcResult
         residual = fmap unTag <$> unwrapBCConstraint $ hfmap sndw bcResult
         in HCons (EnvElem idxs c) (remapEnv residual env)
-remapEnv _ HEmpty = error "tried to remap non-existent index"
+remapEnv _ HEmpty = HEmpty
 
 remapIdx :: [(ESSAIdx t, ESSAIdx t)] -> ESSAIdx a -> HPair ESSAIdx (Tag [(ESSAIdx t, ESSAIdx t)]) a
 remapIdx ((old, new) : ls) target@(ESSAIdx tp _) | essaInt target == essaInt old = HPair (ESSAIdx tp $ essaInt new) (Tag ls)
 remapIdx ((old, new) : ls) i =
     let (HPair rIdx (Tag rls)) = remapIdx ls i
-        in (HPair rIdx $ Tag $ (old, new) : rls)
+        in HPair rIdx $ Tag $ (old, new) : rls
 remapIdx [] i = HPair i (Tag [])

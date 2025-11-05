@@ -50,10 +50,14 @@ optimizeBoundsExp :: forall benv env t l ls .
 -- to assure dominant checks remove further weaker checks
 optimizeBoundsExp (Assert g e) = do
     (g', arG) <- optimizeBoundsExp g
-    (e', arE) <- withPiPersist True optimizeBoundsExp e (arG ^. rCS.rControl)
     redundant <- isAlwaysTrueData (getSingle $ arG ^. rCS . rData)
-    if redundant then Debug.trace "REDUNDANT" $ return (e', arE)
-                 else Debug.trace "NOT REDUNDANT" $ return (Assert g' e', arE)
+    if redundant then do
+                    -- if the assertion is redundant pi-information does not introduce any useful information
+                    (e', arE) <- optimizeBoundsExp e
+                    return (e', arE)
+                 else do
+                    (e', arE) <- withPiPersist True optimizeBoundsExp e (arG ^. rCS.rControl) 
+                    return (Assert g' e', arE)
 
 -- Optimize the guard and non-persistently pi-constrain the variables. The lack of persistence
 -- is meant to contain the unsafe effect of an assumtion within intended scope
@@ -101,7 +105,7 @@ optimizeBoundsExp (Let lhs bnd e) = do
 optimizeBoundsExp (Case expr eqs def) = do
     (expr', _) <- optimizeBoundsExp expr
 
-    -- gathera list of analysis results
+    -- gather a list of analysis results
     aEqs <- mapM (\(tag, e) -> do
                      (e', arE) <- optimizeBoundsExp e
                      return ((tag, e'), arE)
@@ -325,10 +329,10 @@ optimizeWhileBody idxs ctrl (Lam lhs (Body body)) | BCBodyDict <- isBody body = 
     let a' = rebind lhs idxs (bccsEmpty body) a
     let ((body', _), a'') = runState (withPi True optimizeBoundsExp body ctrl) a'
     -- The guard arugments and body arguments have the same ESSA-indices
-    () <- putPiAssignment False (getSingle ctrl)
     let (argIdxs, a''') = popBind lhs a''
         d = hfmap (hfmap (hfmap fromESSA)) argIdxs
     put a'''
+    () <- putPiAssignment False (getSingle ctrl)
     return (Lam lhs (Body body'), analysisResult d (bccsEmpty body) (bccsEmpty body))
 optimizeWhileBody _ _ _ = error "malformed While encountered"
 
@@ -467,13 +471,13 @@ primFunData g pf (TupRpair (TupRsingle x) (TupRsingle y)) =
             (PrimSub   _) -> do r <- interpretSub x y; return $ TupRsingle r
             PrimLAnd -> TupRsingle . boolData <$> liftA2 (<|>) (f isTrue x y) (f isFalse x y)
                 where
-                    isTrue x' y' = Debug.trace ("(" ++ show (isAlwaysTrue graphs x') ++ " && " ++ show (isAlwaysTrue graphs y') ++ ")\n" ++ show (replicate 20 '-') ++ "\n") $ isAlwaysTrue graphs x' && isAlwaysTrue graphs y'
+                    isTrue x' y'  = Debug.trace ("(" ++ show (isAlwaysTrue graphs x') ++ " && " ++ show (isAlwaysTrue graphs y') ++ ")\n" ++ show (replicate 20 '-') ++ "\n") $ isAlwaysTrue  graphs x' && isAlwaysTrue  graphs y'
                     isFalse x' y' = isAlwaysFalse graphs x' || isAlwaysFalse graphs y'
                     f is x' y' = liftM2 (\m n -> Just (is m n)) (dataToBasic x') (dataToBasic y')
 
             PrimLOr       -> TupRsingle . boolData <$> liftA2 (<|>) (f isTrue x y) (f isFalse x y)
                 where
-                    isTrue x' y' = Debug.trace ("(" ++ show (isAlwaysTrue graphs x') ++ " || " ++ show (isAlwaysTrue graphs y') ++ ")\n" ++ show (replicate 20 '-') ++ "\n") $ isAlwaysTrue graphs x' || isAlwaysTrue graphs y'
+                    isTrue x' y'  = Debug.trace ("(" ++ show (isAlwaysTrue graphs x') ++ " || " ++ show (isAlwaysTrue graphs y') ++ ")\n" ++ show (replicate 20 '-') ++ "\n") $ isAlwaysTrue  graphs x' || isAlwaysTrue  graphs y'
                     isFalse x' y' = isAlwaysFalse graphs x' && isAlwaysFalse graphs y'
                     f is x' y' = liftM2 (\m n -> Just (is m n)) (dataToBasic x') (dataToBasic y')
             (PrimLt    _) -> do

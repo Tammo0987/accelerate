@@ -178,25 +178,25 @@ isUpperBound, isStrictUpperBound, isLowerBound, isStrictLowerBound
   :: IG -> BasicDiff ESSAIdx t -> BasicDiff ESSAIdx t -> Bool
 isUpperBound g@(IG Upper _ _ _) bd1 bd2 =
   let res = boundCheck (<=) (<= 0) g bd1 bd2
-  in Debug.trace ("-> " ++ show bd2 ++ " >= " ++ show bd1 ++ " is " ++ show res ++ "\n") 
+  in -- Debug.trace ("-> " ++ show bd2 ++ " >= " ++ show bd1 ++ " is " ++ show res ++ "\n") 
     res
 isUpperBound _ _ _= error "opposite inequality graph encountered"
 
 isStrictUpperBound g@(IG Upper _ _ _) bd1 bd2 =
   let res = boundCheck (<) (< 0) g bd1 bd2
-  in Debug.trace ("-> " ++ show bd2 ++ " > " ++ show bd1 ++ " is " ++ show res ++ "\n") 
+  in -- Debug.trace ("-> " ++ show bd2 ++ " > " ++ show bd1 ++ " is " ++ show res ++ "\n") 
     res
 isStrictUpperBound _ _ _= error "opposite inequality graph encountered"
 
 isLowerBound g@(IG Lower _ _ _) bd1 bd2 =
   let res = boundCheck (>=) (>= 0) g bd1 bd2
-  in Debug.trace ("-> " ++ show bd2 ++ " <= " ++ show bd1 ++ " is " ++ show res ++ "\n") 
+  in -- Debug.trace ("-> " ++ show bd2 ++ " <= " ++ show bd1 ++ " is " ++ show res ++ "\n") 
     res
 isLowerBound _ _ _ = error "opposite inequality graph encountered"
 
 isStrictLowerBound g@(IG Lower _ _ _) bd1 bd2 =
   let res = boundCheck (>) (> 0) g bd1 bd2
-  in Debug.trace ("-> " ++ show bd2 ++ " < " ++ show bd1 ++ " is " ++ show res ++ "\n") 
+  in -- Debug.trace ("-> " ++ show bd2 ++ " < " ++ show bd1 ++ " is " ++ show res ++ "\n") 
     res
 isStrictLowerBound _ _ _ = error "opposite inequality graph encountered"
 

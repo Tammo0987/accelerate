@@ -21,11 +21,51 @@ import Lens.Micro
 import Data.Array.Accelerate.Trafo.Exp.Bounds.ESSA.ESSAEnv
 import Data.Array.Accelerate.Trafo.Exp.Bounds.Utils
 import Data.Array.Accelerate.Trafo.Exp.Bounds.ESSA.ESSAIdx
+import qualified Debug.Trace as Debug
 
 -- === Pi Assignment Wrapper ===
 type Persistent = Bool
 
--- single top-level forall; no nested foralls
+putPiAssignment :: Bool -> ControlConstraint PrimBool -> BCState s op prev (PutByType s benv () env) ()
+putPiAssignment branch ctrl = do
+  a <- get
+  case a ^. level of
+    STypeGround -> do
+      let env = a ^. essaEnvs . essaEnvArr
+          controlMaps   = unwrapBCConstraint ctrl
+          controlBranch = if branch then cTrue <$> controlMaps else cFalse <$> controlMaps
+          assignResult  = assignNewIdxs <$> (a ^. currentESSAIdx) <*> controlBranch
+          insertCResult = insertC <$> fmap reMap assignResult
+                                                <*> a ^. ig
+          env'          = remapEnv (fmap rePairs assignResult) env
+          insertDResult = foldr
+                            (\(old, new) g -> insertD new (fromESSA old) g)
+                            <$> insertCResult
+                            <*> fmap rePairs assignResult
+
+      put $ a & currentESSAIdx .~ (reIdx <$> assignResult)
+              & ig .~ insertDResult
+              & essaEnvs . essaEnvArr .~ env'
+    STypeScalar -> do
+      let envExp = a ^. essaEnvs . essaEnvExp
+          envArr = a ^. essaEnvs . essaEnvArr
+          controlMaps   = unwrapBCConstraint ctrl
+          controlBranch = if branch then cTrue <$> controlMaps else cFalse <$> controlMaps
+          assignResult  = assignNewIdxs <$> (a ^. currentESSAIdx) <*> controlBranch
+          insertCResult = insertC <$> fmap reMap assignResult
+                                                <*> a ^. ig
+          envExp'       = remapEnv (fmap rePairs assignResult) envExp
+          envArr'       = remapEnv (fmap rePairs assignResult) envArr
+          insertDResult = foldr
+                            (\(old, new) g -> insertD new (fromESSA old) g)
+                            <$> insertCResult
+                            <*> fmap rePairs assignResult
+
+      put $ a & currentESSAIdx .~ (reIdx <$> assignResult)
+              & ig                    .~ insertDResult
+              & essaEnvs . essaEnvExp .~ envExp'
+              & essaEnvs . essaEnvArr .~ envArr'
+
 withPi :: forall instr op env t ts t' prev benv s.
   Bool
   -> (instr op env t
@@ -45,44 +85,6 @@ withPiPersist :: forall instr op env t ts t' prev benv s.
   -> ControlConstraints PrimBool
   -> BCState s op prev (PutByType s benv () env) (instr op env t, AnalysisResult t' ts)
 withPiPersist = withPi' @env @benv True
-
-putPiAssignment :: Bool -> ControlConstraint PrimBool -> BCState s op prev (PutByType s benv () env) ()
-putPiAssignment branch ctrl = do
-  a <- get
-  case a ^. level of
-    STypeGround -> do
-      let env = a ^. essaEnvs . essaEnvArr
-          controlMpas   = unwrapBCConstraint ctrl
-          controlBranch = if branch then cTrue <$> controlMpas else cFalse <$> controlMpas
-          assignResult  = assignNewIdxs <$> (a ^. currentESSAIdx) <*> controlBranch
-          insertCResult = insertC <$> fmap reMap assignResult
-                                                <*> a ^. ig
-          env'          = remapEnv (fmap rePairs assignResult) env
-          insertDResult = foldr
-                            (\(old, new) g -> insertD new (fromESSA old) g)
-                            <$> insertCResult
-                            <*> fmap rePairs assignResult
-
-      put $ a & currentESSAIdx .~ (reIdx <$> assignResult)
-              & ig .~ insertDResult
-              & essaEnvs . essaEnvArr .~ env'
-    STypeScalar -> do
-      let env = a ^. essaEnvs . essaEnvExp
-          controlMpas   = unwrapBCConstraint ctrl
-          controlBranch = if branch then cTrue <$> controlMpas else cFalse <$> controlMpas
-          assignResult  = assignNewIdxs <$> (a ^. currentESSAIdx) <*> controlBranch
-          insertCResult = insertC <$> fmap reMap assignResult
-                                                <*> a ^. ig
-          env'          = remapEnv (fmap rePairs assignResult) env
-          insertDResult = foldr
-                            (\(old, new) g -> insertD new (fromESSA old) g)
-                            <$> insertCResult
-                            <*> fmap rePairs assignResult
-
-      put $ a & currentESSAIdx .~ (reIdx <$> assignResult)
-              & ig                    .~ insertDResult
-              & essaEnvs . essaEnvExp .~ env'
-      
 
 withPi' :: forall env benv instr op t ts t' prev s.
   Persistent
@@ -112,7 +114,6 @@ withPi' persist branch f instr (TupRsingle ctrl) = do
       unless persist $ modify $ \st -> st & essaEnvs . essaEnvExp .~ env
       return (instr', ar)
 
-
 -- Takes the value to start relabeling from and a mapping of indices to their constraints
 -- Returns the map with new indices, a list pairing old and new indices, and the max assigned index
 assignNewIdxs :: Int -> ControlMap t -> AssignResult t
@@ -130,3 +131,4 @@ data AssignResult t = AssignResult
   , rePairs :: [(ESSAIdx t, ESSAIdx t)]
   , reIdx   :: Int
   }
+  deriving Show

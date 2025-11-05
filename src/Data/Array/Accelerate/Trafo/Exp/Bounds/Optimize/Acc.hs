@@ -22,6 +22,7 @@ import qualified Data.Map as Map
 import Data.Array.Accelerate.Array.Buffer (indexBuffer)
 import Data.Array.Accelerate.Type
 import Data.Array.Accelerate.Trafo.Exp.Bounds.ESSA.ESSAIdx
+import Debug.Trace as Debug 
 
 -- Top function to optimize Closed Acc code
 optimizeBounds'
@@ -149,8 +150,9 @@ optimizeBounds' instr@(Manifest e) = do
 #ifdef ACCELERATE_OPTIMIZE_ASSERTIONS
 optimizeBoundsAFun :: BCOperation op => PreOpenAfun op () t -> PreOpenAfun op () t
 optimizeBoundsAFun acc =
-  let ((optimizedFun, _), _) = runState (optimizeBoundsAFun' (emptyConstraintsArgs acc) acc) emptyAnalysis
-  in optimizedFun
+  let ((optimizedFun, _), a) = runState (optimizeBoundsAFun' (emptyConstraintsArgs acc) acc) emptyAnalysis
+  in
+    optimizedFun
 #else
 optimizeBoundsAFun :: BCOperation op => PreOpenAfun op () t -> PreOpenAfun op () t
 optimizeBoundsAFun acc = acc
@@ -184,9 +186,9 @@ optimizeAwhileBody idxs ctrl (Alam lhs (Abody body)) | BCBodyDict <- isBody body
     a <- get
     let a' = rebind lhs idxs (bccsEmpty body) a
     let ((body', _), a'') = runState (withPi True optimizeBounds' body ctrl) a'
-    () <- putPiAssignment False (getSingle ctrl)
     let (argIdxs, a''') = popBind lhs a''
         d = hfmap (hfmap (hfmap fromESSA)) argIdxs
     put a'''
+    () <- putPiAssignment False (getSingle ctrl)
     return (Alam lhs (Abody body'), analysisResult d (bccsEmpty body) (bccsEmpty body))
 optimizeAwhileBody _ _ _ = error "malformed While encountered"
