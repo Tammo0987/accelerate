@@ -22,7 +22,6 @@ import qualified Data.Map as Map
 import Data.Array.Accelerate.Array.Buffer (indexBuffer)
 import Data.Array.Accelerate.Type
 import Data.Array.Accelerate.Trafo.Exp.Bounds.ESSA.ESSAIdx
-import Debug.Trace as Debug 
 
 -- Top function to optimize Closed Acc code
 optimizeBounds'
@@ -93,13 +92,21 @@ optimizeBounds' instr@(Awhile un g it init)
 
     let dInit = hfmap (varToDataConstraint env) init
 
-    let gArgs = diffArg1 dInit (bccsEmpty instr) (bccsEmpty instr)
+    let gArgs = diffArg1 (NewBindArg dInit (bccsEmpty instr) (bccsEmpty instr))
     (g', urGuard) <- optimizeBoundsAFun' gArgs g
     let rGuard = mkFunRes1 urGuard
 
     redundant <- valOfBool (getSingle $ rGuard ^. rCS . rData)
 
-    let ((it', _), a') = runState (optimizeAwhileBody (rGuard ^. rSCEV . rArgIdxs) (rGuard ^. rCS . rControl) it) (newLoopScope a)
+    -- traverse once to get SCEV information
+    (sAcc, iAcc) <- mkInductionVars dInit
+    let ((_, arIt), _) = runState (optimizeAwhileBody (rGuard ^. rSCEV . rArgIdxs) (bccsEmpty init) sAcc (rGuard ^. rCS . rControl) it) (newLoopScope a)
+        sIt = arIt ^. rSCEV . rSCEVExp
+        chIt = hzipWith (computeChains (a ^. ig)) iAcc sIt
+        dIt = hfmap (computeClosedFormNoTripCount (a ^. ig)) chIt
+
+    -- traverse again with more context
+    let ((it', _), a') = runState (optimizeAwhileBody (rGuard ^. rSCEV . rArgIdxs) dIt (bccsEmpty init) (rGuard ^. rCS . rControl) it) (newLoopScope a)
     put $ popLoopScope a'
 
     case redundant of
@@ -134,24 +141,26 @@ optimizeBounds' instr@(Alloc _sh _tp _vars) = return $ identityResult instr
 optimizeBounds' instr@(Return e) = do
     a <- get
     let env = a ^. essaEnvs . essaEnvArr
+        st  = a ^. stack
         d   = hfmap (varToDataConstraint  env) e
         c   = hfmap (varToControlConstraint env) e
-        s   = bccsEmpty e
+        s   = hfmap (varToSCEVConstraint st env) e
     return (instr, analysisResult d c s)
 
 optimizeBounds' instr@(Manifest e) = do
     a <- get
     let env = a ^. essaEnvs . essaEnvArr
+        st  = a ^. stack
         d   = varToDataConstraint  env e
         c   = varToControlConstraint env e
-        s   = bccsEmpty e
-    return (instr, analysisResult (TupRsingle d) (TupRsingle c) s)
+        s   = varToSCEVConstraint st env e
+    return (instr, analysisResult (TupRsingle d) (TupRsingle c) (TupRsingle s))
 
 #ifdef ACCELERATE_OPTIMIZE_ASSERTIONS
 optimizeBoundsAFun :: BCOperation op => PreOpenAfun op () t -> PreOpenAfun op () t
 optimizeBoundsAFun acc =
-  let ((optimizedFun, _), a) = runState (optimizeBoundsAFun' (emptyConstraintsArgs acc) acc) emptyAnalysis
-  in
+  let ((optimizedFun, _), _a) = runState (optimizeBoundsAFun' (emptyConstraintsArgs acc) acc) emptyAnalysis
+  in -- Debug.trace (show $ _a ^. ig) 
     optimizedFun
 #else
 optimizeBoundsAFun :: BCOperation op => PreOpenAfun op () t -> PreOpenAfun op () t
@@ -164,31 +173,34 @@ optimizeBoundsAFun'
     -> PreOpenAfun op benv t
     -> BCState GroundR op loops '(benv, ())
         (PreOpenAfun op benv t, AnalysisResult (ReturnType t) (ArgsType t))
-optimizeBoundsAFun' (ConstraintsArgsCons cnst br ch args) (Alam lhs f) = do
+optimizeBoundsAFun' (ConstraintsArgsCons (NewBindArg d ctrl ch) args) (Alam lhs f) = do
     a <- get
-    let (a', idxs) = declBind lhs cnst br ch a
+    let (a', idxs) = declBind lhs d ctrl ch a
     let ((f', ar), a'') = runState (optimizeBoundsAFun' args f) a'
         ar' = ar & rSCEV . rArgIdxs %~ \x -> TupRpair x idxs
     put $ snd $ popBind lhs a''
     return (Alam lhs f', ar')
+optimizeBoundsAFun' (ConstraintsArgsCons (KeepBindArg _) _) (Alam _ _) = error "unexpected bind-preserving function at array level"
 optimizeBoundsAFun' _ (Abody body) | BCBodyDict <- isBody body = do
     (body', ar) <- optimizeBounds' body
     return (Abody body', ar)
 
+
 optimizeAwhileBody
     :: (BCOperation op)
     => TupR (BCConstraint (HMaybe ESSAIdx)) t
+    -> DataConstraints t
+    -> SCEVConstraints t
     -> ControlConstraints PrimBool
     -> PreOpenAfun op benv (t -> t)
     -> BCState GroundR op prev '(benv, ())
        (PreOpenAfun op benv (t -> t), AnalysisResult (ReturnType t) (ArgsType t))
-optimizeAwhileBody idxs ctrl (Alam lhs (Abody body)) | BCBodyDict <- isBody body = do
+optimizeAwhileBody idxs d s ctrl (Alam lhs (Abody body)) | BCBodyDict <- isBody body = do
     a <- get
-    let a' = rebind lhs idxs (bccsEmpty body) a
-    let ((body', _), a'') = runState (withPi True optimizeBounds' body ctrl) a'
-    let (argIdxs, a''') = popBind lhs a''
-        d = hfmap (hfmap (hfmap fromESSA)) argIdxs
+    let a' = rebind lhs idxs d s a
+        ((body', ar), a'') = runState (withPi True optimizeBounds' body ctrl) a'
+        (_, a''') = popBind lhs a''
     put a'''
     () <- putPiAssignment False (getSingle ctrl)
-    return (Alam lhs (Abody body'), analysisResult d (bccsEmpty body) (bccsEmpty body))
-optimizeAwhileBody _ _ _ = error "malformed While encountered"
+    return (Alam lhs (Abody body'), analysisResult (bccsEmpty body) (bccsEmpty body) (ar ^. rSCEV . rSCEVExp))
+optimizeAwhileBody _ _ _ _ _ = error "malformed While encountered"

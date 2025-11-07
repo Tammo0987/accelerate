@@ -1775,7 +1775,7 @@ boundsCheckAlloc shr tp sh =
             (shared sh)
             (Compute $ checkPositive shr sh)
             (Alloc shr tp (val weakenId))
-
+            
 checkPositive :: ShapeR sh -> ExpVars benv sh -> PreOpenExp (ArrayInstr benv) () sh
 checkPositive ShapeRz _ = Nil
 checkPositive (ShapeRsnoc ShapeRz) (TupRpair TupRunit (TupRsingle v)) = 

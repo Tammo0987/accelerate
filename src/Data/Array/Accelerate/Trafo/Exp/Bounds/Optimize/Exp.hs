@@ -31,8 +31,7 @@ import Data.Array.Accelerate.Trafo.Exp.Bounds.CAS.ConstraintArgs
 import Data.Maybe (fromMaybe)
 import Control.Applicative hiding (Const, empty)
 import Unsafe.Coerce (unsafeCoerce)
-import qualified Debug.Trace as Debug
-import Data.Array.Accelerate.AST.LeftHandSide (Exists(..))
+import Data.Array.Accelerate.AST.LeftHandSide (Exists(..), lhsToTupR)
 import Data.Array.Accelerate.Analysis.Match (matchSingleType)
 import Data.Type.Equality
 import Data.Array.Accelerate.Representation.Shape (ShapeR (..))
@@ -75,7 +74,7 @@ optimizeBoundsExp instr@(While g it init)
     (init', rInit) <- optimizeBoundsExp init
 
     -- Optimize the guard with init values as arguments.
-    let gArgs = diffArg1 (rInit ^. rCS . rData) (bccsEmpty instr) (bccsEmpty instr)
+    let gArgs = diffArg1 (NewBindArg (rInit ^. rCS . rData) (bccsEmpty instr) (bccsEmpty instr))
     (g', urGuard) <- optimizeBoundsFun' gArgs g
     let rGuard = mkFunRes1 urGuard
 
@@ -88,7 +87,7 @@ optimizeBoundsExp instr@(While g it init)
 
       -- Otherwise, optimize the body. If hoisting is implemented, the (Just True) marks the trip count is > 0
       _ -> do
-        let ((it', _), a') = runState (optimizeWhileBody (rGuard ^. rSCEV . rArgIdxs) (rGuard ^. rCS . rControl) it) (newLoopScope a)
+        let ((it', _), a') = runState (optimizeWhileBody (rGuard ^. rSCEV . rArgIdxs) (bccsEmpty init) (rGuard ^. rCS . rControl) it) (newLoopScope a)
         put $ popLoopScope a'
         -- Without SCEV, no data constraints are returned for a non-trivial loop 
         return $ identityResult $ While g' it' init'
@@ -208,11 +207,13 @@ optimizeBoundsExp (ArrayInstr instr@(Parameter v) n) = do
         st  = a ^. stack
         (dArr, _) = getArrayInstrCSConstraints instr env
     let c    = varToClosedForm env v
+        ctrl = TupRsingle $ varToControlConstraint env v
         sArr = case st of
             -- if there is an expression level loop, then a parameter is invariant to it
             (ConsLoopScopeStack _ _) -> TupRsingle $ hfmap (hfmap SCEVInvar) c
+            (EnterExpScope _ (ConsLoopScopeStack _ _)) -> TupRsingle $ fromMaybe (hfmap (hfmap SCEVInvar) (varToClosedForm env v)) $ indexLoopScopeStackParam v (a ^. stack)
             _ -> TupRsingle $ hfmap (const hnothing) c
-    return (ArrayInstr instr n, analysisResult dArr (TupRsingle $ hfmap (const empty) c) sArr)
+    return (ArrayInstr instr n, analysisResult dArr ctrl sArr)
 
 optimizeBoundsExp (ArrayInstr instr@(Index v@(Var tp _)) expr) =
     case tp of
@@ -220,7 +221,6 @@ optimizeBoundsExp (ArrayInstr instr@(Index v@(Var tp _)) expr) =
             a <- get
             let env = a ^. essaEnvs.essaEnvArr
                 st  = a ^. stack
-
                 (dArr, _) = getArrayInstrCSConstraints instr env
 
             -- allocate new ESSA for the indexed value to avoid encoding a[i] == a[j] in the graph
@@ -307,11 +307,18 @@ optimizeBoundsFun'
     -> PreOpenFun (ArrayInstr benv) env t
     -> BCState ScalarType (ArrayInstr benv) (loopEnv : loops) '(benv, env)
        (PreOpenFun (ArrayInstr benv) env t, AnalysisResult (ReturnType t) (ArgsType t))
-optimizeBoundsFun' (ConstraintsArgsCons d cD ch args) (Lam lhs f) = do
+optimizeBoundsFun' (ConstraintsArgsCons (NewBindArg d cD ch) args) (Lam lhs f) = do
     a <- get
     let (a', idxs) = declBind lhs d cD ch a
     let ((f', ar), a'') = runState (optimizeBoundsFun' args f) a'
         ar' = ar & rSCEV . rArgIdxs %~ \x -> TupRpair x idxs
+    put $ snd $ popBind lhs a''
+    return (Lam lhs f', ar')
+optimizeBoundsFun' (ConstraintsArgsCons (KeepBindArg i) args) (Lam lhs f) = do
+    a <- get
+    let a' = rebind lhs i (bccsEmptyG (hfmap GroundRscalar (lhsToTupR lhs))) (bccsEmptyG (hfmap GroundRscalar (lhsToTupR lhs))) a
+        ((f', ar), a'') = runState (optimizeBoundsFun' args f) a'
+        ar' = ar & rSCEV . rArgIdxs %~ \x -> TupRpair x i
     put $ snd $ popBind lhs a''
     return (Lam lhs f', ar')
 optimizeBoundsFun' _ (Body body) | BCBodyDict <- isBody body = do
@@ -320,21 +327,21 @@ optimizeBoundsFun' _ (Body body) | BCBodyDict <- isBody body = do
 
 optimizeWhileBody
     :: TupR (BCConstraint (HMaybe ESSAIdx)) t
+    -> DataConstraints t
     -> ControlConstraints PrimBool
     -> PreOpenFun (ArrayInstr benv) env (t -> t)
     -> BCState ScalarType (ArrayInstr benv) (loopEnv : loops) '(benv, env)
        (PreOpenFun (ArrayInstr benv) env (t -> t), AnalysisResult (ReturnType t) (ArgsType t))
-optimizeWhileBody idxs ctrl (Lam lhs (Body body)) | BCBodyDict <- isBody body = do
+optimizeWhileBody idxs d ctrl (Lam lhs (Body body)) | BCBodyDict <- isBody body = do
     a <- get
-    let a' = rebind lhs idxs (bccsEmpty body) a
+    let a' = rebind lhs idxs d (bccsEmpty body) a
     let ((body', _), a'') = runState (withPi True optimizeBoundsExp body ctrl) a'
     -- The guard arugments and body arguments have the same ESSA-indices
-    let (argIdxs, a''') = popBind lhs a''
-        d = hfmap (hfmap (hfmap fromESSA)) argIdxs
+    let (_, a''') = popBind lhs a''
     put a'''
     () <- putPiAssignment False (getSingle ctrl)
-    return (Lam lhs (Body body'), analysisResult d (bccsEmpty body) (bccsEmpty body))
-optimizeWhileBody _ _ _ = error "malformed While encountered"
+    return (Lam lhs (Body body'), analysisResult (bccsEmpty body) (bccsEmpty body) (bccsEmpty body))
+optimizeWhileBody _ _ _ _ = error "malformed While encountered"
 
 mkFunRes1 :: AnalysisResult t ((), ts) -> AnalysisResult t ts
 mkFunRes1 (AnalysisResult cs (RSCEV ch a)) = AnalysisResult cs (RSCEV ch (mkArgRes1 a))
@@ -358,7 +365,7 @@ interpretPrimFun :: GroundsR t
 interpretPrimFun g pf (AnalysisResult (RCS d c) (RSCEV s _)) = do
         c'  <- primFunControl g pf d c
         d'  <- primFunData    g pf d
-        let s' = primFunSCEV     g pf s
+        let s' = primFunSCEV  g pf s
         return $ AnalysisResult (RCS d' c') (RSCEV s' TupRunit)
 
 interpretBCC :: (HasIdx v)
@@ -471,13 +478,13 @@ primFunData g pf (TupRpair (TupRsingle x) (TupRsingle y)) =
             (PrimSub   _) -> do r <- interpretSub x y; return $ TupRsingle r
             PrimLAnd -> TupRsingle . boolData <$> liftA2 (<|>) (f isTrue x y) (f isFalse x y)
                 where
-                    isTrue x' y'  = Debug.trace ("(" ++ show (isAlwaysTrue graphs x') ++ " && " ++ show (isAlwaysTrue graphs y') ++ ")\n" ++ show (replicate 20 '-') ++ "\n") $ isAlwaysTrue  graphs x' && isAlwaysTrue  graphs y'
+                    isTrue x' y'  = isAlwaysTrue  graphs x' && isAlwaysTrue  graphs y'
                     isFalse x' y' = isAlwaysFalse graphs x' || isAlwaysFalse graphs y'
                     f is x' y' = liftM2 (\m n -> Just (is m n)) (dataToBasic x') (dataToBasic y')
 
             PrimLOr       -> TupRsingle . boolData <$> liftA2 (<|>) (f isTrue x y) (f isFalse x y)
                 where
-                    isTrue x' y'  = Debug.trace ("(" ++ show (isAlwaysTrue graphs x') ++ " || " ++ show (isAlwaysTrue graphs y') ++ ")\n" ++ show (replicate 20 '-') ++ "\n") $ isAlwaysTrue  graphs x' || isAlwaysTrue  graphs y'
+                    isTrue x' y'  = isAlwaysTrue  graphs x' || isAlwaysTrue  graphs y'
                     isFalse x' y' = isAlwaysFalse graphs x' && isAlwaysFalse graphs y'
                     f is x' y' = liftM2 (\m n -> Just (is m n)) (dataToBasic x') (dataToBasic y')
             (PrimLt    _) -> do
@@ -498,7 +505,7 @@ primFunData g pf (TupRpair (TupRsingle x) (TupRsingle y)) =
                 return $ TupRsingle $ boolData ((True <$ guard always) <|> (False <$ guard never))
             (PrimEq   _) -> return $ TupRsingle (boolData Nothing)
             _             -> return $ bccsEmpty g
-                                                    -- temporary, will traverse and replace types of ESSA indices
+    -- temporary, will traverse and replace types of ESSA indices
 primFunData g (PrimFromIntegral tp a) x = return $ unsafeCoerce x
 primFunData g _ _ = return $ bccsEmpty g
 
@@ -629,7 +636,7 @@ primFunControl g pf _ (TupRsingle c) =
     case pf of
         PrimLNot     -> return (TupRsingle (hfmap (\(ControlMaps t f) -> ControlMaps f t) c))
         _            -> return $ bccsEmpty g
-primFunControl _ _ _ _ = error "mismatched TupR"
+primFunControl g _ _ _ = return $ bccsEmpty g
 
 ifI :: Maybe (ESSAIdx t) -> Maybe (ESSAIdx t) -> Int -> [(ESSAIdx t, DiffExp ESSAIdx t)]
 ifI idx1 idx2 w = maybe [] (\ix1 -> [(ix1, Diff $ BDiff idx2 w)]) idx1
@@ -743,6 +750,25 @@ computeClosedForm graphs tripCount chains =
         <$> graphs <*> tripCount <*> ch
         else hfmap (const empty) chains
 
+computeClosedFormNoTripCount :: Bounds IG -> SCEVChainConstraint t -> DataConstraint t
+computeClosedFormNoTripCount graphs chains =
+     let (Bounds (HMaybe lch) _) = unwrapBCConstraint chains
+    in
+      if chainIsNonDecreasing graphs chains
+        then 
+            let lch' = HMaybe $ do
+                    chain <- lch
+                    computeClosedFormNoTripCount' chain
+                in bccPut (toCGType chains) $ Bounds lch' hnothing
+        else hfmap (const empty) chains
+
+computeClosedFormNoTripCount' :: SCEVChain t -> Maybe (DiffExp ESSAIdx t)
+computeClosedFormNoTripCount' (SCEVChain (BaseRecChain bd)) = Just $ Diff bd
+computeClosedFormNoTripCount' (SCEVChain (ConsRecChain bd2 SDelay (BaseRecChain bd1))) = Just $ PhiDiff (Diff bd1) (Diff bd2)
+computeClosedFormNoTripCount' (SCEVChain (ConsRecChain (BDiff Nothing _) SAdd (BaseRecChain bd1))) = Just $ Diff bd1
+computeClosedFormNoTripCount' (SCEVChain (ConsRecChain (BDiff Nothing _) SMult (BaseRecChain bd1))) = Just $ Diff bd1
+computeClosedFormNoTripCount' _ = Nothing
+
 computeClosedForm' :: SingleType t -> IG -> BasicDiff ESSAIdx t' -> SCEVChain t -> Maybe (DiffExp ESSAIdx t)
 computeClosedForm' _ _ _ (SCEVChain (BaseRecChain bd)) = Just $ Diff bd
 computeClosedForm' _ _ _ (SCEVChain (ConsRecChain bd2 SDelay (BaseRecChain bd1))) = Just $ PhiDiff (Diff bd1) (Diff bd2)
@@ -768,6 +794,10 @@ diffIsPositive :: IG -> BasicDiff ESSAIdx t -> Bool
 diffIsPositive g@(IG Lower _ _ _) bd = maybe False (>= (0 :: Int)) $ basicDiffToConst g bd
 diffIsPositive _ _ = error "strict positivity should be checked via the Lower IG"
 
+diffIsPositiveNonZero :: IG -> BasicDiff ESSAIdx t -> Bool
+diffIsPositiveNonZero g@(IG Lower _ _ _) bd = maybe False (> (0 :: Int)) $ basicDiffToConst g bd
+diffIsPositiveNonZero _ _ = error "strict positivity should be checked via the Lower IG"
+
 chainIsNonDecreasing :: Bounds IG -> SCEVChainConstraint t -> Bool
 chainIsNonDecreasing graphs s =
     let ch = runHMaybe $ _lower $ unwrapBCConstraint s
@@ -775,8 +805,8 @@ chainIsNonDecreasing graphs s =
         f ch' = case ch' of
             (SCEVChain (BaseRecChain _)) -> True
             (SCEVChain (ConsRecChain _ SDelay (BaseRecChain _)))  -> True
-            (SCEVChain (ConsRecChain d  SAdd (BaseRecChain _)))   -> diffIsPositive g d
-            (SCEVChain (ConsRecChain d2 SMult (BaseRecChain d1))) -> diffIsPositive g d2 && diffIsPositive g d1
+            (SCEVChain (ConsRecChain d  SAdd (BaseRecChain _)))  -> diffIsPositive g d
+            (SCEVChain (ConsRecChain d2 SMult (BaseRecChain d1))) -> diffIsPositiveNonZero g d2 && diffIsPositive g d1
             _ -> False
         in maybe False f ch
 

@@ -16,7 +16,6 @@ import Data.Array.Accelerate.Trafo.Exp.Bounds.Utils
 import Data.Array.Accelerate.Trafo.Exp.Bounds.ArrayInstr
 import Data.Array.Accelerate.Trafo.Exp.Bounds.ESSA.ESSAEnv
 import Data.Array.Accelerate.Trafo.Exp.Bounds.CAS.Constraints
-import Data.Array.Accelerate.Trafo.Exp.Bounds.SCEV.LoopStack
 import Data.Array.Accelerate.Trafo.Exp.Bounds.BCState
 import Data.Array.Accelerate.Trafo.Exp.Bounds.Optimize.Exp
 import Lens.Micro
@@ -33,12 +32,9 @@ defaultBCMap mkMap = AbstInterpOperation $
       _ | BCBodyDict <- oneParamFunc f, BCScalarDict <- reprBCScalar itp, BCScalarDict <- reprBCScalar otp -> do
         a <- get
         let env = a ^. essaEnvs . essaEnvArr
-            st  = a ^. stack
-            -- unlift array constraints to point-wise argument
-            dInput = bccsToScalar itp $ hfmap (varToDataConstraint    env) input'
-            cInput = bccsToScalar itp $ hfmap (varToControlConstraint env) input'
-            sInput = bccsToScalar itp $ hfmap (varToSCEVConstraint st env) input'
-        let comp = optimizeBoundsFun' (diffArg1 dInput cInput sInput) f
+            iInput = bccsToScalar itp $ hfmap (varToESSA env) input'
+            -- use the same index as the array to capture collective assertion
+        let comp = optimizeBoundsFun' (diffArg1 $ KeepBindArg (hfmap (hfmap hjust) iInput)) f
             ((f', rOut), a') = runState comp (enterExpScope a)
             -- output array is constrained by the point-wise result
             iOut = hfmap (varToESSA env) output'
@@ -61,7 +57,7 @@ defaultBCBackpermute mkBackpermute = AbstInterpOperation $
             cSh = bccsEmpty sh
             sSh = bccsEmpty sh
 
-        let comp = do optimizeBoundsFun' (diffArg1 dSh cSh sSh) f
+        let comp = do optimizeBoundsFun' (diffArg1 $ NewBindArg dSh cSh sSh) f
             ((f', _), a') = runState comp (enterExpScope a)
             args' = ArgFun f' :>: input :>: output :>: ArgsNil
         put $ popLoopScope a'
@@ -89,7 +85,7 @@ defaultBCGenerate mkGenerate = AbstInterpOperation $
             sIx = bccsEmpty sh
 
         -- rOut, the pointwise result is associated to output
-        let comp = do optimizeBoundsFun' (diffArg1 dIx cIx sIx) f
+        let comp = do optimizeBoundsFun' (diffArg1 $ NewBindArg dIx cIx sIx) f
             ((f', rOut), a') = runState comp (enterExpScope a)
         put $ popLoopScope a'
         let args' = ArgFun f' :>: output :>: ArgsNil
@@ -126,7 +122,7 @@ defaultBCPermute mkPermute = AbstInterpOperation $
       (sAcc, iAcc) <- mkInductionVars dAcc
 
       a' <- get
-      let args = diffArg2 dInput cInput sInput dAcc cAcc sAcc
+      let args = diffArg2 (NewBindArg dInput cInput sInput) (NewBindArg dAcc cAcc sAcc)
           ((f', rOut), aOut) = runState (optimizeBoundsFun' args f) (enterExpScope a')
       put $ popLoopScope aOut
 
@@ -198,7 +194,7 @@ defaultBCScan mkScan = AbstInterpOperation $
       (sInit, iInit) <- mkInductionVars (rInit ^. rCS . rData)
 
       a' <- get    
-      let args = diffArg2 dInput cInput sInput dInit cInit sInit
+      let args = diffArg2 (NewBindArg dInput cInput sInput) (NewBindArg dInit cInit sInit)
           ((f', rOut), aOut) = runState (optimizeBoundsFun' args f) (newLoopScope $ enterExpScope a')
       put $ popLoopScope $ popLoopScope aOut
 
@@ -238,7 +234,7 @@ defaultBCScan1 mkScan1 = AbstInterpOperation $
 
         -- Optimize the folding function
         a' <- get
-        let args = diffArg2 dInput cInput sInput dAcc cAcc sAcc
+        let args = diffArg2 (NewBindArg dInput cInput sInput) (NewBindArg dAcc cAcc sAcc)
             ((f', rOut), aOut) = runState (optimizeBoundsFun' args f) (newLoopScope $ enterExpScope a')
         put $ popLoopScope $ popLoopScope aOut
 
@@ -280,7 +276,7 @@ defaultBCScan' mkScan' = AbstInterpOperation $
         (sInit, iInit) <- mkInductionVars (rInit ^. rCS . rData)
 
         a' <- get
-        let args = diffArg2 dInput cInput sInput dInit cInit sInit
+        let args = diffArg2 (NewBindArg dInput cInput sInput) (NewBindArg dInit cInit sInit)
             ((f', rOut), aOut) = runState (optimizeBoundsFun' args f) (newLoopScope $ enterExpScope a')
         put $ popLoopScope $ popLoopScope aOut
 
@@ -334,7 +330,7 @@ defaultBCFold mkFold = AbstInterpOperation $
       (sInit, iInit) <- mkInductionVars (rInit ^. rCS . rData)
 
       a' <- get    
-      let args = diffArg2 dInput cInput sInput dInit cInit sInit
+      let args = diffArg2 (NewBindArg dInput cInput sInput) (NewBindArg dInit cInit sInit)
           ((f', rOut), aOut) = runState (optimizeBoundsFun' args f) (newLoopScope $ enterExpScope a')
       put $ popLoopScope $ popLoopScope aOut
 
@@ -373,7 +369,7 @@ defaultBCFold1 mkFold1 = AbstInterpOperation $
         (sAcc, iAcc) <- mkInductionVars dInput
 
         a' <- get
-        let args = diffArg2 dInput cInput sInput dAcc cAcc sAcc
+        let args = diffArg2 (NewBindArg dInput cInput sInput) (NewBindArg dAcc cAcc sAcc)
             ((f', rOut), aOut) = runState (optimizeBoundsFun' args f) (newLoopScope $ enterExpScope a')
         put $ popLoopScope $ popLoopScope aOut
 

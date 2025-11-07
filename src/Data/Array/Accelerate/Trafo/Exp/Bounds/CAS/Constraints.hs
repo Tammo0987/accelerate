@@ -16,6 +16,7 @@
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE UndecidableInstances #-}
 module Data.Array.Accelerate.Trafo.Exp.Bounds.CAS.Constraints where
 import Data.Array.Accelerate.Representation.Type
 import Data.Array.Accelerate.Trafo.Exp.Bounds.ESSA.ESSAIdx
@@ -40,6 +41,9 @@ instance HBizip BCConstraint where
     let c1' = HBounds $ unwrapBCConstraint c1
         c2' = HBounds $ unwrapBCConstraint c2
         in bccPut (toCGType c1) $ runHBounds $ hbizipWith lf uf c1' c2'
+
+instance Show (c (VectorAgnostic (BufferAgnostic t))) => Show (BCConstraint c t) where
+  show c = show $ unwrapBCConstraint c
 
 class ToCGType a where
   toCGType :: a t -> CGType t
@@ -206,7 +210,10 @@ bccEmpty :: (Empty c) => GroundR t -> BCConstraint c t
 bccEmpty gr = bccPut (toCGType gr) $ pure empty
 
 bccsEmpty :: (HasGroundsR a, Empty c) => a t -> TupR (BCConstraint c) t
-bccsEmpty a = mapTupR bccEmpty (groundsR a)
+bccsEmpty a = bccsEmptyG $ groundsR a
+
+bccsEmptyG :: (Empty c) => GroundsR t -> TupR (BCConstraint c) t
+bccsEmptyG = mapTupR bccEmpty
 
 instance HasGroundsR GroundsR where
   groundsR = id

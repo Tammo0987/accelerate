@@ -82,18 +82,20 @@ declBind lhs d br ch (Analysis g st (ESSAEnvs envArr envExp) i lvl) =
 rebind
   :: LeftHandSide s bnd env env'
   -> TupR (BCConstraint (HMaybe ESSAIdx)) bnd
+  -> DataConstraints bnd
   -> SCEVConstraints bnd
   -> Analysis s op prev (PutByType s benv () env)
   -> Analysis s op prev (PutByType s benv () env')
-rebind lhs idxs ch (Analysis g st (ESSAEnvs envArr envExp) i lvl) =
+rebind lhs idxs d ch (Analysis g st (ESSAEnvs envArr envExp) i lvl) =
   let essaEnv = case lvl of
                   STypeGround -> envArr
                   STypeScalar -> envExp
       essaEnv' = redeclESSAEnv lvl lhs idxs essaEnv
+      g' = insertConstraints idxs d g
   in case lvl of
-       STypeGround -> Analysis g st' (ESSAEnvs essaEnv' envExp) i lvl
+       STypeGround -> Analysis g' st' (ESSAEnvs essaEnv' envExp) i lvl
           where st'      = declStack lhs ch st
-       STypeScalar -> Analysis g st' (ESSAEnvs envArr essaEnv') i lvl
+       STypeScalar -> Analysis g' st' (ESSAEnvs envArr essaEnv') i lvl
           where st'      = declStack lhs ch st
 
 enterExpScope :: Analysis GroundR op prev '(benv, ()) -> Analysis ScalarType (ArrayInstr benv) (Enter op benv : prev) '(benv, ())

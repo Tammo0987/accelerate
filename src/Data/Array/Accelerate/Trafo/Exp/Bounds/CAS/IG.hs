@@ -17,7 +17,6 @@ import Control.Monad.State
 import Data.List (intercalate)
 import GHC.List (foldl1')
 import Data.Maybe (catMaybes)
-import qualified Debug.Trace as Debug
 
 type Node   = Int
 type Weight = Int
