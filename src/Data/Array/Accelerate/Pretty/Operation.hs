@@ -102,6 +102,12 @@ prettyOpenAcc env = \case
         <> hardline <> hang 4 ("  ( " <> prettyOpenAfun env step)
         <> hardline <> "  )"
         <> hardline <> indent 2 (prettyVars (val env) 10 initial)
+  Aassert _ g e ->
+    group $ vsep
+      [ "aassert" <+> parens (prettyExp (val env) g)
+      , "then"
+      , prettyOpenAcc env e
+      ]
   where
     notReturn Return{} = False
     notReturn _        = True

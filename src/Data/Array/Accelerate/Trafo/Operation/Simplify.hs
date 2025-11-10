@@ -175,7 +175,7 @@ simplifyFun fun = snd (simplifyFun' fun) emptySimplifyEnv
 
 -- Returns a set of array variables which may have been written to, and a the simplified function (given an InfoEnv)
 simplifyFun' :: SimplifyOperation op => OperationAfun op env t -> (IdxSet env, InfoEnv env -> OperationAfun op env t)
-simplifyFun' (Alam lhs f) = 
+simplifyFun' (Alam lhs f) =
   (IdxSet.drop' lhs set, \env -> Alam lhs $ f' $ bindEnv lhs env)
   where
     (set, f') = simplifyFun' f
@@ -214,7 +214,7 @@ simplify' uniquenesses = \case
     ( IdxSet.empty
     , \env ->
         let expr' = simplifyExp env expr
-        in 
+        in
           if
             | Just vars <- extractParams expr' ->
               Return $ mapTupR (\(Var tp ix) -> Var (GroundRscalar tp) ix) vars
@@ -247,7 +247,7 @@ simplify' uniquenesses = \case
       (setT, true')  = simplify' uniquenesses true
       (setF, false') = simplify' uniquenesses false
       set = IdxSet.union setT setF
-    in 
+    in
       ( set
       , \env -> case infoFor (varIdx cond) env of
         InfoConst _ 0 -> false' env
@@ -269,6 +269,11 @@ simplify' uniquenesses = \case
           in
             awhileSimplifyInvariant us (cond' env') (step' env') $ simplifyReturnVars env us initial
       )
+  Aassert idxSet g e ->
+    let
+      (setE, e') = simplify' uniquenesses e
+      in (setE, Aassert idxSet g . e')
+
 
 
 variableIndices :: Uniquenesses t -> GroundVars env t -> IdxSet env

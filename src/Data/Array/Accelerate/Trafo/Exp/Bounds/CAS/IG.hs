@@ -74,6 +74,10 @@ insert :: Node -> DiffExp ESSAIdx t -> IG -> IG
 
 insert _ DiffUndef g = g
 
+-- avoid edges where src == target. they appear as a consequence of using the same index
+-- for arrays and their point-wise argument when mapping
+insert i (Diff (BDiff (Just (ESSAIdx _ l)) _)) g | i == l = g
+
 insert i (Diff (BDiff (Just l) w)) (IG label g ps sm) =
   let ix = essaInt l
       g' = Map.insertWith (++) i [(ix, w)] g

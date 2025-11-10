@@ -17,7 +17,7 @@ import Data.Array.Accelerate.Trafo.Exp.Bounds.CAS.ConstraintArgs
 import Data.Array.Accelerate.Trafo.Exp.Bounds.SCEV.RecChain
 import Data.Array.Accelerate.Representation.Type (TupR(..))
 import Data.Array.Accelerate.Trafo.Exp.Bounds.SCEV.LoopStack
-import Data.Array.Accelerate.Trafo.Exp.Bounds.Optimize.Pi (withPi, putPiAssignment)
+import Data.Array.Accelerate.Trafo.Exp.Bounds.Optimize.Pi (withPi, putPiAssignment, withPiPersist)
 import qualified Data.Map as Map
 import Data.Array.Accelerate.Array.Buffer (indexBuffer)
 import Data.Array.Accelerate.Type
@@ -28,6 +28,19 @@ optimizeBounds'
     :: forall benv op t loops
     .  BCOperation op => PreOpenAcc op benv t
     -> BCState GroundR op loops '(benv, ()) (PreOpenAcc op benv t, AnalysisResult t ())
+-- 
+optimizeBounds' (Aassert iset g e) = do
+    a <- get
+    let ((g', arG), a') = runState (optimizeBoundsExp g) (enterExpScope a)
+    put $ popLoopScope a'
+    redundant <- isAlwaysTrueData (getSingle $ arG ^. rCS . rData)
+    if redundant then do
+        -- if the assertion is redundant pi-information does not introduce any useful information
+            (e', arE) <- optimizeBounds' e
+            return (e', arE)
+        else do
+            (e', arE) <- withPiPersist True optimizeBounds' e (arG ^. rCS.rControl) 
+            return (Aassert iset g' e', arE)
 
 -- A bind inserts it's data constraints in the IG, and stores the control constraints in the environment, to be used on an eventual branch on the value
 optimizeBounds' (Alet lhs un bnd e) = do

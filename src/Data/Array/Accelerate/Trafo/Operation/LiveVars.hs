@@ -43,6 +43,7 @@ import Data.Array.Accelerate.Trafo.LiveVars
 import Data.Array.Accelerate.Error
 
 import Data.Type.Equality
+import Data.Maybe (mapMaybe)
 
 stronglyLiveVariablesFun :: SLVOperation op => PreOpenAfun op () t -> PreOpenAfun op () t
 stronglyLiveVariablesFun acc = acc' ReEnvEnd
@@ -215,6 +216,20 @@ stronglyLiveVariables' liveness returns us = \case
         liveness3
         $ \re _ ->
           Left $ Awhile us' (condition' re) (step' re) $ expectJust $ reEnvVars re initial
+  Aassert idxSet g e
+    | free <- IdxSet.fromVarList $ expGroundVars g
+    , liveness1 <- setIdxSetLive free liveness
+    , LVAnalysis liveness2 e' <- stronglyLiveVariables' liveness1 returns us e
+    -> 
+      LVAnalysis
+        liveness2
+        $ \re s -> 
+          let
+            g' = mapArrayInstr (reEnvArrayInstr re) g
+            idxSet' = reEnvIdxSet re idxSet
+            in case e' re s of
+                  (Left  e'') -> Left  $ Aassert idxSet' g' e''
+                  (Right e'') -> Right $ Aassert idxSet' g' e''
 
   where
     mkAcond :: ExpVar env' PrimBool -> PreOpenAcc op env' t' -> PreOpenAcc op env' t' -> PreOpenAcc op env' t'
@@ -224,6 +239,12 @@ stronglyLiveVariables' liveness returns us = \case
     mkAlet :: GLeftHandSide bnd subenv subenv' -> Uniquenesses bnd -> PreOpenAcc op subenv bnd -> PreOpenAcc op subenv' t -> PreOpenAcc op subenv t
     mkAlet (LeftHandSideWildcard TupRunit) _ (Return TupRunit) body = body
     mkAlet lhs us' bnd body = Alet lhs us' bnd body
+
+reEnvIdxSet :: ReEnv env subenv -> IdxSet.IdxSet env -> IdxSet.IdxSet subenv
+reEnvIdxSet re idxSet =
+  IdxSet.fromList $
+    mapMaybe (\(Exists ix) -> fmap Exists (reEnvIdx re ix))
+             (IdxSet.toList idxSet)
 
 class SLVOperation op where
   slvOperation :: op f -> Maybe (ShrinkOperation op f)

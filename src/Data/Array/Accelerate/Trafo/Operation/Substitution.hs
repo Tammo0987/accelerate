@@ -49,6 +49,7 @@ import Data.Array.Accelerate.Trafo.Var
 import Data.Array.Accelerate.Trafo.Substitution       (Sink(..), Sink'(..))
 import Data.Array.Accelerate.Trafo.Exp.Substitution
 import Data.Functor.Identity
+import qualified Data.Array.Accelerate.AST.IdxSet as IdxSet
 
 data SunkReindexPartial f env env' where
   Sink     :: SunkReindexPartial f env env' -> SunkReindexPartial f (env, s) (env', s)
@@ -101,6 +102,17 @@ reindexArrayInstr' k (Parameter v) = Parameter <$> reindexVar' k v
 reindexExp' :: (Applicative f, RebuildableExp e) => SunkReindexPartial f benv benv' -> e (ArrayInstr benv) env t -> f (e (ArrayInstr benv') env t)
 reindexExp' k = rebuildArrayInstrPartial (rebuildArrayInstrMap $ reindexArrayInstr' k)
 
+reindexIdxSet
+  :: forall f env env' . Applicative f
+  => SunkReindexPartial f env env'
+  -> IdxSet.IdxSet env
+  -> f (IdxSet.IdxSet env')
+reindexIdxSet k set =
+  foldr go (pure IdxSet.empty) (IdxSet.toList set)
+  where
+    go :: Exists (Idx env) -> f (IdxSet.IdxSet env') -> f (IdxSet.IdxSet env')
+    go (Exists ix) acc = IdxSet.insert <$> reindex' k ix <*> acc
+
 reindexA' :: forall op f env env' t. (Applicative f) => SunkReindexPartial f env env' -> PreOpenAcc op env t -> f (PreOpenAcc op env' t)
 reindexA' k = \case
     Exec op args -> Exec op <$> reindexArgs (reindex' k) args
@@ -114,6 +126,7 @@ reindexA' k = \case
     Unit var -> Unit <$> reindexVar' k var
     Acond c t f -> Acond <$> reindexVar' k c <*> travA t <*> travA f
     Awhile uniqueness c f i -> Awhile uniqueness <$> reindexAfun' k c <*> reindexAfun' k f <*> reindexVars' k i
+    Aassert idxSet g e -> Aassert <$> reindexIdxSet k idxSet <*> reindexExp' k g <*> reindexA' k e
   where
     travA :: PreOpenAcc op env s -> f (PreOpenAcc op env' s)
     travA = reindexA' k
@@ -137,7 +150,7 @@ pair' u a b = goA weakenId a
     -- and then use the newly defined variables instead.
     --
     goA :: env :> env' -> PreOpenAcc op env' a -> PreOpenAcc op env' (a, b)
-    goA k (Alet lhs uniqueness bnd x) 
+    goA k (Alet lhs uniqueness bnd x)
                            = Alet lhs uniqueness bnd $ goA (weakenWithLHS lhs .> k) x
     goA k (Return vars)    = goB vars $ weaken k b
     goA k acc
@@ -165,6 +178,7 @@ makeManifest acc = case acc of
   Acond c t f -> Acond c (makeManifest t) (makeManifest f)
   Awhile{} -> acc -- Can't fuse anyway
   Return vars -> go vars
+  Aassert s g e -> Aassert s g $ makeManifest e
   where
     go :: GroundVars env t -> PreOpenAcc op env t
     go TupRunit = Return TupRunit

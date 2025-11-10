@@ -100,18 +100,18 @@ withPi' persist branch f instr (TupRsingle ctrl) = do
   case analysis ^. level of
     -- === Arr Level ===
     STypeGround -> do
-      let env = analysis ^. essaEnvs . essaEnvArr
+      let envs = analysis ^. essaEnvs
       _ <- putPiAssignment branch ctrl
       (instr', ar) <- f instr
-      unless persist $ modify $ \st -> st & essaEnvs . essaEnvArr .~ env
+      unless persist $ modify $ \st -> st & essaEnvs .~ envs
       return (instr', ar)
 
     -- === Exp Level ===
     STypeScalar -> do
-      let env = analysis ^. essaEnvs . essaEnvExp
+      let envs = analysis ^. essaEnvs
       _ <- putPiAssignment branch ctrl
       (instr', ar) <- f instr
-      unless persist $ modify $ \st -> st & essaEnvs . essaEnvExp .~ env
+      unless persist $ modify $ \st -> st & essaEnvs .~ envs
       return (instr', ar)
 
 -- Takes the value to start relabeling from and a mapping of indices to their constraints

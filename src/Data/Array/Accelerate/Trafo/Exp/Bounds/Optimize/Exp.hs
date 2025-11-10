@@ -35,6 +35,7 @@ import Data.Array.Accelerate.AST.LeftHandSide (Exists(..), lhsToTupR)
 import Data.Array.Accelerate.Analysis.Match (matchSingleType)
 import Data.Type.Equality
 import Data.Array.Accelerate.Representation.Shape (ShapeR (..))
+import Debug.Trace as Debug
 
 -------------------------------------------------------------
 -- Expression level bounds inference and assertion removal --
@@ -140,7 +141,8 @@ optimizeBoundsExp (Case expr eqs def) = do
 
 optimizeBoundsExp (Cond g t e) = do
     (g', arG) <- optimizeBoundsExp g
-    redundant  <- valOfBool (getSingle $ arG ^. rCS . rData)
+    redundant  <- valOfBool -- $ Debug.trace (show $ getSingle $ arG ^. rCS . rData) 
+        $ getSingle $ arG ^. rCS . rData
 
     case redundant of
       -- if the guard is always true, only "then" branch is optimized
@@ -470,23 +472,50 @@ primFunData :: GroundsR t
             -> PrimFun (a -> t)
             -> DataConstraints a
             -> BCState ScalarType (ArrayInstr benv) (loopEnv : loops) '(benv, env) (DataConstraints t)
-primFunData g pf (TupRpair (TupRsingle x) (TupRsingle y)) =
+primFunData g pf (TupRpair dx@(TupRsingle x) dy@(TupRsingle y)) =
     do a <- get
        let graphs = a ^. ig
        case pf of
             (PrimAdd   _) -> return $ TupRsingle $ interpretData graphs interpretPrimAdd x y
             (PrimSub   _) -> do r <- interpretSub x y; return $ TupRsingle r
-            PrimLAnd -> TupRsingle . boolData <$> liftA2 (<|>) (f isTrue x y) (f isFalse x y)
+            (PrimMax   _) -> return $ phi dx dy
+            (PrimMin   _) -> return $ phi dx dy
+            PrimLAnd ->
+                    TupRsingle . boolData <$> liftA2 (<|>) (fTrue x y) (fFalse x y)
                 where
-                    isTrue x' y'  = isAlwaysTrue  graphs x' && isAlwaysTrue  graphs y'
+                    -- Logical AND semantics
+                    isTrue  x' y' = isAlwaysTrue  graphs x' && isAlwaysTrue  graphs y'
                     isFalse x' y' = isAlwaysFalse graphs x' || isAlwaysFalse graphs y'
-                    f is x' y' = liftM2 (\m n -> Just (is m n)) (dataToBasic x') (dataToBasic y')
 
-            PrimLOr       -> TupRsingle . boolData <$> liftA2 (<|>) (f isTrue x y) (f isFalse x y)
+                    fTrue  x' y' = liftM2 (\m n ->
+                            if isTrue m n
+                            then Just True
+                            else Nothing
+                        ) (dataToBasic x') (dataToBasic y')
+
+                    fFalse x' y' = liftM2 (\m n ->
+                            if isFalse m n
+                            then Just False
+                            else Nothing
+                        ) (dataToBasic x') (dataToBasic y')
+
+            PrimLOr ->
+                    TupRsingle . boolData <$> liftA2 (<|>) (fTrue x y) (fFalse x y)
                 where
-                    isTrue x' y'  = isAlwaysTrue  graphs x' || isAlwaysTrue  graphs y'
+                    isTrue  x' y' = isAlwaysTrue  graphs x' || isAlwaysTrue  graphs y'
                     isFalse x' y' = isAlwaysFalse graphs x' && isAlwaysFalse graphs y'
-                    f is x' y' = liftM2 (\m n -> Just (is m n)) (dataToBasic x') (dataToBasic y')
+
+                    fTrue  x' y' = liftM2 (\m n ->
+                            if isTrue m n
+                            then Just True
+                            else Nothing
+                        ) (dataToBasic x') (dataToBasic y')
+
+                    fFalse x' y' = liftM2 (\m n ->
+                            if isFalse m n
+                            then Just False
+                            else Nothing
+                        ) (dataToBasic x') (dataToBasic y')
             (PrimLt    _) -> do
                 always <- alwaysLT x y;
                 never  <- neverLT x y;
@@ -494,20 +523,34 @@ primFunData g pf (TupRpair (TupRsingle x) (TupRsingle y)) =
             (PrimGt    _) -> do
                 always <- alwaysGT x y;
                 never  <- neverGT x y;
-                return $ TupRsingle $ boolData ((True <$ guard always) <|> (False <$ guard never))
+                return -- $ Debug.trace ("GT " ++ show always ++ " " ++ show never) 
+                    $ TupRsingle $ boolData ((True <$ guard always) <|> (False <$ guard never))
             (PrimLtEq  _) -> do
                 always <- alwaysLTEQ x y;
                 never  <- neverLTEQ x y;
-                return $ TupRsingle $ boolData ((True <$ guard always) <|> (False <$ guard never))
+                return -- $ Debug.trace ("LTEQ " ++ show always ++ " " ++ show never) 
+                    $ TupRsingle $ boolData ((True <$ guard always) <|> (False <$ guard never))
             (PrimGtEq  _) -> do
                 always <- alwaysGTEQ x y;
                 never  <- neverGTEQ x y;
-                return $ TupRsingle $ boolData ((True <$ guard always) <|> (False <$ guard never))
+                return -- $ Debug.trace ("GTEQ " ++ show always ++ " " ++ show never) 
+                    $ TupRsingle $ boolData ((True <$ guard always) <|> (False <$ guard never))
             (PrimEq   _) -> return $ TupRsingle (boolData Nothing)
-            _             -> return $ bccsEmpty g
+            _            -> return $ bccsEmpty g
     -- temporary, will traverse and replace types of ESSA indices
-primFunData g (PrimFromIntegral tp a) x = return $ unsafeCoerce x
+primFunData _ (PrimFromIntegral tp a) (TupRsingle x) = return $ TupRsingle $ retypeData (NumSingleType $ IntegralNumType tp) (NumSingleType a) x
 primFunData g _ _ = return $ bccsEmpty g
+
+retypeData :: SingleType t -> SingleType t' -> DataConstraint t -> DataConstraint t'
+retypeData tp tp' d | BCSingleDict <- reprBCSingle tp,  BCSingleDict <- reprBCSingle tp' =
+    let
+        d' = fmap (fmap (retypeDiff tp')) (runHMaybe <$> unwrapBCConstraint d)
+        in bccPut (toCGType $ GroundRscalar (SingleScalarType tp')) (HMaybe <$> d')
+
+retypeDiff :: SingleType t' -> DiffExp ESSAIdx t -> DiffExp ESSAIdx t'
+retypeDiff _ DiffUndef = DiffUndef
+retypeDiff tp (PhiDiff d1 d2) = PhiDiff (retypeDiff tp d1) (retypeDiff tp d2)
+retypeDiff tp (Diff (BDiff essa w)) = Diff $ BDiff (fmap (\(ESSAIdx _ i) -> ESSAIdx tp i) essa) w
 
 
 alwaysGT :: DataConstraint t -> DataConstraint t
@@ -652,7 +695,8 @@ interpretControlComparisson pf (TupRpair (TupRsingle bcd1) (TupRsingle bcd2)) = 
             -- i1 + w1 < i2 + w2
             -- True branch: i1 <= i2 + (w2 - w1 - 1)
             -- False branch: i2 <= i1 + (w1 - w2)
-            PrimLt _   -> m (ifI i1 i2 (w2 - w1 - 1)) (ifI i2 i1 (w1 - w2))
+            PrimLt _   -> -- Debug.trace (show bd1 ++ "<" ++ show bd2 ++ "?") $
+                m (ifI i1 i2 (w2 - w1 - 1)) (ifI i2 i1 (w1 - w2))
 
             -- i1 + w1 > i2 + w2
             -- True branch: i2 <= i1 + (w1 - w2 - 1)

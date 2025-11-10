@@ -23,12 +23,36 @@ import Data.Array.Accelerate.Trafo.Exp.Bounds.CAS.ConstraintArgs
 import Data.Array.Accelerate.Trafo.Exp.Bounds.SCEV.RecChain
 import Data.Array.Accelerate.Trafo.Exp.Bounds.ESSA.ESSAIdx
 import Data.Array.Accelerate.AST.LeftHandSide
+import Data.Array.Accelerate.Representation.Shape
+import Data.Array.Accelerate.Trafo.Exp.Bounds.CAS.IG (basicDiffToConst)
+
+-- Function to check if an array always has at least n elements on the outter-most dimensions.
+-- Used to only persist assertion information outside algorithmic skeletons if they are executed at least once 
+outterDimAtLeast :: Int -> ShapeR sh -> GroundVars benv sh -> BCState s op prev '(benv, env) Bool
+outterDimAtLeast _ ShapeRz _ = return True
+outterDimAtLeast n (ShapeRsnoc sh) (TupRpair gr' (TupRsingle gr)) = do
+    a <- get
+    let env = a ^. essaEnvs . essaEnvArr
+        g   = _lower $ a ^. ig
+        bSh = varToClosedForm env gr
+        (HMaybe lowSh) = _lower $ unwrapBCConstraint bSh
+        res = do 
+            lowSh' <- lowSh
+            cnstSh <- basicDiffToConst g lowSh'
+            return (cnstSh >= n)
+    -- reccurent case checks if the levels below are non-zero
+    recRes <- outterDimAtLeast 1 sh gr'
+    return $ maybe False (recRes &&) res
+outterDimAtLeast _ _ _ = error "mismatched TupR"
+
+isNotEmpty :: ShapeR sh -> GroundVars benv sh -> BCState s op prev '(benv, env) Bool
+isNotEmpty = outterDimAtLeast 1
 
 defaultBCMap
     :: (forall sh' s' t'.  op (Fun' (s' -> t') -> In sh' s'-> Out sh' t' -> ()))
     -> AbstInterpOperation op (Fun' (s  -> t ) -> In sh  s -> Out sh  t  -> ())
 defaultBCMap mkMap = AbstInterpOperation $ 
-  \(ArgFun f :>: input@(ArgArray _ (ArrayR _ itp) _ input') :>: output@(ArgArray _ (ArrayR _ otp) _ output') :>: ArgsNil) -> case f of
+  \(ArgFun f :>: input@(ArgArray _ (ArrayR shr itp) sh input') :>: output@(ArgArray _ (ArrayR _ otp) _ output') :>: ArgsNil) -> case f of
       _ | BCBodyDict <- oneParamFunc f, BCScalarDict <- reprBCScalar itp, BCScalarDict <- reprBCScalar otp -> do
         a <- get
         let env = a ^. essaEnvs . essaEnvArr
@@ -40,13 +64,18 @@ defaultBCMap mkMap = AbstInterpOperation $
             iOut = hfmap (varToESSA env) output'
         put $ popLoopScope a' 
         let args' = ArgFun f' :>: input :>: output :>: ArgsNil
+
+        -- check if assertion information can persist outside
+        runs <- isNotEmpty shr sh
+        unless runs $ modify $ \st -> st & essaEnvs .~ (a ^. essaEnvs) -- revert to initial state environments
+
         return (BCOptOperation mkMap args', iOut, output', mkArrayFuncRes otp rOut, True)
 
 defaultBCBackpermute
     :: (forall sh1' sh2' t'. op (Fun' (sh2' -> sh1') -> In sh1' t' -> Out sh2' t' -> ()))
     -> AbstInterpOperation op (Fun' (sh2 -> sh1) -> In sh1 t -> Out sh2 t -> ())
 defaultBCBackpermute mkBackpermute = AbstInterpOperation $
-    \(ArgFun f :>: input@(ArgArray _ (ArrayR _ itp) _ input') :>: output@(ArgArray _ _ sh output') :>: ArgsNil) -> case f of
+    \(ArgFun f :>: input@(ArgArray _ (ArrayR _ itp) _ input') :>: output@(ArgArray _ (ArrayR shr _) sh output') :>: ArgsNil) -> case f of
       _ | BCBodyDict <- oneParamFunc f, BCScalarDict <- reprBCScalar itp -> do
         a <- get
         let env = a ^. essaEnvs . essaEnvArr
@@ -68,13 +97,18 @@ defaultBCBackpermute mkBackpermute = AbstInterpOperation $
             cOut = bccsToScalar itp $ bccsEmpty input'
             sOut = bccsToScalar itp $ bccsEmpty input'
             rOut = analysisResult dOut cOut sOut
+
+        -- check if assertion information can persist outside
+        runs <- isNotEmpty shr sh
+        unless runs $ modify $ \st -> st & essaEnvs .~ (a ^. essaEnvs) -- revert to initial state environments
+
         return (BCOptOperation mkBackpermute args', iOut, output', mkArrayFuncRes itp rOut, True)
 
 defaultBCGenerate
     :: (forall sh' t'. op (Fun' (sh' -> t') -> Out sh' t' -> ()))
     -> AbstInterpOperation op (Fun' (sh -> t) -> Out sh t -> ())
 defaultBCGenerate mkGenerate = AbstInterpOperation $
-    \(ArgFun f :>: output@(ArgArray _ (ArrayR _ tp) sh output') :>: ArgsNil) -> case f of
+    \(ArgFun f :>: output@(ArgArray _ (ArrayR shr tp) sh output') :>: ArgsNil) -> case f of
       _ | BCBodyDict <- oneParamFunc f, BCScalarDict <- reprBCScalar tp -> do
         a <- get
         let env = a ^. essaEnvs . essaEnvArr
@@ -90,6 +124,11 @@ defaultBCGenerate mkGenerate = AbstInterpOperation $
         put $ popLoopScope a'
         let args' = ArgFun f' :>: output :>: ArgsNil
             iOut = hfmap (varToESSA env) output'
+
+        -- check if assertion information can persist outside
+        runs <- isNotEmpty shr sh
+        unless runs $ modify $ \st -> st & essaEnvs .~ (a ^. essaEnvs) -- revert to initial state environments
+
         return (BCOptOperation mkGenerate args', iOut, output', mkArrayFuncRes tp rOut, False)
 
 getInputArray :: TupR a (tag, ((), (t1, t2))) -> TupR a t2
@@ -142,7 +181,13 @@ defaultBCPermute mkPermute = AbstInterpOperation $
 
       let args' = ArgFun f' :>: def :>: input :>: ArgsNil
           res   = analysisResult closedForms (bccsToScalar dtp $ bccsEmpty def') (bccsToScalar dtp $ bccsEmpty def')
+      
+      -- it is not guaranteed that the colision function is ever called, so we must always revert
+      modify $ \st -> st & essaEnvs .~ (a ^. essaEnvs) -- revert to initial state environments
+    
+      -- the essa-realocation of the mutable array is, however, persistent
       iOut <- traverseTupR bccReallocateMut $ hfmap (varToESSA env) def'
+
       return (BCOptOperation mkPermute args', iOut, def', mkArrayFuncRes dtp res, False)
 
 defaultBCPermuteUnique
@@ -211,6 +256,11 @@ defaultBCScan mkScan = AbstInterpOperation $
       let args' = ArgFun f' :>: ArgExp init' :>: input :>: output :>: ArgsNil
           iOut  = hfmap (varToESSA env) output'
           res   = analysisResult closedForms (bccsToScalar otp $ bccsEmpty output') (bccsToScalar otp $ bccsEmpty output')
+
+      -- check if assertion information can persist outside
+      runs <- isNotEmpty shr sh
+      unless runs $ modify $ \st -> st & essaEnvs .~ (a ^. essaEnvs) -- revert to initial state environments
+    
       return (BCOptOperation mkScan args', iOut, output', mkArrayFuncRes itp res, False)
 
 defaultBCScan1
@@ -252,6 +302,11 @@ defaultBCScan1 mkScan1 = AbstInterpOperation $
         let args' = ArgFun f' :>: input :>: output :>: ArgsNil
             iOut  = hfmap (varToESSA env) output'
             res   = analysisResult closedForms (bccsToScalar itp $ bccsEmpty output') (bccsToScalar itp $ bccsEmpty output')
+
+        -- check if assertion information can persist outside
+        runs <- outterDimAtLeast 2 shr sh
+        unless runs $ modify $ \st -> st & essaEnvs .~ (a ^. essaEnvs) -- revert to initial state environments
+
         return (BCOptOperation mkScan1 args', iOut, output', mkArrayFuncRes itp res, False)
 
 defaultBCScan'
@@ -303,6 +358,12 @@ defaultBCScan' mkScan' = AbstInterpOperation $
             iOut    = hfmap (varToESSA env) output'
 
             res     = analysisResult (TupRpair closedForms closedForms') (bccsToScalar (TupRpair itp rtp) $ bccsEmpty (TupRpair scanned' acc')) (bccsToScalar (TupRpair itp rtp) $ bccsEmpty (TupRpair scanned' acc'))
+
+        
+        -- check if assertion information can persist outside
+        runs <- isNotEmpty shr sh
+        unless runs $ modify $ \st -> st & essaEnvs .~ (a ^. essaEnvs) -- revert to initial state environments
+
         return (BCOptOperation mkScan' args', iOut, output', mkArrayFuncRes (TupRpair itp rtp) res, False)
 
 defaultBCFold
@@ -347,6 +408,11 @@ defaultBCFold mkFold = AbstInterpOperation $
           iOut  = hfmap (varToESSA env) output'
           res   = analysisResult closedForms (bccsToScalar otp $ bccsEmpty output') (bccsToScalar otp $ bccsEmpty output')
 
+    
+      -- check if assertion information can persist outside
+      runs <- isNotEmpty shr sh
+      unless runs $ modify $ \st -> st & essaEnvs .~ (a ^. essaEnvs) -- revert to initial state environments
+
       return (BCOptOperation mkFold args', iOut, output', mkArrayFuncRes itp res, False)
 
 defaultBCFold1
@@ -385,4 +451,9 @@ defaultBCFold1 mkFold1 = AbstInterpOperation $
         let args' = ArgFun f' :>: input :>: output :>: ArgsNil
             iOut  = hfmap (varToESSA env) output'
             res   = analysisResult closedForms (bccsToScalar itp $ bccsEmpty output') (bccsToScalar itp $ bccsEmpty output')
+
+        -- check if assertion information can persist outside
+        runs <- outterDimAtLeast 2 shr sh
+        unless runs $ modify $ \st -> st & essaEnvs .~ (a ^. essaEnvs) -- revert to initial state environments    
+
         return (BCOptOperation mkFold1 args', iOut, output', mkArrayFuncRes itp res, False)

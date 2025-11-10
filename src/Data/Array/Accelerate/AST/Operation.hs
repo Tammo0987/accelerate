@@ -84,6 +84,7 @@ import Language.Haskell.TH.Extra                                    ( CodeQ )
 import Data.Kind (Type)
 import Control.DeepSeq (NFData (rnf))
 import Data.Functor.Identity
+import qualified Data.Array.Accelerate.AST.IdxSet as IdxSet
 
 -- | An intermediate representation parameterized over executable operations.
 -- This data type only consists of the control flow structure and
@@ -179,6 +180,22 @@ data PreOpenAcc (op :: Type -> Type) env a where
           -> PreOpenAfun op env (a -> a)
           -> GroundVars     env a
           -> PreOpenAcc  op env a
+
+    -- | Asserts that the given expression evaluates to true,
+  -- and then evaluates the next term.
+  -- It only guarantees that the assertion is checked before
+  -- any of the variables in the IdxSet is used.
+  -- If the variables in the IdxSet are not used (or if the set is empty),
+  -- the assertion might be removed by an optimizer.
+  --
+  -- The IdxSet is mainly important for fusion, as fusion reorders the program.
+  -- Fusion adds edges between this node and any later node that uses a
+  -- variable in the IdxSet.
+  --
+  Aassert :: IdxSet.IdxSet env
+          -> Exp env PrimBool
+          -> PreOpenAcc op env t
+          -> PreOpenAcc op env t
 
 -- | Function abstraction over parametrised array computations
 --
@@ -371,6 +388,7 @@ instance HasGroundsR (PreOpenAcc op env) where
   groundsR (Unit (Var tp _)) = TupRsingle $ GroundRbuffer tp
   groundsR (Acond _ a _)     = groundsR a
   groundsR (Awhile _ _ _ a)  = groundsR a
+  groundsR (Aassert _ _ e)   = groundsR e
 
 instance HasGroundsR (GroundVar env) where
   groundsR (Var repr _) = TupRsingle repr
@@ -499,6 +517,17 @@ reindexPreArgs
 reindexPreArgs _ _ ArgsNil = pure ArgsNil
 reindexPreArgs reindex k (a :>: as) = (:>:) <$> reindex k a <*> reindexPreArgs reindex k as
 
+reindexIdxSet
+  :: forall f env env' . Applicative f
+  => ReindexPartial f env env'
+  -> IdxSet.IdxSet env
+  -> f (IdxSet.IdxSet env')
+reindexIdxSet k set =
+  foldr go (pure IdxSet.empty) (IdxSet.toList set)
+  where
+    go :: Exists (Idx env) -> f (IdxSet.IdxSet env') -> f (IdxSet.IdxSet env')
+    go (Exists ix) acc = IdxSet.insert <$> k ix <*> acc
+
 reindexAcc :: Applicative f => ReindexPartial f env env' -> PreOpenAcc op env t -> f (PreOpenAcc op env' t)
 reindexAcc r (Exec opargs pa) = Exec opargs <$> reindexArgs r pa
 reindexAcc r (Return tr) = Return <$> reindexVars r tr
@@ -510,6 +539,7 @@ reindexAcc _ (Use st n bu) = pure $ Use st n bu
 reindexAcc r (Unit var) = Unit <$> reindexVar r var
 reindexAcc r (Acond var poa poa') = Acond <$> reindexVar r var <*> reindexAcc r poa <*> reindexAcc r poa'
 reindexAcc r (Awhile tr poa poa' tr') = Awhile tr <$> reindexAfun r poa <*> reindexAfun r poa' <*> reindexVars r tr'
+reindexAcc r (Aassert idxSet g e)     = Aassert <$> reindexIdxSet r idxSet <*> reindexExp r g <*> reindexAcc r e
 
 reindexAfun :: Applicative f => ReindexPartial f env env' -> PreOpenAfun op env t -> f (PreOpenAfun op env' t)
 reindexAfun r (Abody poa) = Abody <$> reindexAcc r poa
@@ -592,6 +622,7 @@ mapAccExecutable f = \case
   Unit vars                     -> Unit vars
   Acond var a1 a2               -> Acond var (mapAccExecutable f a1) (mapAccExecutable f a2)
   Awhile uniqueness c g a       -> Awhile uniqueness (mapAfunExecutable f c) (mapAfunExecutable f g) a
+  Aassert idxSet g e            -> Aassert idxSet g (mapAccExecutable f e)
 
 mapAfunExecutable :: (forall args benv'. op args -> Args benv' args -> op' args) -> PreOpenAfun op benv t -> PreOpenAfun op' benv t
 mapAfunExecutable f (Abody a)    = Abody    $ mapAccExecutable  f a
@@ -621,6 +652,7 @@ instance NFData' op => NFData (OperationAcc op env a) where
   rnf (Unit var)                    = rnfVar rnfScalarType var
   rnf (Acond cond true false)       = rnfVar rnfScalarType cond `seq` rnf true `seq` rnf false
   rnf (Awhile us cond step initial) = rnfTupR rnfUniqueness us `seq` rnf cond `seq` rnf step `seq` rnfGroundVars initial
+  rnf (Aassert _ g e)          = rnfOpenExp g `seq` rnf e
 
 instance NFData' op => NFData (OperationAfun op env a) where
   rnf (Abody a) = rnf a
