@@ -25,6 +25,7 @@ import Data.Array.Accelerate.Trafo.Exp.Bounds.ESSA.ESSAIdx
 import Data.Array.Accelerate.AST.LeftHandSide
 import Data.Array.Accelerate.Representation.Shape
 import Data.Array.Accelerate.Trafo.Exp.Bounds.CAS.IG (basicDiffToConst)
+import Data.Array.Accelerate.Trafo.Exp.Bounds.SCEV.LoopStack
 
 -- Function to check if an array always has at least n elements on the outter-most dimensions.
 -- Used to only persist assertion information outside algorithmic skeletons if they are executed at least once 
@@ -52,13 +53,20 @@ defaultBCMap
     :: (forall sh' s' t'.  op (Fun' (s' -> t') -> In sh' s'-> Out sh' t' -> ()))
     -> AbstInterpOperation op (Fun' (s  -> t ) -> In sh  s -> Out sh  t  -> ())
 defaultBCMap mkMap = AbstInterpOperation $ 
-  \(ArgFun f :>: input@(ArgArray _ (ArrayR shr itp) sh input') :>: output@(ArgArray _ (ArrayR _ otp) _ output') :>: ArgsNil) -> case f of
+  \(ArgFun f :>: input@(ArgArray _ (ArrayR _ itp) _ input') :>: output@(ArgArray _ (ArrayR _ otp) _ output') :>: ArgsNil) -> case f of
       _ | BCBodyDict <- oneParamFunc f, BCScalarDict <- reprBCScalar itp, BCScalarDict <- reprBCScalar otp -> do
         a <- get
         let env = a ^. essaEnvs . essaEnvArr
-            iInput = bccsToScalar itp $ hfmap (varToESSA env) input'
-            -- use the same index as the array to capture collective assertion
-        let comp = optimizeBoundsFun' (diffArg1 $ KeepBindArg (hfmap (hfmap hjust) iInput)) f
+            -- iInput = bccsToScalar itp $ hfmap (varToESSA env) input'
+            st  = a ^. stack
+            -- unlift array constraints to point-wise argument
+            dInput = bccsToScalar itp $ hfmap (varToDataConstraint    env) input'
+            cInput = bccsToScalar itp $ hfmap (varToControlConstraint env) input'
+            sInput = bccsToScalar itp $ hfmap (varToSCEVConstraint st env) input'
+        let comp = optimizeBoundsFun' (diffArg1 $ NewBindArg dInput cInput sInput) f
+        
+        -- TODO: use the same index as the array to capture collective assertion. attempted, but buggy
+        -- let comp = optimizeBoundsFun' (diffArg1 $ NewBindArg (hfmap (hfmap hjust) iInput)) f
             ((f', rOut), a') = runState comp (enterExpScope a)
             -- output array is constrained by the point-wise result
             iOut = hfmap (varToESSA env) output'
@@ -66,8 +74,8 @@ defaultBCMap mkMap = AbstInterpOperation $
         let args' = ArgFun f' :>: input :>: output :>: ArgsNil
 
         -- check if assertion information can persist outside
-        runs <- isNotEmpty shr sh
-        unless runs $ modify $ \st -> st & essaEnvs .~ (a ^. essaEnvs) -- revert to initial state environments
+        -- runs <- isNotEmpty shr sh
+        -- unless runs $ modify $ \st -> st & essaEnvs .~ (a ^. essaEnvs) -- revert to initial state environments
 
         return (BCOptOperation mkMap args', iOut, output', mkArrayFuncRes otp rOut, True)
 

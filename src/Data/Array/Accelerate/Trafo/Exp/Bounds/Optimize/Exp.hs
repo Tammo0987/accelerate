@@ -523,18 +523,15 @@ primFunData g pf (TupRpair dx@(TupRsingle x) dy@(TupRsingle y)) =
             (PrimGt    _) -> do
                 always <- alwaysGT x y;
                 never  <- neverGT x y;
-                return -- $ Debug.trace ("GT " ++ show always ++ " " ++ show never) 
-                    $ TupRsingle $ boolData ((True <$ guard always) <|> (False <$ guard never))
+                return $ TupRsingle $ boolData ((True <$ guard always) <|> (False <$ guard never))
             (PrimLtEq  _) -> do
                 always <- alwaysLTEQ x y;
                 never  <- neverLTEQ x y;
-                return -- $ Debug.trace ("LTEQ " ++ show always ++ " " ++ show never) 
-                    $ TupRsingle $ boolData ((True <$ guard always) <|> (False <$ guard never))
+                return $ TupRsingle $ boolData ((True <$ guard always) <|> (False <$ guard never))
             (PrimGtEq  _) -> do
                 always <- alwaysGTEQ x y;
                 never  <- neverGTEQ x y;
-                return -- $ Debug.trace ("GTEQ " ++ show always ++ " " ++ show never) 
-                    $ TupRsingle $ boolData ((True <$ guard always) <|> (False <$ guard never))
+                return $ TupRsingle $ boolData ((True <$ guard always) <|> (False <$ guard never))
             (PrimEq   _) -> return $ TupRsingle (boolData Nothing)
             _            -> return $ bccsEmpty g
     -- temporary, will traverse and replace types of ESSA indices

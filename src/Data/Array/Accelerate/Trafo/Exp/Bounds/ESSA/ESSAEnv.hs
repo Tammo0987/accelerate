@@ -33,6 +33,8 @@ import Lens.Micro.TH
 import Data.Array.Accelerate.AST.Operation
 import Data.Array.Accelerate.Trafo.Exp.Bounds.SCEV.RecChain (ClosedFormConstraint)
 import Data.Array.Accelerate.Type
+import Debug.Trace as Debug
+
 data EnvElem t = EnvElem {essaIdx :: BCConstraint ESSAIdx t, ctrlCnstr :: ControlConstraint t}
 
 instance Show (EnvElem t) where

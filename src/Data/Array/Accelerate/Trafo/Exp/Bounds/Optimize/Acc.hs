@@ -22,6 +22,7 @@ import qualified Data.Map as Map
 import Data.Array.Accelerate.Array.Buffer (indexBuffer)
 import Data.Array.Accelerate.Type
 import Data.Array.Accelerate.Trafo.Exp.Bounds.ESSA.ESSAIdx
+import Debug.Trace as Debug
 
 -- Top function to optimize Closed Acc code
 optimizeBounds'

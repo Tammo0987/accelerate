@@ -21,7 +21,6 @@ import Lens.Micro
 import Data.Array.Accelerate.Trafo.Exp.Bounds.ESSA.ESSAEnv
 import Data.Array.Accelerate.Trafo.Exp.Bounds.Utils
 import Data.Array.Accelerate.Trafo.Exp.Bounds.ESSA.ESSAIdx
-import qualified Debug.Trace as Debug
 
 -- === Pi Assignment Wrapper ===
 type Persistent = Bool
