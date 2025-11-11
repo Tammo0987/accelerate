@@ -1774,6 +1774,7 @@ boundsCheckAlloc ShapeRz tp sh =
 boundsCheckAlloc shr tp sh =
   case reprIsSingle @ScalarType @a @Buffer tp of
     Refl -> Aassert (IdxSet.fromVars sh) (isPositivePred shr sh) (Alloc shr tp sh)
+
             
 isPositivePred :: ShapeR sh -> ExpVars benv sh -> Exp benv PrimBool
 isPositivePred (ShapeRsnoc ShapeRz) (TupRpair TupRunit (TupRsingle v)) = mkBinary (PrimGtEq singleType) (ArrayInstr (Parameter v) Nil) (Const scalarTypeInt 0)
@@ -1787,8 +1788,8 @@ addBCAssertionLinear :: ShapeR sh -> TupR (Var GroundR benv) sh -> ExpVar env In
 addBCAssertionLinear _ _ _ = Nothing
 addBCAssertionMaybe :: ShapeR sh -> TupR (Var GroundR benv) sh -> PreOpenExp (ArrayInstr benv) env (TAG,sh) -> PreOpenExp (ArrayInstr benv) env (TAG,sh)
 addBCAssertionMaybe _ _ = id
-assertNotEmpty :: ShapeR sh -> GroundVars benv sh -> OpenExp env benv sh
-assertNotEmpty shr = paramsIn (shapeType shr)
+assertNotEmpty :: ShapeR sh -> GroundVars benv sh -> PreOpenAcc env benv t -> PreOpenAcc env benv t
+assertNotEmpty _ _ acc = acc
 boundsCheckF :: ShapeR sh -> GroundVars env sh -> Fun env (sh' -> sh) -> Fun env (sh' -> sh)
 boundsCheckF _ _ = id
 boundsCheckF' :: ShapeR sh -> GroundVars env sh -> Fun env (sh' -> PrimMaybe sh)-> Fun env (sh' -> PrimMaybe sh)

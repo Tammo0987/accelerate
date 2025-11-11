@@ -652,7 +652,7 @@ instance NFData' op => NFData (OperationAcc op env a) where
   rnf (Unit var)                    = rnfVar rnfScalarType var
   rnf (Acond cond true false)       = rnfVar rnfScalarType cond `seq` rnf true `seq` rnf false
   rnf (Awhile us cond step initial) = rnfTupR rnfUniqueness us `seq` rnf cond `seq` rnf step `seq` rnfGroundVars initial
-  rnf (Aassert _ g e)          = rnfOpenExp g `seq` rnf e
+  rnf (Aassert i g e)               = IdxSet.rnfIdxSet i `seq` rnfOpenExp g `seq` rnf e
 
 instance NFData' op => NFData (OperationAfun op env a) where
   rnf (Abody a) = rnf a
