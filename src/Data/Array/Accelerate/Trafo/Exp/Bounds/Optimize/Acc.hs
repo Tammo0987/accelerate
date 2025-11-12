@@ -22,9 +22,11 @@ import qualified Data.Map as Map
 import Data.Array.Accelerate.Array.Buffer (indexBuffer)
 import Data.Array.Accelerate.Type
 import Data.Array.Accelerate.Trafo.Exp.Bounds.ESSA.ESSAIdx
-import Debug.Trace as Debug
 
--- Top function to optimize Closed Acc code
+--------------------------------------------------------
+-- Array level bounds inference and assertion removal --
+--------------------------------------------------------
+
 optimizeBounds'
     :: forall benv op t loops
     .  BCOperation op => PreOpenAcc op benv t
@@ -40,7 +42,9 @@ optimizeBounds' (Aassert iset g e) = do
             (e', arE) <- optimizeBounds' e
             return (e', arE)
         else do
-            (e', arE) <- withPiPersist True optimizeBounds' e (arG ^. rCS.rControl) 
+            -- Turn assertion domination on and off
+            (e', arE) <- withPiPersist True optimizeBounds' e (arG ^. rCS.rControl)
+            -- (e', arE) <- optimizeBounds' e
             return (Aassert iset g' e', arE)
 
 -- A bind inserts it's data constraints in the IG, and stores the control constraints in the environment, to be used on an eventual branch on the value
@@ -170,12 +174,12 @@ optimizeBounds' instr@(Manifest e) = do
         s   = varToSCEVConstraint st env e
     return (instr, analysisResult (TupRsingle d) (TupRsingle c) (TupRsingle s))
 
+
 #ifdef ACCELERATE_OPTIMIZE_ASSERTIONS
 optimizeBoundsAFun :: BCOperation op => PreOpenAfun op () t -> PreOpenAfun op () t
 optimizeBoundsAFun acc =
   let ((optimizedFun, _), _a) = runState (optimizeBoundsAFun' (emptyConstraintsArgs acc) acc) emptyAnalysis
-  in -- Debug.trace (show $ _a ^. ig) 
-    optimizedFun
+    in optimizedFun
 #else
 optimizeBoundsAFun :: BCOperation op => PreOpenAfun op () t -> PreOpenAfun op () t
 optimizeBoundsAFun acc = acc
@@ -198,7 +202,6 @@ optimizeBoundsAFun' (ConstraintsArgsCons (KeepBindArg _) _) (Alam _ _) = error "
 optimizeBoundsAFun' _ (Abody body) | BCBodyDict <- isBody body = do
     (body', ar) <- optimizeBounds' body
     return (Abody body', ar)
-
 
 optimizeAwhileBody
     :: (BCOperation op)

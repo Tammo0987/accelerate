@@ -1684,10 +1684,12 @@ removeScalarsInTermInv' _ _ _ = internalError "Tuple mismatch"
 #ifdef ACCELERATE_BOUNDS_CHECKS
 
 addBCAssertion :: ShapeR sh -> TupR (Var GroundR benv) sh -> ExpVars env sh -> Maybe (PreOpenExp (ArrayInstr benv) env sh)
+addBCAssertion ShapeRz _ _ = Nothing
 addBCAssertion shr sh e
   = Just $ Assert (inBoundsPred shr sh (expVars e)) (expVars e)
 
 addBCAssertionLinear :: ShapeR sh -> TupR (Var GroundR benv) sh -> ExpVar env Int -> Maybe (PreOpenExp (ArrayInstr benv) env Int)
+addBCAssertionLinear ShapeRz _ _ = Nothing
 addBCAssertionLinear shr sh e
   = Just $ Assert (inBoundsPredLinear shr sh (Evar e)) (Evar e)
 

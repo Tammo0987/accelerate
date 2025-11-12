@@ -53,7 +53,7 @@ defaultBCMap
     :: (forall sh' s' t'.  op (Fun' (s' -> t') -> In sh' s'-> Out sh' t' -> ()))
     -> AbstInterpOperation op (Fun' (s  -> t ) -> In sh  s -> Out sh  t  -> ())
 defaultBCMap mkMap = AbstInterpOperation $ 
-  \(ArgFun f :>: input@(ArgArray _ (ArrayR _ itp) _ input') :>: output@(ArgArray _ (ArrayR _ otp) _ output') :>: ArgsNil) -> case f of
+  \(ArgFun f :>: input@(ArgArray _ (ArrayR shr itp) sh input') :>: output@(ArgArray _ (ArrayR _ otp) _ output') :>: ArgsNil) -> case f of
       _ | BCBodyDict <- oneParamFunc f, BCScalarDict <- reprBCScalar itp, BCScalarDict <- reprBCScalar otp -> do
         a <- get
         let env = a ^. essaEnvs . essaEnvArr
@@ -74,8 +74,8 @@ defaultBCMap mkMap = AbstInterpOperation $
         let args' = ArgFun f' :>: input :>: output :>: ArgsNil
 
         -- check if assertion information can persist outside
-        -- runs <- isNotEmpty shr sh
-        -- unless runs $ modify $ \st -> st & essaEnvs .~ (a ^. essaEnvs) -- revert to initial state environments
+        runs <- isNotEmpty shr sh
+        unless runs $ modify $ \st -> st & essaEnvs .~ (a ^. essaEnvs) -- revert to initial state environments
 
         return (BCOptOperation mkMap args', iOut, output', mkArrayFuncRes otp rOut, True)
 

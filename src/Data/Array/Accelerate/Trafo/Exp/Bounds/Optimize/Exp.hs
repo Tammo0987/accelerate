@@ -35,7 +35,6 @@ import Data.Array.Accelerate.AST.LeftHandSide (Exists(..), lhsToTupR)
 import Data.Array.Accelerate.Analysis.Match (matchSingleType)
 import Data.Type.Equality
 import Data.Array.Accelerate.Representation.Shape (ShapeR (..))
-import Debug.Trace as Debug
 
 -------------------------------------------------------------
 -- Expression level bounds inference and assertion removal --
@@ -56,7 +55,9 @@ optimizeBoundsExp (Assert g e) = do
                     (e', arE) <- optimizeBoundsExp e
                     return (e', arE)
                  else do
+                    -- Turn assertion domination on and off
                     (e', arE) <- withPiPersist True optimizeBoundsExp e (arG ^. rCS.rControl) 
+                    -- (e', arE) <- optimizeBoundsExp e
                     return (Assert g' e', arE)
 
 -- Optimize the guard and non-persistently pi-constrain the variables. The lack of persistence

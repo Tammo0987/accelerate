@@ -103,15 +103,19 @@ prettyOpenAcc env = \case
         <> hardline <> "  )"
         <> hardline <> indent 2 (prettyVars (val env) 10 initial)
   Aassert _ g e ->
+    let 
+      name = case e of
+        Alloc _ _ _ -> "access"
+        _           -> "aassert"
+    in
     group $ vsep
-      [ "aassert" <+> parens (prettyExp (val env) g)
+      [ name <+> parens (prettyExp (val env) g)
       , "then"
       , prettyOpenAcc env e
       ]
   where
     notReturn Return{} = False
     notReturn _        = True
-
 prettyArgs :: Val benv -> Args benv f -> Adoc
 prettyArgs env args = tupled $ map (\(Exists a) -> prettyArg env a) $ argsToList args
 
