@@ -195,7 +195,14 @@ aletUnique lhs = alet' lhs $ unique $ lhsToTupR lhs
 
 alet' :: GLeftHandSide t env env' -> Uniquenesses t -> PreOpenAcc op env t -> PreOpenAcc op env' s -> PreOpenAcc op env s
 alet' lhs1 us (Alet lhs2 uniqueness a1 a2) a3
+  -- Perform let rotation:
+  -- let x = (let y = a1 in a2) in a3
+  -- becomes
+  -- let y = a1 in let x = a2 in a3
   | Exists lhs1' <- rebuildLHS lhs1 = Alet lhs2 uniqueness a1 $ alet' lhs1' us a2 $ weaken (sinkWithLHS lhs1 lhs1' $ weakenWithLHS lhs2) a3
+alet' lhs us (Aassert set cond bnd) a
+  -- Move assertion out of let-binding
+  = Aassert set cond $ alet' lhs us bnd a
 alet' lhs@(LeftHandSideWildcard TupRunit) _ bnd a = case bnd of
   Compute _ -> a
   Return _  -> a

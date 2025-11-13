@@ -218,6 +218,8 @@ stronglyLiveVariables' liveness returns us = \case
           Left $ Awhile us' (condition' re) (step' re) $ expectJust $ reEnvVars re initial
   Aassert idxSet g e
     | free <- IdxSet.fromVarList $ expGroundVars g
+    -- TODO: Instead of marking all free variables live, add a constraint saying
+    -- "if anything in 'idxSet' is live, then all variables in 'free' are live."
     , liveness1 <- setIdxSetLive free liveness
     , LVAnalysis liveness2 e' <- stronglyLiveVariables' liveness1 returns us e
     -> 

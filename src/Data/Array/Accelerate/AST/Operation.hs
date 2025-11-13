@@ -171,7 +171,7 @@ data PreOpenAcc (op :: Type -> Type) env a where
           -> PreOpenAcc op env a
           -> PreOpenAcc op env a
 
-  -- Value-recursion for array-level computations
+  -- | Value-recursion for array-level computations.
   -- The uniqueness guarantees are an invariant of the loop
   -- and should hold before and after each iteration.
   --
@@ -181,7 +181,7 @@ data PreOpenAcc (op :: Type -> Type) env a where
           -> GroundVars     env a
           -> PreOpenAcc  op env a
 
-    -- | Asserts that the given expression evaluates to true,
+  -- | Asserts that the given expression evaluates to true,
   -- and then evaluates the next term.
   -- It only guarantees that the assertion is checked before
   -- any of the variables in the IdxSet is used.
@@ -633,6 +633,7 @@ groundToExpVar (TupRsingle t)   (TupRsingle (Var _ ix)) = TupRsingle (Var t ix)
 groundToExpVar (TupRpair t1 t2) (TupRpair v1 v2)        = groundToExpVar t1 v1 `TupRpair` groundToExpVar t2 v2
 groundToExpVar TupRunit         TupRunit                = TupRunit
 groundToExpVar _                _                       = internalError "Impossible pair"
+
 expToGroundVar :: ExpVars env e -> GroundVars env e
 expToGroundVar  TupRunit = TupRunit
 expToGroundVar  (TupRsingle (Var a ix)) = TupRsingle $ Var (GroundRscalar a) ix

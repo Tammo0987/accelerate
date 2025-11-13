@@ -32,6 +32,8 @@ import Data.Array.Accelerate.Pretty.Exp
 import Data.Array.Accelerate.Pretty.Type
 import Data.Array.Accelerate.AST.Operation
 import Data.Array.Accelerate.AST.LeftHandSide
+import Data.Array.Accelerate.AST.IdxSet (IdxSet)
+import qualified Data.Array.Accelerate.AST.IdxSet as IdxSet
 import Data.Array.Accelerate.Array.Buffer
 import Data.Array.Accelerate.Representation.Elt
 import Data.Array.Accelerate.Representation.Type
@@ -102,17 +104,10 @@ prettyOpenAcc env = \case
         <> hardline <> hang 4 ("  ( " <> prettyOpenAfun env step)
         <> hardline <> "  )"
         <> hardline <> indent 2 (prettyVars (val env) 10 initial)
-  Aassert _ g e ->
-    let 
-      name = case e of
-        Alloc _ _ _ -> "access"
-        _           -> "aassert"
-    in
-    group $ vsep
-      [ name <+> parens (prettyExp (val env) g)
-      , "then"
-      , prettyOpenAcc env e
-      ]
+  Aassert set g e ->
+    hang 2 (group $ vsep [annotate Statement "assert" <> prettyIdxSet (val env) set, prettyExp (val env) g])
+    <> hardline
+    <> prettyOpenAcc env e
   where
     notReturn Return{} = False
     notReturn _        = True
@@ -198,6 +193,9 @@ prettyVars env = prettyTupR $ const $ prettyVar env
 prettyShapeVars :: Val env -> Vars s env sh -> Adoc
 prettyShapeVars _   TupRunit = "Z"
 prettyShapeVars env vars = encloseSep "Z :. " "" " :. " $ map (\(Exists v) -> prettyVar env v) $ flattenTupR vars
+
+prettyIdxSet :: Val env -> IdxSet env -> Adoc
+prettyIdxSet env set = "{" <> hsep (map (\(Exists idx) -> prj idx env) $ IdxSet.toList set) <> "}"
 
 -- Types
 prettyGroundR :: GroundR t -> Adoc
