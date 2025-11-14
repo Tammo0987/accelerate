@@ -27,6 +27,9 @@ import Prelude hiding ( init, reads )
 
 -- Accelerate imports
 import Data.Array.Accelerate.AST.Idx
+import Data.Array.Accelerate.AST.IdxSet (IdxSet(..))
+import qualified Data.Array.Accelerate.AST.IdxSet as IdxSet
+import qualified Data.Array.Accelerate.AST.Environment as E
 import Data.Array.Accelerate.AST.LeftHandSide
 import Data.Array.Accelerate.AST.Operation hiding (Var)
 import Data.Array.Accelerate.Analysis.Hash.Exp
@@ -554,6 +557,7 @@ data Symbol (op :: Type -> Type) where
   SCmp  :: Env env -> Exp env a                                                        -> Symbol op
   SAlc  :: Env env -> ShapeR sh -> ScalarType e -> ExpVars env sh                      -> Symbol op
   SUnt  :: Env env -> ExpVar env e                                                     -> Symbol op
+  SAsr  :: Env env -> IdxSet env -> Exp env PrimBool                                   -> Symbol op
 
 instance Show (Symbol op) where
   show :: Symbol op -> String
@@ -570,6 +574,7 @@ instance Show (Symbol op) where
   show (SCmp {}) = "Cmp"
   show (SAlc {}) = "Alc"
   show (SUnt {}) = "Unt"
+  show (SAsr {}) = "Asr"
 
 -- | Mapping from labels to symbols.
 type Symbols op = Map (Node Comp) (Symbol op)
@@ -996,9 +1001,10 @@ mkFusionGraph (Acond cond tacc facc) = do
     falseN <- freshComp
     symbol condN ?= SITE env cond trueN falseN
     condN `requiresBuffers` getVarDeps cond env  -- If-then-else reads the condition variable,
-    res <- uncurry (<>) <$> branches             -- executes "both" branches, and
+    _ <- branches                                -- executes "both" branches, and
       (block trueN  $ mkFusionGraph tacc)
       (block falseN $ mkFusionGraph facc)
+    res <- freshVals condN (groundsR tacc)
     condN `returnsBuffers` valsNodes res         -- returns the unified result of both branches.
     return res
 
@@ -1017,7 +1023,14 @@ mkFusionGraph (Awhile u cond body init) = do
     symbol whileN ?= SWhl env condN bodyN init u
   return res                                      -- to return a fresh value of the same type as the initial value.
 
-
+mkFusionGraph (Aassert set cond next) = do
+  c    <- freshComp
+  env  <- use environment
+  c `requiresBuffers` getExpDeps cond env
+  dummy <- freshGVal c
+  symbol c ?= SAsr env set cond
+  let env' = markAssertDependencies dummy set env
+  zoom (local env') $ mkFusionGraph next
 
 -- | Construct the fusion graph of a single-argument function.
 mkFusionGraphU :: forall op env s t. (MakesILP op)
@@ -1179,7 +1192,20 @@ mkInplacePathsFromClusters g = g&fusionILP.inplacePaths <>~ go initialClusters
         foldMapInputLabels (\lIn -> foldMapOutputLabels (mkInplacePaths 1 cIn cOut lIn) largsOut) largsIn
       _ -> mempty
 
+--------------------------------------------------------------------------------
+-- Assertions
+--------------------------------------------------------------------------------
 
+-- Adds a dummy node to mark the dependencies on an assertion (Aassert)
+markAssertDependencies :: Node GVal -> IdxSet env -> Env env -> Env env
+markAssertDependencies _ (IdxSet E.PEnd) env = env
+markAssertDependencies dummy (IdxSet (E.PNone set)) (val :>>: env) =
+  val :>>: markAssertDependencies dummy (IdxSet set) env
+markAssertDependencies dummy (IdxSet (E.PPush set _)) ((label, gvals, us) :>>: env) =
+  (label, gvals', us) :>>: env'
+  where
+    env' = markAssertDependencies dummy (IdxSet set) env
+    gvals' = mapTupR (\(Val tp nodes asserts) -> Val tp nodes $ S.insert dummy asserts) gvals
 
 --------------------------------------------------------------------------------
 -- Reconstruction
@@ -1207,7 +1233,7 @@ mkReindexPartial m env env' idx = let node = lookupIdx idx env^._2 in case idxOf
   where
     -- Replace the buffer with the one we will actually write the data to.
     inplaceOf :: GroundVals a -> GroundVals a
-    inplaceOf (TupRsingle (Val tp ns)) = TupRsingle $ Val tp $ S.map (\b -> M.findWithDefault b b m) ns
+    inplaceOf (TupRsingle (Val tp ns as)) = TupRsingle $ Val tp (S.map (\b -> M.findWithDefault b b m) ns) as
     inplaceOf (TupRpair bs1 bs2) = TupRpair (inplaceOf bs1) (inplaceOf bs2)
     inplaceOf TupRunit = TupRunit
 
@@ -1221,8 +1247,8 @@ mkReindexPartial m env env' idx = let node = lookupIdx idx env^._2 in case idxOf
       -- Basically: standard procedure if you're using Ints as a unique identifier
       -- and want to re-introduce type information. :)
       -- Type applications allow us to restrict unsafeCoerce to the return type.
-      | Just Refl <- matchGroundVals bs bs'
-      , bs == bs' = Just $ unsafeCoerce @(Idx e _) @(Idx e a) ZeroIdx
+      | Just Refl <- matchGroundValsType bs bs'
+      , valsSameNode bs bs' = Just ZeroIdx
       -- Recurse if we did not find e' yet.
       | otherwise = SuccIdx <$> idxOf bs rest
     -- If we hit the end, the Elabel was not present in the environment.

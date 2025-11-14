@@ -191,12 +191,14 @@ type Nodes t = Set (Node t)
 
 
 -- | A value consists of its type @s t@ and and the 'Node' that represents it.
---
--- This is probably redudant now, because we don't need the type information anymore,
--- but I'll keep it for now because it might be useful for in-place updates accross while-loops.
--- Then we'd need to know the value returned by the while-loop, which would need to be existentially quantified.
-data Val s t = Val { valType :: s t, valNodes :: Nodes GVal }
+data Val s t = Val
+  { valType :: s t -- Type is needed to make mkReindexPartial safe
+  , valValues :: Nodes GVal -- TODO: Change to single Node?
+  , valAsserts :: Nodes GVal -- Nodes for a
+  }
 
+valNodes :: Val s t -> Nodes GVal
+valNodes (Val _ v a) = S.union v a
 
 -- | A 'TupR' of 'Val's.
 type Vals s = TupR (Val s)
@@ -211,7 +213,7 @@ type GroundVals = Vals GroundR
 
 
 val :: s t -> Node GVal -> Val s t
-val t = Val t . S.singleton
+val t n = Val t (S.singleton n) S.empty
 
 
 -- | Get the nodes of 'Vals'.
@@ -225,13 +227,13 @@ valsType = mapTupR valType
 
 
 -- | Match the types of two 'GroundVals'.
-matchGroundVals :: GroundVals s -> GroundVals t -> Maybe (s :~: t)
-matchGroundVals = matchTupR matchGroundVal
+matchGroundValsType :: GroundVals s -> GroundVals t -> Maybe (s :~: t)
+matchGroundValsType = matchTupR matchGroundValType
 
 
 -- | Match the types of two 'GroundVal's.
-matchGroundVal :: GroundVal s -> GroundVal t -> Maybe (s :~: t)
-matchGroundVal (Val t1 _) (Val t2 _) = matchGroundR t1 t2
+matchGroundValType :: GroundVal s -> GroundVal t -> Maybe (s :~: t)
+matchGroundValType (Val t1 _ _) (Val t2 _ _) = matchGroundR t1 t2
 
 
 -- | Expect 'GroundVals' of the given type.
@@ -252,23 +254,25 @@ instance HasGroundsR GroundVals where
 
 instance HasGroundsR GroundVal where
   groundsR :: GroundVal a -> GroundsR a
-  groundsR (Val tp _) = TupRsingle tp
+  groundsR (Val tp _ _) = TupRsingle tp
 
 
 instance Eq (Val s t) where
   (==) :: Val s t -> Val s t -> Bool
-  (==) (Val _ n1) (Val _ n2) = n1 == n2
+  (==) (Val _ n1 a1) (Val _ n2 a2) = n1 == n2 && a1 == a2
 
+valSameNode :: Val s t -> Val s t -> Bool
+valSameNode (Val _ n1 _) (Val _ n2 _) = n1 == n2
+
+valsSameNode :: Vals s t -> Vals s t -> Bool
+valsSameNode (TupRsingle v1) (TupRsingle v2) = valSameNode v1 v2
+valsSameNode (TupRpair a1 b1) (TupRpair a2 b2) = valsSameNode a1 a2 && valsSameNode b1 b2
+valsSameNode TupRunit TupRunit = True
+valsSameNode _ _ = False
 
 instance Show (Val s t) where
   show :: Val s t -> String
-  show (Val _ n) = "Val " ++ show n
-
-
-instance Semigroup (Val s t) where
-  (<>) :: Val s t -> Val s t -> Val s t
-  (<>) (Val tp n1) (Val _ n2) = Val tp (n1 <> n2)
-
+  show (Val _ n _) = "Val " ++ show n
 
 
 --------------------------------------------------------------------------------
@@ -483,7 +487,7 @@ getLabelShDeps = valsNodes . getLabelShape
 -- | Check if two arguments have the same shape.
 sameShape :: ArgLabel (m1 sh1 e1) -> ArgLabel (m2 sh2 e2) -> Bool
 sameShape (getLabelShape -> sh1) (getLabelShape -> sh2)
-  | Just Refl <- matchGroundVals sh1 sh2 = sh1 == sh2
+  | Just Refl <- matchGroundValsType sh1 sh2 = sh1 == sh2
   | otherwise = False
 
 

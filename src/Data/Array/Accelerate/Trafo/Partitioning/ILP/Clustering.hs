@@ -211,6 +211,7 @@ openReconstruct' singletons labelenv graph clusterslist mlab subclustersmap symb
               bfun
               (fromJust $ reindexVars (mkReindexPartial' env' env) i)
         SLet {} -> error "let without scope"
+        SAsr {} -> Exists $ Return TupRunit -- Assertion without further terms does nothing
         SFun {} -> error "wrong type: function"
         SBod {} -> error "wrong type: function"
         SBlk {} -> error "wrong type: block"
@@ -228,6 +229,10 @@ openReconstruct' singletons labelenv graph clusterslist mlab subclustersmap symb
                 case makeAST env' ctail of
                   Exists scp
                     -> Exists $ tryBuildAlet lhs u bnd scp
+          | SAsr env' set cond <- con ->
+            case makeAST env ctail of
+              Exists next ->
+                Exists $ Aassert (fromJust $ reindexIdxSet (mkReindexPartial' env' env) set) (fromJust $ reindexExp (mkReindexPartial' env' env) cond) next
         _ -> let res = makeAST env [cluster] in case cluster of
               ExecL _ -> case (res, makeAST env ctail) of
                 (Exists exec@Exec{}, Exists scp) -> Exists $ Alet LeftHandSideUnit (shared TupRunit) exec scp

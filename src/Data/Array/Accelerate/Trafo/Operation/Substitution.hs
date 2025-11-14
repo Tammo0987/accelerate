@@ -102,12 +102,12 @@ reindexArrayInstr' k (Parameter v) = Parameter <$> reindexVar' k v
 reindexExp' :: (Applicative f, RebuildableExp e) => SunkReindexPartial f benv benv' -> e (ArrayInstr benv) env t -> f (e (ArrayInstr benv') env t)
 reindexExp' k = rebuildArrayInstrPartial (rebuildArrayInstrMap $ reindexArrayInstr' k)
 
-reindexIdxSet
+reindexIdxSet'
   :: forall f env env' . Applicative f
   => SunkReindexPartial f env env'
   -> IdxSet.IdxSet env
   -> f (IdxSet.IdxSet env')
-reindexIdxSet k set =
+reindexIdxSet' k set =
   foldr go (pure IdxSet.empty) (IdxSet.toList set)
   where
     go :: Exists (Idx env) -> f (IdxSet.IdxSet env') -> f (IdxSet.IdxSet env')
@@ -126,7 +126,7 @@ reindexA' k = \case
     Unit var -> Unit <$> reindexVar' k var
     Acond c t f -> Acond <$> reindexVar' k c <*> travA t <*> travA f
     Awhile uniqueness c f i -> Awhile uniqueness <$> reindexAfun' k c <*> reindexAfun' k f <*> reindexVars' k i
-    Aassert idxSet g e -> Aassert <$> reindexIdxSet k idxSet <*> reindexExp' k g <*> reindexA' k e
+    Aassert idxSet g e -> Aassert <$> reindexIdxSet' k idxSet <*> reindexExp' k g <*> reindexA' k e
   where
     travA :: PreOpenAcc op env s -> f (PreOpenAcc op env' s)
     travA = reindexA' k
