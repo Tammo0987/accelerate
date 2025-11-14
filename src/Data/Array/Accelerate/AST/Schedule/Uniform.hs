@@ -306,6 +306,8 @@ data Effect kernel env where
 
   RefWrite      :: BaseVar env (OutputRef t) -> BaseVar env t -> Effect kernel env
 
+  Aassert       :: Exp env PrimBool -> Effect kernel env
+
 -- A base value in the schedule is a scalar, buffer, a signal (resolver)
 -- or a (possibly mutable) reference
 --
@@ -395,6 +397,7 @@ effectFreeVars (Exec _ _ args)           = IdxSet.fromList $ sargVars args
 effectFreeVars (SignalAwait signals)     = IdxSet.fromList $ map Exists $ signals
 effectFreeVars (SignalResolve resolvers) = IdxSet.fromList $ map Exists resolvers
 effectFreeVars (RefWrite ref value)      = IdxSet.insertVar ref $ IdxSet.singletonVar value
+effectFreeVars (Aassert cond)            = bindingFreeVars $ Compute cond
 
 sargVar :: SArg env t -> Exists (Idx env)
 sargVar (SArgScalar   v) = Exists $ varIdx v
@@ -495,4 +498,5 @@ trivialSchedule _                         = False
 trivialEffect :: Effect kernel env -> Bool
 trivialEffect SignalResolve{} = True
 trivialEffect RefWrite{}      = True
+trivialEffect (Aassert cond)  = expIsTrivial (const True) cond
 trivialEffect _               = False

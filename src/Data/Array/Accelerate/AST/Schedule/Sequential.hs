@@ -123,6 +123,9 @@ data SeqSchedule (kernel :: (Type -> Type)) env t where
           -> SeqScheduleFun op env (a -> a)
           -> GroundVars     env a
           -> SeqSchedule  op env a
+  
+  Aassert :: Exp env PrimBool
+          -> SeqSchedule kernel env ()
 
 data SeqScheduleFun kernel env t where
   Slam  :: GLeftHandSide s env env'
@@ -170,6 +173,7 @@ convertSchedule' (Operation.Use tp n buffer) = Use tp n buffer
 convertSchedule' (Operation.Unit var) = Unit var
 convertSchedule' (Operation.Acond var true false) = Acond var (convertSchedule' true) (convertSchedule' false)
 convertSchedule' (Operation.Awhile us condition step initial) = Awhile us (convertScheduleFun'' condition) (convertScheduleFun'' step) initial
+convertSchedule' (Operation.Aassert _ cond next) = Alet (LeftHandSideWildcard TupRunit) TupRunit (Aassert cond) $ convertSchedule' next
 
 convertScheduleFun'' :: forall kernel env t. IsKernel kernel => Partition.PartitionedAfun (KernelOperation kernel) env t -> SeqScheduleFun kernel env t
 convertScheduleFun'' (Operation.Alam lhs f) = Slam lhs $ convertScheduleFun'' f
@@ -189,6 +193,7 @@ rnfSchedule' (Use tp n buffer) = n `seq` buffer `seq` rnfScalarType tp
 rnfSchedule' (Unit var) = rnfExpVar var
 rnfSchedule' (Acond var true false) = rnfExpVar var `seq` rnfSchedule' true `seq` rnfSchedule' false
 rnfSchedule' (Awhile us condition step initial) = rnfTupR rnfUniqueness us `seq` rnfScheduleFun condition `seq` rnfScheduleFun step `seq` rnfGroundVars initial
+rnfSchedule' (Aassert cond) = rnfOpenExp cond
 
 rnfScheduleFun :: IsKernel kernel => SeqScheduleFun kernel env t -> ()
 rnfScheduleFun (Slam lhs f) = rnfLeftHandSide rnfGroundR lhs `seq` rnfScheduleFun f

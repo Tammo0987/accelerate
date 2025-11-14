@@ -223,6 +223,17 @@ transform' (SyncSchedule _ simple schedule) = case schedule of
           $ instr
           $ buildEffect (Exec (kernelMetadata kernel) kernel $ args' SkipNone)
           $ buildEffect (SignalResolve $ map (weaken $ skipWeakenIdx skip) resolvers) buildReturn
+  PAssert cond -> TransformSchedule $ \fenv _ _ ->
+    case acquireSome fenv $ IdxSet.fromVarList $ expGroundVars cond of
+      AcquireSome skip signals resolvers instr mapping'
+        | mapping <- mapping' SkipNone ->
+          buildEffect (SignalAwait signals)
+            $ instr
+            $ buildEffect (Aassert $ mapArrayInstr
+              (weaken (Weaken $ \idx ->
+                fromMaybe (internalError "Variable missing after acquireSome") $ prjPartial idx mapping))
+              cond)
+            $ buildEffect (SignalResolve $ map (weaken $ skipWeakenIdx skip) resolvers) buildReturn
 
   -- Bindings
   PAlloc shr tp sh -> TransformBinding $ \fenv ->
@@ -1106,6 +1117,7 @@ rnfEffect (Exec md kernel args)   = rnf' md `seq` rnf' kernel `seq` rnfSArgs arg
 rnfEffect (SignalAwait signals)   = rnf signals
 rnfEffect (SignalResolve signals) = rnf signals
 rnfEffect (RefWrite ref value)    = rnfBaseVar ref `seq` rnfBaseVar value
+rnfEffect (Aassert cond)          = rnfOpenExp cond
 
 rnfBaseVar :: BaseVar env t -> ()
 rnfBaseVar = rnfVar rnfBaseR

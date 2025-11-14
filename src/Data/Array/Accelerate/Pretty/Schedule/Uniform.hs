@@ -190,6 +190,7 @@ prettyEffect env = \case
   SignalAwait signals   -> hang 2 $ group $ vsep [annotate Statement "await",   list $ map (prettyIdx env) signals]
   SignalResolve signals -> hang 2 $ group $ vsep [annotate Statement "resolve", list $ map (prettyIdx env) signals]
   RefWrite ref value    -> hang 2 $ group $ vsep ["*" <> prettyVar env ref <+> "=", prettyVar env value]
+  Aassert cond          -> hang 2 $ group $ vsep [annotate Statement "assert", prettyExp (val env) cond]
 
 prettyKernelFun :: forall kernel env f. PrettyKernel kernel => Val' env -> KernelFun kernel f -> SArgs env f -> Adoc
 prettyKernelFun env fun args = case prettyKernel of

@@ -73,6 +73,7 @@ instance Sink' (Effect kernel) where
   weaken' k (SignalAwait vars) = SignalAwait $ map (weaken k) vars
   weaken' k (SignalResolve vars) = SignalResolve $ map (weaken k) vars
   weaken' k (RefWrite ref value) = RefWrite (weaken k ref) (weaken k value)
+  weaken' k (Aassert cond) = Aassert $ mapArrayInstr (weaken k) cond
 
 instance Sink SArg where
   weaken k = runIdentity . reindexSArg' (ReindexF $ \ix -> NewIdxJust <$> weakenReindex k ix)

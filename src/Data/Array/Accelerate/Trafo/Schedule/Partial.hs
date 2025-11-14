@@ -189,6 +189,10 @@ data PrePartialSchedule schedule kernel env t where
     -> GroundVars env t
     -> PrePartialSchedule schedule kernel env (Loop t)
 
+  PAssert
+    :: Exp env PrimBool
+    -> PrePartialSchedule schedule kernel env ()
+
 data Void' a where
 data Loop a where
 
@@ -402,6 +406,7 @@ toPartial' us = \case
   C.Return vars ->
     ( IdxSet.fromVarList $ filter isBuffer $ flattenTupR vars
     , returnValues (toPartialReturn us vars) $ PartialSchedule $ PReturnEnd $ unitTupleForVars vars )
+  C.Manifest var -> toPartial' us (C.Return $ TupRsingle var)
   C.Compute expr ->
     ( IdxSet.fromList $ mapMaybe (\(Exists a) -> instrToSync a) $ arrayInstrsInExp expr
     , PartialSchedule $ PCompute expr )
@@ -430,6 +435,10 @@ toPartial' us = \case
       ( IdxSet.drop' lhs condFree `IdxSet.union` IdxSet.drop' lhs (IdxSet.drop stepFree) `IdxSet.union` IdxSet.fromList (groundBufferVars initial)
       , PartialSchedule $ PAwhile us' (Plam lhs $ Pbody fn) initial )
   C.Awhile{} -> internalError "Unary function impossible"
+  C.Aassert _ cond (C.Return TupRunit) ->
+    ( IdxSet.fromList $ mapMaybe (\(Exists a) -> instrToSync a) $ arrayInstrsInExp cond
+    , PartialSchedule $ PAssert cond )
+  C.Aassert set cond next -> toPartial' us $ C.Alet (LeftHandSideWildcard TupRunit) TupRunit (C.Aassert set cond (C.Return TupRunit)) next
   where
     -- For all simple cases, with no free buffer variables.
     simple :: PrePartialSchedule PartialSchedule kernel env t -> (IdxSet env, PartialSchedule kernel env t)
@@ -507,6 +516,7 @@ rebuild' (PartialSchedule schedule) = case schedule of
   PAwhile us fn initial -> buildAwhile us (rebuildUnary fn) initial
   PContinue next -> buildContinue $ rebuild' next
   PBreak us vars -> buildBreak us vars
+  PAssert cond -> buildAssert cond
 
 rebuildUnary :: PartialScheduleFun kernel env f -> BuildUnary kernel env f
 rebuildUnary (Plam lhs (Pbody body)) = BuildUnary lhs $ rebuild' body
@@ -765,6 +775,21 @@ buildBreak us vars _ =
     term = PartialSchedule $ PBreak us vars
   }
 
+buildAssert
+  :: Exp env PrimBool
+  -> Build PartialSchedule kernel env ()
+buildAssert cond available =
+  Built{
+    didChange = False,
+    directlyAwaits = IdxSet.fromVarList vars IdxSet.\\ available,
+    writes = IdxSet.empty,
+    finallyReleases = IdxSet.empty,
+    trivial = expIsTrivial (const True) cond,
+    term = PartialSchedule $ PAssert cond
+  }
+  where
+    vars = expGroundVars cond
+
 updateCount :: UpdateTuple env t1 t2 -> Count
 updateCount UpdateKeep = Zero
 updateCount (UpdateSet _ _) = One
@@ -827,9 +852,6 @@ analyseSyncEnv' (PartialSchedule sched) = case sched of
   PCompute expr ->
     let
       bindings = mapMaybe (\(Exists a) -> instrToSync a) $ arrayInstrsInExp expr
-      instrToSync :: ArrayInstr env a -> Maybe (EnvBinding Sync env)
-      instrToSync (Index v) = Just $ EnvBinding (varIdx v) SyncRead
-      instrToSync (Parameter _) = Nothing -- Parameter is a scalar variable
     in
       ToSyncSchedule UpdateKeep
         $ SyncSchedule
@@ -867,9 +889,22 @@ analyseSyncEnv' (PartialSchedule sched) = case sched of
         SyncSchedule (syncEnv next') False $ PContinue next'
   PBreak us vars ->
     ToSyncSchedule UpdateKeep $ SyncSchedule (variablesToSyncEnv us vars) False $ PBreak us vars
+  PAssert cond ->
+    let
+      bindings = mapMaybe (\(Exists a) -> instrToSync a) $ arrayInstrsInExp cond
+    in
+      ToSyncSchedule UpdateKeep
+        $ SyncSchedule
+          (partialEnvFromList const bindings)
+          True
+          (PAssert cond)
   where
     noBuffers :: PrePartialSchedule SyncSchedule kernel env t -> ToSyncSchedule kernel env t
     noBuffers = ToSyncSchedule UpdateKeep . SyncSchedule PEnd True
+
+    instrToSync :: ArrayInstr env a -> Maybe (EnvBinding Sync env)
+    instrToSync (Index v) = Just $ EnvBinding (varIdx v) SyncRead
+    instrToSync (Parameter _) = Nothing -- Parameter is a scalar variable
 
 variablesToSyncEnv :: Uniquenesses t -> GroundVars genv t -> SyncEnv genv
 variablesToSyncEnv uniquenesses vars = partialEnvFromList noCombine $ go uniquenesses vars []
