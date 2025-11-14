@@ -103,13 +103,8 @@ prettyOpenAcc env = \case
         <> hardline <> "  )"
         <> hardline <> indent 2 (prettyVars (val env) 10 initial)
   Aassert _ g e ->
-    let 
-      name = case e of
-        Alloc _ _ _ -> "access"
-        _           -> "aassert"
-    in
     group $ vsep
-      [ name <+> parens (prettyExp (val env) g)
+      [ "aassert" <+> parens (prettyExp (val env) g)
       , "then"
       , prettyOpenAcc env e
       ]

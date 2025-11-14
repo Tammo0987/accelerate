@@ -1776,7 +1776,6 @@ boundsCheckAlloc ShapeRz tp sh =
 boundsCheckAlloc shr tp sh =
   case reprIsSingle @ScalarType @a @Buffer tp of
     Refl -> Aassert (IdxSet.fromVars sh) (isPositivePred shr sh) (Alloc shr tp sh)
-
             
 isPositivePred :: ShapeR sh -> ExpVars benv sh -> Exp benv PrimBool
 isPositivePred (ShapeRsnoc ShapeRz) (TupRpair TupRunit (TupRsingle v)) = mkBinary (PrimGtEq singleType) (ArrayInstr (Parameter v) Nil) (Const scalarTypeInt 0)
