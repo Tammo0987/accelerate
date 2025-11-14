@@ -193,12 +193,12 @@ type Nodes t = Set (Node t)
 -- | A value consists of its type @s t@ and and the 'Node' that represents it.
 data Val s t = Val
   { valType :: s t -- Type is needed to make mkReindexPartial safe
-  , valValues :: Nodes GVal -- TODO: Change to single Node?
+  , valNode :: Node GVal
   , valAsserts :: Nodes GVal -- Nodes for a
   }
 
 valNodes :: Val s t -> Nodes GVal
-valNodes (Val _ v a) = S.union v a
+valNodes (Val _ n a) = S.insert n a
 
 -- | A 'TupR' of 'Val's.
 type Vals s = TupR (Val s)
@@ -213,7 +213,7 @@ type GroundVals = Vals GroundR
 
 
 val :: s t -> Node GVal -> Val s t
-val t n = Val t (S.singleton n) S.empty
+val t n = Val t n S.empty
 
 
 -- | Get the nodes of 'Vals'.

@@ -1233,7 +1233,7 @@ mkReindexPartial m env env' idx = let node = lookupIdx idx env^._2 in case idxOf
   where
     -- Replace the buffer with the one we will actually write the data to.
     inplaceOf :: GroundVals a -> GroundVals a
-    inplaceOf (TupRsingle (Val tp ns as)) = TupRsingle $ Val tp (S.map (\b -> M.findWithDefault b b m) ns) as
+    inplaceOf (TupRsingle (Val tp n as)) = TupRsingle $ Val tp (M.findWithDefault n n m) as
     inplaceOf (TupRpair bs1 bs2) = TupRpair (inplaceOf bs1) (inplaceOf bs2)
     inplaceOf TupRunit = TupRunit
 
