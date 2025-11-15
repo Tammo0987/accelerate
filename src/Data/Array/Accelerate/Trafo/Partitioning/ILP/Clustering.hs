@@ -229,10 +229,10 @@ openReconstruct' singletons labelenv graph clusterslist mlab subclustersmap symb
                 case makeAST env' ctail of
                   Exists scp
                     -> Exists $ tryBuildAlet lhs u bnd scp
-          | SAsr env' set cond <- con ->
+          | SAsr env' cond <- con ->
             case makeAST env ctail of
               Exists next ->
-                Exists $ Aassert (fromJust $ reindexIdxSet (mkReindexPartial' env' env) set) (fromJust $ reindexExp (mkReindexPartial' env' env) cond) next
+                Exists $ Aassert (fromJust $ reindexExp (mkReindexPartial' env' env) cond) next
         _ -> let res = makeAST env [cluster] in case cluster of
               ExecL _ -> case (res, makeAST env ctail) of
                 (Exists exec@Exec{}, Exists scp) -> Exists $ Alet LeftHandSideUnit (shared TupRunit) exec scp

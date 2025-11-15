@@ -32,7 +32,7 @@ optimizeBounds'
     .  BCOperation op => PreOpenAcc op benv t
     -> BCState GroundR op loops '(benv, ()) (PreOpenAcc op benv t, AnalysisResult t ())
 -- 
-optimizeBounds' (Aassert iset g e) = do
+optimizeBounds' (Aassert g e) = do
     a <- get
     let ((g', arG), a') = runState (optimizeBoundsExp g) (enterExpScope a)
     put $ popLoopScope a'
@@ -45,7 +45,7 @@ optimizeBounds' (Aassert iset g e) = do
             -- Turn assertion domination on and off
             (e', arE) <- withPiPersist True optimizeBounds' e (arG ^. rCS.rControl)
             -- (e', arE) <- optimizeBounds' e
-            return (Aassert iset g' e', arE)
+            return (Aassert g' e', arE)
 
 -- A bind inserts it's data constraints in the IG, and stores the control constraints in the environment, to be used on an eventual branch on the value
 optimizeBounds' (Alet lhs un bnd e) = do
@@ -80,13 +80,11 @@ optimizeBounds' (Acond g t e) = do
     redundant <- valOfBool dGuard
 
     case redundant of
-      Just True -> do
-        (t', arT) <- withPi True  optimizeBounds' t b
-        return (Acond g t' e, arT)
+      Just True ->
+        withPi True  optimizeBounds' t b
 
       Just False -> do
-        (e', arE) <- withPi False optimizeBounds' e b
-        return (Acond g t e', arE)
+        withPi False optimizeBounds' e b
 
       Nothing -> do
         (t', arT) <- withPi True  optimizeBounds' t b
@@ -116,21 +114,23 @@ optimizeBounds' instr@(Awhile un g it init)
 
     redundant <- valOfBool (getSingle $ rGuard ^. rCS . rData)
 
-    -- traverse once to get SCEV information
-    (sAcc, iAcc) <- mkInductionVars dInit
-    let ((_, arIt), _) = runState (optimizeAwhileBody (rGuard ^. rSCEV . rArgIdxs) (bccsEmpty init) sAcc (rGuard ^. rCS . rControl) it) (newLoopScope a)
-        sIt = arIt ^. rSCEV . rSCEVExp
-        chIt = hzipWith (computeChains (a ^. ig)) iAcc sIt
-        dIt = hfmap (computeClosedFormNoTripCount (a ^. ig)) chIt
-
-    -- traverse again with more context
-    let ((it', _), a') = runState (optimizeAwhileBody (rGuard ^. rSCEV . rArgIdxs) dIt (bccsEmpty init) (rGuard ^. rCS . rControl) it) (newLoopScope a)
-    put $ popLoopScope a'
-
     case redundant of
       Just False ->
-        return (Awhile un g' it' init, analysisResult dInit (bccsEmpty instr) (bccsEmpty instr))
-      _ -> return $ identityResult $ Awhile un g' it' init
+        -- Condition is always False, so we won't do any iterations
+        return (Return init, analysisResult dInit (bccsEmpty instr) (bccsEmpty instr))
+      _ -> do
+        -- traverse once to get SCEV information
+        (sAcc, iAcc) <- mkInductionVars dInit
+        let ((_, arIt), _) = runState (optimizeAwhileBody (rGuard ^. rSCEV . rArgIdxs) (bccsEmpty init) sAcc (rGuard ^. rCS . rControl) it) (newLoopScope a)
+            sIt = arIt ^. rSCEV . rSCEVExp
+            chIt = hzipWith (computeChains (a ^. ig)) iAcc sIt
+            dIt = hfmap (computeClosedFormNoTripCount (a ^. ig)) chIt
+
+        -- traverse again with more context
+        let ((it', _), a') = runState (optimizeAwhileBody (rGuard ^. rSCEV . rArgIdxs) dIt (bccsEmpty init) (rGuard ^. rCS . rControl) it) (newLoopScope a)
+        put $ popLoopScope a'
+
+        return $ identityResult $ Awhile un g' it' init
 
 optimizeBounds' instr@(Unit v@(Var tp _)) =
     case tp of

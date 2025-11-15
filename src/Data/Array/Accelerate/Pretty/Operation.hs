@@ -104,8 +104,8 @@ prettyOpenAcc env = \case
         <> hardline <> hang 4 ("  ( " <> prettyOpenAfun env step)
         <> hardline <> "  )"
         <> hardline <> indent 2 (prettyVars (val env) 10 initial)
-  Aassert set g e ->
-    hang 2 (group $ vsep [annotate Statement "assert" <> prettyIdxSet (val env) set, prettyExp (val env) g])
+  Aassert g e ->
+    hang 2 (group $ vsep [annotate Statement "assert", prettyExp (val env) g])
     <> hardline
     <> prettyOpenAcc env e
   where

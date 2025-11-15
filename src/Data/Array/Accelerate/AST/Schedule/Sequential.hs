@@ -173,7 +173,7 @@ convertSchedule' (Operation.Use tp n buffer) = Use tp n buffer
 convertSchedule' (Operation.Unit var) = Unit var
 convertSchedule' (Operation.Acond var true false) = Acond var (convertSchedule' true) (convertSchedule' false)
 convertSchedule' (Operation.Awhile us condition step initial) = Awhile us (convertScheduleFun'' condition) (convertScheduleFun'' step) initial
-convertSchedule' (Operation.Aassert _ cond next) = Alet (LeftHandSideWildcard TupRunit) TupRunit (Aassert cond) $ convertSchedule' next
+convertSchedule' (Operation.Aassert cond next) = Alet (LeftHandSideWildcard TupRunit) TupRunit (Aassert cond) $ convertSchedule' next
 
 convertScheduleFun'' :: forall kernel env t. IsKernel kernel => Partition.PartitionedAfun (KernelOperation kernel) env t -> SeqScheduleFun kernel env t
 convertScheduleFun'' (Operation.Alam lhs f) = Slam lhs $ convertScheduleFun'' f

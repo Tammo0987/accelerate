@@ -126,7 +126,7 @@ reindexA' k = \case
     Unit var -> Unit <$> reindexVar' k var
     Acond c t f -> Acond <$> reindexVar' k c <*> travA t <*> travA f
     Awhile uniqueness c f i -> Awhile uniqueness <$> reindexAfun' k c <*> reindexAfun' k f <*> reindexVars' k i
-    Aassert idxSet g e -> Aassert <$> reindexIdxSet' k idxSet <*> reindexExp' k g <*> reindexA' k e
+    Aassert g e -> Aassert <$> reindexExp' k g <*> reindexA' k e
   where
     travA :: PreOpenAcc op env s -> f (PreOpenAcc op env' s)
     travA = reindexA' k
@@ -178,7 +178,7 @@ makeManifest acc = case acc of
   Acond c t f -> Acond c (makeManifest t) (makeManifest f)
   Awhile{} -> acc -- Can't fuse anyway
   Return vars -> go vars
-  Aassert s g e -> Aassert s g $ makeManifest e
+  Aassert g e -> Aassert g $ makeManifest e
   where
     go :: GroundVars env t -> PreOpenAcc op env t
     go TupRunit = Return TupRunit
@@ -200,9 +200,12 @@ alet' lhs1 us (Alet lhs2 uniqueness a1 a2) a3
   -- becomes
   -- let y = a1 in let x = a2 in a3
   | Exists lhs1' <- rebuildLHS lhs1 = Alet lhs2 uniqueness a1 $ alet' lhs1' us a2 $ weaken (sinkWithLHS lhs1 lhs1' $ weakenWithLHS lhs2) a3
-alet' lhs us (Aassert set cond bnd) a
-  -- Move assertion out of let-binding
-  = Aassert set cond $ alet' lhs us bnd a
+-- We could rotate assertions out of let-bindings, but that gives fewer options
+-- for program reordering. Fusion reorders programs to enable more optioins for
+-- fusion, and Aassert has certain guarantees related to program ordering.
+-- alet' lhs us (Aassert set cond bnd) a
+--   -- Move assertion out of let-binding
+--   = Aassert set cond $ alet' lhs us bnd a
 alet' lhs@(LeftHandSideWildcard TupRunit) _ bnd a = case bnd of
   Compute _ -> a
   Return _  -> a

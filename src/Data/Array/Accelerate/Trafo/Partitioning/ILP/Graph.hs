@@ -557,7 +557,7 @@ data Symbol (op :: Type -> Type) where
   SCmp  :: Env env -> Exp env a                                                        -> Symbol op
   SAlc  :: Env env -> ShapeR sh -> ScalarType e -> ExpVars env sh                      -> Symbol op
   SUnt  :: Env env -> ExpVar env e                                                     -> Symbol op
-  SAsr  :: Env env -> IdxSet env -> Exp env PrimBool                                   -> Symbol op
+  SAsr  :: Env env -> Exp env PrimBool                                   -> Symbol op
 
 instance Show (Symbol op) where
   show :: Symbol op -> String
@@ -1023,13 +1023,13 @@ mkFusionGraph (Awhile u cond body init) = do
     symbol whileN ?= SWhl env condN bodyN init u
   return res                                      -- to return a fresh value of the same type as the initial value.
 
-mkFusionGraph (Aassert set cond next) = do
+mkFusionGraph (Aassert cond next) = do
   c    <- freshComp
   env  <- use environment
   c `requiresBuffers` getExpDeps cond env
   dummy <- freshGVal c
-  symbol c ?= SAsr env set cond
-  let env' = markAssertDependencies dummy set env
+  symbol c ?= SAsr env cond
+  let env' = markAssertDependencies dummy env
   zoom (local env') $ mkFusionGraph next
 
 -- | Construct the fusion graph of a single-argument function.
@@ -1197,14 +1197,14 @@ mkInplacePathsFromClusters g = g&fusionILP.inplacePaths <>~ go initialClusters
 --------------------------------------------------------------------------------
 
 -- Adds a dummy node to mark the dependencies on an assertion (Aassert)
-markAssertDependencies :: Node GVal -> IdxSet env -> Env env -> Env env
-markAssertDependencies _ (IdxSet E.PEnd) env = env
-markAssertDependencies dummy (IdxSet (E.PNone set)) (val :>>: env) =
-  val :>>: markAssertDependencies dummy (IdxSet set) env
-markAssertDependencies dummy (IdxSet (E.PPush set _)) ((label, gvals, us) :>>: env) =
+markAssertDependencies :: Node GVal -> Env env -> Env env
+markAssertDependencies _ EnvNil = EnvNil
+markAssertDependencies dummy (val :>>: env) =
+  val :>>: markAssertDependencies dummy env
+markAssertDependencies dummy ((label, gvals, us) :>>: env) =
   (label, gvals', us) :>>: env'
   where
-    env' = markAssertDependencies dummy (IdxSet set) env
+    env' = markAssertDependencies dummy env
     gvals' = mapTupR (\(Val tp nodes asserts) -> Val tp nodes $ S.insert dummy asserts) gvals
 
 --------------------------------------------------------------------------------

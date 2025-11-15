@@ -1706,7 +1706,7 @@ addBCAssertionMaybe shr sh (TupRpair tag val) =
 addBCAssertionMaybe _ _ _ = error "Unexpected case in bounds checking"
 
 assertNotEmpty :: ShapeR sh -> GroundVars benv sh -> PreOpenAcc env benv t -> PreOpenAcc env benv t
-assertNotEmpty shr sh = Aassert (IdxSet.fromVars sh) (notEmptyPred shr sh)
+assertNotEmpty shr sh = Aassert (notEmptyPred shr sh)
 
 notEmptyPred :: ShapeR sh -> GroundVars benv sh -> OpenExp env benv PrimBool
 notEmptyPred (ShapeRsnoc ShapeRz) (TupRpair TupRunit (TupRsingle sh)) = mkBinary (PrimGt singleType) (paramIn scalarTypeInt sh) (Const scalarTypeInt 0)
@@ -1775,7 +1775,7 @@ boundsCheckAlloc ShapeRz tp sh =
     Refl -> Alloc ShapeRz tp sh
 boundsCheckAlloc shr tp sh =
   case reprIsSingle @ScalarType @a @Buffer tp of
-    Refl -> Aassert (IdxSet.fromVars sh) (isPositivePred shr sh) (Alloc shr tp sh)
+    Refl -> Aassert (isPositivePred shr sh) (Alloc shr tp sh)
             
 isPositivePred :: ShapeR sh -> ExpVars benv sh -> Exp benv PrimBool
 isPositivePred (ShapeRsnoc ShapeRz) (TupRpair TupRunit (TupRsingle v)) = mkBinary (PrimGtEq singleType) (ArrayInstr (Parameter v) Nil) (Const scalarTypeInt 0)

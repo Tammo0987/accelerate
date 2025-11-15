@@ -269,10 +269,10 @@ simplify' uniquenesses = \case
           in
             awhileSimplifyInvariant us (cond' env') (step' env') $ simplifyReturnVars env us initial
       )
-  Aassert idxSet g e ->
+  Aassert g e ->
     let
       (setE, e') = simplify' uniquenesses e
-      in (setE, Aassert idxSet g . e')
+      in (setE, Aassert g . e')
 
 
 

@@ -216,10 +216,8 @@ stronglyLiveVariables' liveness returns us = \case
         liveness3
         $ \re _ ->
           Left $ Awhile us' (condition' re) (step' re) $ expectJust $ reEnvVars re initial
-  Aassert idxSet g e
+  Aassert g e
     | free <- IdxSet.fromVarList $ expGroundVars g
-    -- TODO: Instead of marking all free variables live, add a constraint saying
-    -- "if anything in 'idxSet' is live, then all variables in 'free' are live."
     , liveness1 <- setIdxSetLive free liveness
     , LVAnalysis liveness2 e' <- stronglyLiveVariables' liveness1 returns us e
     -> 
@@ -228,10 +226,9 @@ stronglyLiveVariables' liveness returns us = \case
         $ \re s -> 
           let
             g' = mapArrayInstr (reEnvArrayInstr re) g
-            idxSet' = reEnvIdxSet re idxSet
-            in case e' re s of
-                  (Left  e'') -> Left  $ Aassert idxSet' g' e''
-                  (Right e'') -> Right $ Aassert idxSet' g' e''
+          in case e' re s of
+              (Left  e'') -> Left  $ Aassert g' e''
+              (Right e'') -> Right $ Aassert g' e''
 
   where
     mkAcond :: ExpVar env' PrimBool -> PreOpenAcc op env' t' -> PreOpenAcc op env' t' -> PreOpenAcc op env' t'

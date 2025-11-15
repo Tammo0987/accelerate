@@ -435,10 +435,10 @@ toPartial' us = \case
       ( IdxSet.drop' lhs condFree `IdxSet.union` IdxSet.drop' lhs (IdxSet.drop stepFree) `IdxSet.union` IdxSet.fromList (groundBufferVars initial)
       , PartialSchedule $ PAwhile us' (Plam lhs $ Pbody fn) initial )
   C.Awhile{} -> internalError "Unary function impossible"
-  C.Aassert _ cond (C.Return TupRunit) ->
+  C.Aassert cond (C.Return TupRunit) ->
     ( IdxSet.fromList $ mapMaybe (\(Exists a) -> instrToSync a) $ arrayInstrsInExp cond
     , PartialSchedule $ PAssert cond )
-  C.Aassert set cond next -> toPartial' us $ C.Alet (LeftHandSideWildcard TupRunit) TupRunit (C.Aassert set cond (C.Return TupRunit)) next
+  C.Aassert cond next -> toPartial' us $ C.Alet (LeftHandSideWildcard TupRunit) TupRunit (C.Aassert cond (C.Return TupRunit)) next
   where
     -- For all simple cases, with no free buffer variables.
     simple :: PrePartialSchedule PartialSchedule kernel env t -> (IdxSet env, PartialSchedule kernel env t)
