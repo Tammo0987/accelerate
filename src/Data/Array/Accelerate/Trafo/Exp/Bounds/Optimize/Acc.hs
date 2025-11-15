@@ -175,7 +175,7 @@ optimizeBounds' instr@(Manifest e) = do
     return (instr, analysisResult (TupRsingle d) (TupRsingle c) (TupRsingle s))
 
 
-#ifdef ACCELERATE_OPTIMIZE_ASSERTIONS
+#if ACCELERATE_OPTIMIZE_ASSERTIONS
 optimizeBoundsAFun :: BCOperation op => PreOpenAfun op () t -> PreOpenAfun op () t
 optimizeBoundsAFun acc =
   let ((optimizedFun, _), _a) = runState (optimizeBoundsAFun' (emptyConstraintsArgs acc) acc) emptyAnalysis
