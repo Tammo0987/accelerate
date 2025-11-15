@@ -194,11 +194,12 @@ type Nodes t = Set (Node t)
 data Val s t = Val
   { valType :: s t -- Type is needed to make mkReindexPartial safe
   , valNode :: Node GVal
-  , valAsserts :: Nodes GVal -- Nodes for a
   }
 
+-- TODO: Remove this function, and let all callers directly work with a single
+-- Node instead of a Set
 valNodes :: Val s t -> Nodes GVal
-valNodes (Val _ n a) = S.insert n a
+valNodes (Val _ n) = S.singleton n
 
 -- | A 'TupR' of 'Val's.
 type Vals s = TupR (Val s)
@@ -213,7 +214,7 @@ type GroundVals = Vals GroundR
 
 
 val :: s t -> Node GVal -> Val s t
-val t n = Val t n S.empty
+val t n = Val t n
 
 
 -- | Get the nodes of 'Vals'.
@@ -233,7 +234,7 @@ matchGroundValsType = matchTupR matchGroundValType
 
 -- | Match the types of two 'GroundVal's.
 matchGroundValType :: GroundVal s -> GroundVal t -> Maybe (s :~: t)
-matchGroundValType (Val t1 _ _) (Val t2 _ _) = matchGroundR t1 t2
+matchGroundValType (Val t1 _) (Val t2 _) = matchGroundR t1 t2
 
 
 -- | Expect 'GroundVals' of the given type.
@@ -254,25 +255,16 @@ instance HasGroundsR GroundVals where
 
 instance HasGroundsR GroundVal where
   groundsR :: GroundVal a -> GroundsR a
-  groundsR (Val tp _ _) = TupRsingle tp
+  groundsR (Val tp _) = TupRsingle tp
 
 
 instance Eq (Val s t) where
   (==) :: Val s t -> Val s t -> Bool
-  (==) (Val _ n1 a1) (Val _ n2 a2) = n1 == n2 && a1 == a2
-
-valSameNode :: Val s t -> Val s t -> Bool
-valSameNode (Val _ n1 _) (Val _ n2 _) = n1 == n2
-
-valsSameNode :: Vals s t -> Vals s t -> Bool
-valsSameNode (TupRsingle v1) (TupRsingle v2) = valSameNode v1 v2
-valsSameNode (TupRpair a1 b1) (TupRpair a2 b2) = valsSameNode a1 a2 && valsSameNode b1 b2
-valsSameNode TupRunit TupRunit = True
-valsSameNode _ _ = False
+  (==) (Val _ n1) (Val _ n2) = n1 == n2
 
 instance Show (Val s t) where
   show :: Val s t -> String
-  show (Val _ n _) = "Val " ++ show n
+  show (Val _ n) = "Val " ++ show n
 
 
 --------------------------------------------------------------------------------

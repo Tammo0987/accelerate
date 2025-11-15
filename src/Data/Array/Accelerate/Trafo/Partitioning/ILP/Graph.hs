@@ -644,14 +644,15 @@ attachBackendLabels sol = M.mapWithKey \cases
 -- depending on which branch is taken.
 --
 data FusionGraphState op env = FusionGraphState
-  { _fusionILP  :: FusionILP op    -- ^ The ILP information.
-  , _buffersEnv :: Env env  -- ^ The label environment.
-  , _readersEnv :: ReadersEnv      -- ^ Mapping from buffers to their current consumers.
-  , _writersEnv :: WritersEnv      -- ^ Mapping from buffers to their current producers.
-  , _allocators :: Allocators      -- ^ Mapping from buffers to their allocator.
-  , _symbols    :: Symbols op      -- ^ The symbols for the ILP.
-  , _currComp   :: Node Comp      -- ^ The current computation label.
-  , _currEnvL   :: EnvLabel        -- ^ The current environment label.
+  { _fusionILP  :: FusionILP op      -- ^ The ILP information.
+  , _buffersEnv :: Env env           -- ^ The label environment.
+  , _readersEnv :: ReadersEnv        -- ^ Mapping from buffers to their current consumers.
+  , _writersEnv :: WritersEnv        -- ^ Mapping from buffers to their current producers.
+  , _allocators :: Allocators        -- ^ Mapping from buffers to their allocator.
+  , _symbols    :: Symbols op        -- ^ The symbols for the ILP.
+  , _currComp   :: Node Comp         -- ^ The current computation label.
+  , _currAssert :: Maybe (Node Comp) -- ^ The current assertion. All new nodes should be linked with an edge from currAssert, so the assertion runs before that node.
+  , _currEnvL   :: EnvLabel          -- ^ The current environment label.
   }
 
 type ReadersEnv = Map (Node GVal) (Nodes Comp)
@@ -659,7 +660,7 @@ type WritersEnv = Map (Node GVal) (Nodes Comp)
 type Allocators = Map (Node GVal) (Node  Comp)
 
 initialFusionGraphState :: FusionGraphState op ()
-initialFusionGraphState = FusionGraphState mempty EnvNil mempty mempty mempty mempty (Node 0 Nothing) 0
+initialFusionGraphState = FusionGraphState mempty EnvNil mempty mempty mempty mempty (Node 0 Nothing) Nothing 0
 
 -- instance Show (FusionGraphState op env) where
 --   show :: FusionGraphState op env -> String
@@ -708,6 +709,9 @@ instance HasSymbols (FusionGraphState op env) op where
 
 currComp :: Lens' (FusionGraphState op env) (Node Comp)
 currComp f s = f (_currComp s) <&> \c -> s{_currComp = c}
+
+currAssert :: Lens' (FusionGraphState op env) (Maybe (Node Comp))
+currAssert f s = f (_currAssert s) <&> \c -> s{_currAssert = c}
 
 currEnvL :: Lens' (FusionGraphState op env) EnvLabel
 currEnvL f s = f (_currEnvL s) <&> \l -> s{_currEnvL = l}
@@ -769,6 +773,10 @@ local env' f s = (environment .~ s^.environment) <$> f (s & environment .~ env')
 freshComp :: State (FusionGraphState op env) (Node Comp)
 freshComp = do
   c <- zoom currComp freshL'
+  assertion' <- use currAssert
+  case assertion' of
+    Nothing -> return ()
+    Just a -> fusionILP %= a `before` c
   fusionILP %= insertComputation c
   return c
 
@@ -1027,10 +1035,9 @@ mkFusionGraph (Aassert cond next) = do
   c    <- freshComp
   env  <- use environment
   c `requiresBuffers` getExpDeps cond env
-  dummy <- freshGVal c
   symbol c ?= SAsr env cond
-  let env' = markAssertDependencies dummy env
-  zoom (local env') $ mkFusionGraph next
+  currAssert .= Just c -- All later nodes will be placed after this assertion
+  mkFusionGraph next
 
 -- | Construct the fusion graph of a single-argument function.
 mkFusionGraphU :: forall op env s t. (MakesILP op)
@@ -1193,21 +1200,6 @@ mkInplacePathsFromClusters g = g&fusionILP.inplacePaths <>~ go initialClusters
       _ -> mempty
 
 --------------------------------------------------------------------------------
--- Assertions
---------------------------------------------------------------------------------
-
--- Adds a dummy node to mark the dependencies on an assertion (Aassert)
-markAssertDependencies :: Node GVal -> Env env -> Env env
-markAssertDependencies _ EnvNil = EnvNil
-markAssertDependencies dummy (val :>>: env) =
-  val :>>: markAssertDependencies dummy env
-markAssertDependencies dummy ((label, gvals, us) :>>: env) =
-  (label, gvals', us) :>>: env'
-  where
-    env' = markAssertDependencies dummy env
-    gvals' = mapTupR (\(Val tp nodes asserts) -> Val tp nodes $ S.insert dummy asserts) gvals
-
---------------------------------------------------------------------------------
 -- Reconstruction
 --------------------------------------------------------------------------------
 
@@ -1233,7 +1225,7 @@ mkReindexPartial m env env' idx = let node = lookupIdx idx env^._2 in case idxOf
   where
     -- Replace the buffer with the one we will actually write the data to.
     inplaceOf :: GroundVals a -> GroundVals a
-    inplaceOf (TupRsingle (Val tp n as)) = TupRsingle $ Val tp (M.findWithDefault n n m) as
+    inplaceOf (TupRsingle (Val tp n)) = TupRsingle $ Val tp $ M.findWithDefault n n m
     inplaceOf (TupRpair bs1 bs2) = TupRpair (inplaceOf bs1) (inplaceOf bs2)
     inplaceOf TupRunit = TupRunit
 
@@ -1248,7 +1240,7 @@ mkReindexPartial m env env' idx = let node = lookupIdx idx env^._2 in case idxOf
       -- and want to re-introduce type information. :)
       -- Type applications allow us to restrict unsafeCoerce to the return type.
       | Just Refl <- matchGroundValsType bs bs'
-      , valsSameNode bs bs' = Just ZeroIdx
+      , bs == bs' = Just ZeroIdx
       -- Recurse if we did not find e' yet.
       | otherwise = SuccIdx <$> idxOf bs rest
     -- If we hit the end, the Elabel was not present in the environment.
