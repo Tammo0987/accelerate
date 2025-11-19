@@ -51,6 +51,12 @@ optimizeBounds' (Aassert g e) = do
 optimizeBounds' (Alet lhs un bnd e) = do
     (bnd', arBnd) <- optimizeBounds' bnd
     a <- get
+    -- TODO: This current implementation assumes that 'bnd' runs before 'e', and that
+    -- if something is asserted in 'bnd' we don't have to assert it again in 'e'.
+    -- However, later passes may reorder the program and break this assumption.
+    -- Hence we should not propagate information from 'bnd' when analyzing 'e' here.
+    -- We might want to enable rotation on Aassert in alet' again so we can still
+    -- analyze and optimize away many assertions here.
     let (a', _) = declBind lhs (arBnd ^. rCS.rData) (arBnd ^. rCS.rControl) (arBnd ^. rSCEV.rSCEVExp) a
     let ((e', arD'), a'') = runState (optimizeBounds' e) a'
     put $ snd $ popBind lhs a''
@@ -108,17 +114,24 @@ optimizeBounds' instr@(Awhile un g it init)
 
     let dInit = hfmap (varToDataConstraint env) init
 
-    let gArgs = diffArg1 (NewBindArg dInit (bccsEmpty instr) (bccsEmpty instr))
-    (g', urGuard) <- optimizeBoundsAFun' gArgs g
-    let rGuard = mkFunRes1 urGuard
+    let gArgsInit = diffArg1 (NewBindArg dInit (bccsEmpty instr) (bccsEmpty instr))
+    -- Optimize guard for first iteration
+    (_, urGuardInit) <- optimizeBoundsAFun' gArgsInit g
+    let rGuardInit = mkFunRes1 urGuardInit
 
-    redundant <- valOfBool (getSingle $ rGuard ^. rCS . rData)
+    redundant <- valOfBool (getSingle $ rGuardInit ^. rCS . rData)
 
     case redundant of
       Just False ->
         -- Condition is always False, so we won't do any iterations
         return (Return init, analysisResult dInit (bccsEmpty instr) (bccsEmpty instr))
       _ -> do
+        -- Optimize guard for any iteration.
+        -- For reasoning behind this, see 'While' in the Exp analysis.
+        let gArgs = diffArg1 (NewBindArg (bccsEmpty instr)  (bccsEmpty instr) (bccsEmpty instr))
+        (g', urGuard) <- optimizeBoundsAFun' gArgs g
+        let rGuard = mkFunRes1 urGuard
+
         -- traverse once to get SCEV information
         (sAcc, iAcc) <- mkInductionVars dInit
         let ((_, arIt), _) = runState (optimizeAwhileBody (rGuard ^. rSCEV . rArgIdxs) (bccsEmpty init) sAcc (rGuard ^. rCS . rControl) it) (newLoopScope a)

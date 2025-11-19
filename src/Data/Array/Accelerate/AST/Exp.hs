@@ -62,6 +62,7 @@ module Data.Array.Accelerate.AST.Exp (
   -- ** Miscellaneous
   mkConstant, mkBinary, unBody,
   formatExpOp, Direction(..),
+  funHasAssert, expHasAssert,
   expIsTrivial, shapeExpVars,
 
 ) where
@@ -838,10 +839,42 @@ expIsTrivial arrayInstr = \case
   ArrayInstr ar a         -> arrayInstr ar && trav a
   ShapeSize _ a           -> trav a
   Coerce _ _ a            -> trav a
+  Assert cond e           -> trav cond && trav e
+  Assume _ e              -> trav e -- Condition is not executed, so does not have to be trivial
   _                       -> False
   where
     trav :: PreOpenExp arr env' t' -> Bool
     trav = expIsTrivial arrayInstr
+
+funHasAssert :: PreOpenFun arr env f -> Bool
+funHasAssert (Lam _ f) = funHasAssert f
+funHasAssert (Body e) = expHasAssert e
+
+expHasAssert :: PreOpenExp arr env t -> Bool
+expHasAssert = \case
+  Let _ bnd body          -> expHasAssert bnd || expHasAssert body
+  Evar{}                  -> False
+  Const{}                 -> False
+  Undef{}                 -> False
+  Foreign _ _ f a         -> funHasAssert f || expHasAssert a
+  Pair a b                -> expHasAssert a || expHasAssert b
+  Nil                     -> False
+  VecPack _ e             -> expHasAssert e
+  VecUnpack _ e           -> expHasAssert e
+  IndexSlice _ a b        -> expHasAssert a || expHasAssert b
+  IndexFull _ a b         -> expHasAssert a || expHasAssert b
+  ToIndex _ a b           -> expHasAssert a || expHasAssert b
+  FromIndex _ a b         -> expHasAssert a || expHasAssert b
+  Case scrutinee alts def -> expHasAssert scrutinee || any (expHasAssert . snd) alts || any expHasAssert def
+  Cond c t f              -> expHasAssert c || expHasAssert t || expHasAssert f
+  While c s i             -> funHasAssert c || funHasAssert s || expHasAssert i
+  PrimConst{}             -> False
+  PrimApp _ a             -> expHasAssert a
+  ArrayInstr _ a          -> expHasAssert a
+  ShapeSize _ a           -> expHasAssert a
+  Coerce _ _ a            -> expHasAssert a
+  Assert{}                -> True
+  Assume c e              -> expHasAssert c || expHasAssert e
 
 shapeExpVars :: Distributes s => ShapeR sh -> Vars s env sh -> ExpVars env sh
 shapeExpVars ShapeRz          TupRunit                       = TupRunit

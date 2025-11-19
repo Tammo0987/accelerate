@@ -54,6 +54,7 @@ import qualified Data.Array.Accelerate.Debug.Internal.Flags         as Debug
 import qualified Data.Array.Accelerate.Debug.Internal.Trace         as Debug
 
 import Control.Applicative                                          hiding ( Const )
+import Control.Monad
 import Data.List                                                    ( partition )
 import Data.Maybe
 import Data.Monoid
@@ -245,8 +246,8 @@ simplifyOpenExp env = first getAny . cvtE
       Foreign tp ff f e         -> Foreign tp ff <$> first Any (simplifyOpenFun EmptyExp f) <*> cvtE e
       While p f x               -> While <$> cvtF env p <*> cvtF env f <*> cvtE x
       Coerce t1 t2 e            -> Coerce t1 t2 <$> cvtE e
-      Assert e1 e2              -> Assert <$> cvtE e1 <*> cvtE e2
-      Assume e1 e2              -> Assume <$> cvtE e1 <*> cvtE e2
+      Assert e1 e2              -> join (assert <$> cvtE e1 <*> cvtE e2)
+      Assume e1 e2              -> join (assume <$> cvtE e1 <*> cvtE e2)
 
     cvtE' :: Gamma arr env' env' -> PreOpenExp arr env' e' -> (Any, PreOpenExp arr env' e')
     cvtE' env' = first Any . simplifyOpenExp env'
@@ -263,6 +264,8 @@ simplifyOpenExp env = first getAny . cvtE
            -> PreOpenExp arr env' bnd
            -> (Gamma arr env'' env'' -> (Any, PreOpenExp arr env'' t))
            -> (Any, PreOpenExp arr env' t)
+    cvtLet env' lhs (Assert c bnd) body = yes $ Assert c $ snd $ cvtLet env' lhs bnd body
+    cvtLet env' lhs (Assume c bnd) body = yes $ Assume c $ snd $ cvtLet env' lhs bnd body
     cvtLet env' lhs@(LeftHandSideSingle _) bnd          body = Let lhs bnd <$> body (incExp $ env' `pushExp` bnd) -- Single variable on the LHS, add binding to the environment
     cvtLet env' (LeftHandSideWildcard _)   _            body = body env'                                 -- Binding not used, remove let binding
     cvtLet env' (LeftHandSidePair l1 l2)   (Pair e1 e2) body                                             -- Split binding to multiple bindings
@@ -393,6 +396,21 @@ simplifyOpenExp env = first getAny . cvtE
       -- TODO: We could bind them in a Let, which may allow further reasoning
       -- by the simplifier.
       = IndexSlice sliceIdx slx sh
+
+    assert :: PreOpenExp arr env PrimBool -> PreOpenExp arr env t -> (Any, PreOpenExp arr env t)
+    assert (PrimApp PrimLAnd (Pair c1 c2)) b =
+      yes $ snd $ assert c1 $ snd $ assert c2 b
+    assert (Const _ 1) b = yes b
+    assert (Assert c a) b = yes $ Assert c $ snd $ assert a b
+    assert (Assume c a) b = yes $ Assume c $ snd $ assert a b
+    assert c b = (Any False, Assert c b)
+
+    assume :: PreOpenExp arr env PrimBool -> PreOpenExp arr env t -> (Any, PreOpenExp arr env t)
+    assume (PrimApp PrimLAnd (Pair c1 c2)) b =
+      yes $ snd $ assume c1 $ snd $ assume c2 b
+    assume (Const _ 1) b = yes b
+    assume (Assume c a) b = yes $ Assume c $ snd $ assume a b
+    assume c b = (Any False, Assume c b)
 
     first :: (a -> a') -> (a,b) -> (a',b)
     first f (x,y) = (f x, y)

@@ -50,7 +50,15 @@ optimizeBoundsExp :: forall benv env t l ls .
 optimizeBoundsExp (Assert g e) = do
     (g', arG) <- optimizeBoundsExp g
     redundant <- isAlwaysTrueData (getSingle $ arG ^. rCS . rData)
-    if redundant then do
+    -- Remove the assertion if we already know it evaluates to true.
+    -- Note that we cannot do that if the condition itself contains another assertion.
+    -- This should be very rare, but we should still be sound in such a case.
+    -- For instance, consider `assert (assert x then x) then foo`.
+    -- The analysis will find that `assert x then x` always evaluates true
+    -- (if it doesn't panic in the assertion). We cannot remove the outer assertion,
+    -- as that would cause that the inner assertion is not checked.
+    --
+    if redundant && not (expHasAssert g) then do
                     -- if the assertion is redundant pi-information does not introduce any useful information
                     (e', arE) <- optimizeBoundsExp e
                     return (e', arE)
@@ -76,26 +84,44 @@ optimizeBoundsExp instr@(While g it init)
     (init', rInit) <- optimizeBoundsExp init
 
     -- Optimize the guard with init values as arguments.
-    let gArgs = diffArg1 (NewBindArg (rInit ^. rCS . rData) (bccsEmpty instr) (bccsEmpty instr))
-    (g', urGuard) <- optimizeBoundsFun' gArgs g
-    let rGuard = mkFunRes1 urGuard
+    let gArgsInit = diffArg1 (NewBindArg (rInit ^. rCS . rData) (bccsEmpty instr) (bccsEmpty instr))
+    (_, urGuardInit) <- optimizeBoundsFun' gArgsInit g
+    let rGuardInit = mkFunRes1 urGuardInit
 
-    redundant <- valOfBool (getSingle $ rGuard ^. rCS . rData)
+    redundant <- valOfBool (getSingle $ rGuardInit ^. rCS . rData)
     case redundant of
       -- if the guard is always false when analyzed with init values, then the loop never iterates and we can safely
       -- restrict the constrants to init
       Just False -> do
-        return (While g' it init', rInit)
+        return (init', rInit)
 
       -- Otherwise, optimize the body. If hoisting is implemented, the (Just True) marks the trip count is > 0
       _ -> do
+        -- Optimize the guard without making assumptions on the arguments
+        -- Note that in the definition of urGuardInit, we optimized it with init as argument,
+        -- to check whether the while loop does any iteration at all.
+        -- Now we need to optimize it to run in any iteration.
+        -- Also note that we analyze g twice, and if g again contains a While loop,
+        -- this leads to exponential blow-up. In normal programs, this will not occur
+        -- however. We could still decide to analyze g only once (only here and not
+        -- with gArgsInit). We would not detect some empty while loops that way,
+        -- but that might not occur that often to begin with.
+        let gArgs = diffArg1 (NewBindArg (bccsEmpty instr)  (bccsEmpty instr) (bccsEmpty instr))
+        (g', urGuard) <- optimizeBoundsFun' gArgs g
+        let rGuard = mkFunRes1 urGuard
         let ((it', _), a') = runState (optimizeWhileBody (rGuard ^. rSCEV . rArgIdxs) (bccsEmpty init) (rGuard ^. rCS . rControl) it) (newLoopScope a)
         put $ popLoopScope a'
         -- Without SCEV, no data constraints are returned for a non-trivial loop 
         return $ identityResult $ While g' it' init'
 
--- The binded value is optimized and all its constraints are associated to the left hand side
+-- The bound value is optimized and all its constraints are associated to the left hand side
 optimizeBoundsExp (Let lhs bnd e) = do
+    -- TODO: The current implementation assumes that 'bnd' runs before 'e'.
+    -- However, other transformations in the compiler may remove 'bnd' if its
+    -- result is not needed, the compiler may remove 'bnd'.
+    -- Hence we should not propagate the information from the assertions.
+    -- Same applies to Alet in the Acc-level optimizer.
+    -- To reduce the impact of this,
     (bnd', arD) <- optimizeBoundsExp bnd
     a <- get
     let (a', _) = declBind lhs (arD ^. rCS.rData) (arD ^. rCS.rControl) (arD ^. rSCEV.rSCEVExp) a
@@ -147,14 +173,12 @@ optimizeBoundsExp (Cond g t e) = do
 
     case redundant of
       -- if the guard is always true, only "then" branch is optimized
-      Just True -> do
-        (t', arT) <- withPi True optimizeBoundsExp t (arG ^. rCS . rControl)
-        return (Cond g t' e, arT)
+      Just True ->
+        withPi True optimizeBoundsExp t (arG ^. rCS . rControl)
 
       -- if the guard is always false, only "else" branch is optimized
       Just False -> do
-        (e', arE) <- withPi False optimizeBoundsExp e (arG ^. rCS . rControl)
-        return (Cond g t e', arE)
+        withPi False optimizeBoundsExp e (arG ^. rCS . rControl)
 
       Nothing -> do
         -- phi-combine constraints

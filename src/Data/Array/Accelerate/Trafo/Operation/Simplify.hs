@@ -269,10 +269,11 @@ simplify' uniquenesses = \case
           in
             awhileSimplifyInvariant us (cond' env') (step' env') $ simplifyReturnVars env us initial
       )
+
   Aassert g e ->
     let
       (setE, e') = simplify' uniquenesses e
-      in (setE, Aassert g . e')
+      in (setE, \env -> assert (simplifyExp env g) $ e' env)
 
 
 
@@ -574,3 +575,8 @@ subTupSubstitution (SubTupRpair s1 s2) (LeftHandSidePair l1 l2) (TupRpair v1 v2)
 subTupSubstitution s (LeftHandSideWildcard t) _
   = SubTupSubstitution (LeftHandSideWildcard $ subTupR s t) weakenId
 subTupSubstitution _ _ _ = internalError "Tuple mismatch"
+
+assert :: Exp env PrimBool -> OperationAcc op env t -> OperationAcc op env t
+assert (Const _ 1) a = a
+assert (PrimApp PrimLAnd (Pair c1 c2)) a = assert c1 $ assert c2 a
+assert c a = Aassert c a

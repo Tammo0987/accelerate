@@ -200,12 +200,13 @@ alet' lhs1 us (Alet lhs2 uniqueness a1 a2) a3
   -- becomes
   -- let y = a1 in let x = a2 in a3
   | Exists lhs1' <- rebuildLHS lhs1 = Alet lhs2 uniqueness a1 $ alet' lhs1' us a2 $ weaken (sinkWithLHS lhs1 lhs1' $ weakenWithLHS lhs2) a3
--- We could rotate assertions out of let-bindings, but that gives fewer options
--- for program reordering. Fusion reorders programs to enable more optioins for
--- fusion, and Aassert has certain guarantees related to program ordering.
--- alet' lhs us (Aassert set cond bnd) a
---   -- Move assertion out of let-binding
---   = Aassert set cond $ alet' lhs us bnd a
+-- Rotate assertions out of let-bindings. Downside of this is that it gives
+-- fewer options for program reordering. Fusion reorders programs to enable
+-- more optioins for fusion, and Aassert has certain guarantees related to
+-- program ordering.
+alet' lhs us (Aassert cond bnd) a
+  -- Move assertion out of let-binding
+  = Aassert cond $ alet' lhs us bnd a
 alet' lhs@(LeftHandSideWildcard TupRunit) _ bnd a = case bnd of
   Compute _ -> a
   Return _  -> a
