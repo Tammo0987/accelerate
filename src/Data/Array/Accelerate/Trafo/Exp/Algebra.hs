@@ -293,6 +293,18 @@ bool2 f (untup2 -> Just (x,y)) env
 bool2 _ _ _
   = Nothing
 
+bool2IfEq :: Bool -> (a -> b -> Bool) -> (a,b) :-> PrimBool
+bool2IfEq ifEq f (untup2 -> Just (x,y)) env
+  | Just _ <- matchOpenExp x y
+  = Stats.substitution "equal comparison fold"
+  $ Just $ Const scalarTypeWord8 (fromBool ifEq)
+  | Just a <- propagate env x
+  , Just b <- propagate env y
+  = Stats.substitution "constant fold"
+  $ Just $ Const scalarTypeWord8 (fromBool (f a b))
+bool2IfEq _ _ _ _
+  = Nothing
+
 tup2 :: (PreOpenExp arr env a, PreOpenExp arr env b) -> PreOpenExp arr env (a, b)
 tup2 (a,b) = Pair a b
 
@@ -631,27 +643,27 @@ evalIsInfinite ty | FloatingDict <- floatingDict ty = bool1 isInfinite
 -- ---------------------
 
 evalLt :: SingleType a -> (a,a) :-> PrimBool
-evalLt (NumSingleType (IntegralNumType ty)) | IntegralDict <- integralDict ty = bool2 (<)
+evalLt (NumSingleType (IntegralNumType ty)) | IntegralDict <- integralDict ty = bool2IfEq False (<)
 evalLt (NumSingleType (FloatingNumType ty)) | FloatingDict <- floatingDict ty = bool2 (<)
 
 evalGt :: SingleType a -> (a,a) :-> PrimBool
-evalGt (NumSingleType (IntegralNumType ty)) | IntegralDict <- integralDict ty = bool2 (>)
+evalGt (NumSingleType (IntegralNumType ty)) | IntegralDict <- integralDict ty = bool2IfEq False (>)
 evalGt (NumSingleType (FloatingNumType ty)) | FloatingDict <- floatingDict ty = bool2 (>)
 
 evalLtEq :: SingleType a -> (a,a) :-> PrimBool
-evalLtEq (NumSingleType (IntegralNumType ty)) | IntegralDict <- integralDict ty = bool2 (<=)
+evalLtEq (NumSingleType (IntegralNumType ty)) | IntegralDict <- integralDict ty = bool2IfEq True (<=)
 evalLtEq (NumSingleType (FloatingNumType ty)) | FloatingDict <- floatingDict ty = bool2 (<=)
 
 evalGtEq :: SingleType a -> (a,a) :-> PrimBool
-evalGtEq (NumSingleType (IntegralNumType ty)) | IntegralDict <- integralDict ty = bool2 (>=)
+evalGtEq (NumSingleType (IntegralNumType ty)) | IntegralDict <- integralDict ty = bool2IfEq True (>=)
 evalGtEq (NumSingleType (FloatingNumType ty)) | FloatingDict <- floatingDict ty = bool2 (>=)
 
 evalEq :: SingleType a -> (a,a) :-> PrimBool
-evalEq (NumSingleType (IntegralNumType ty)) | IntegralDict <- integralDict ty = bool2 (==)
+evalEq (NumSingleType (IntegralNumType ty)) | IntegralDict <- integralDict ty = bool2IfEq True (==)
 evalEq (NumSingleType (FloatingNumType ty)) | FloatingDict <- floatingDict ty = bool2 (==)
 
 evalNEq :: SingleType a -> (a,a) :-> PrimBool
-evalNEq (NumSingleType (IntegralNumType ty)) | IntegralDict <- integralDict ty = bool2 (/=)
+evalNEq (NumSingleType (IntegralNumType ty)) | IntegralDict <- integralDict ty = bool2IfEq False (/=)
 evalNEq (NumSingleType (FloatingNumType ty)) | FloatingDict <- floatingDict ty = bool2 (/=)
 
 evalMax :: SingleType a -> (a,a) :-> a
