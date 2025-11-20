@@ -332,6 +332,8 @@ convertSharingAcc config alyt aenv (ScopedAcc lams (AccSharing _ preAcc))
       Aprj ix a                   -> let AST.OpenAcc a' = cvtAprj ix a
                                      in a'
       Atrace msg acc1 acc2        -> AST.Atrace msg (cvtA acc1) (cvtA acc2)
+      Aassert cond acc            -> AST.Aassert (cvtE cond) (cvtA acc)
+      Aassume cond acc            -> AST.Aassume (cvtE cond) (cvtA acc)
       Use repr array              -> AST.Use repr array
       Unit tp e                   -> AST.Unit tp (cvtE e)
       Generate repr@(ArrayR shr _) sh f
@@ -1520,6 +1522,14 @@ makeOccMapSharingAcc config accOccMap = traverseAcc
                                              (a', h1) <- traverseAcc lvl acc1
                                              (b', h2) <- traverseAcc lvl acc2
                                              return (Atrace msg a' b', h1 `max` h2 + 1)
+            Aassert cond acc            -> do
+                                             (cond', h1) <- traverseExp lvl cond
+                                             (acc', h2)  <- traverseAcc lvl acc
+                                             return (Aassert cond' acc', h1 `max` h2 + 1)
+            Aassume cond acc            -> do
+                                             (cond', h1) <- traverseExp lvl cond
+                                             (acc', h2)  <- traverseAcc lvl acc
+                                             return (Aassume cond' acc', h1 `max` h2 + 1)
             Use repr arr                -> return (Use repr arr, 1)
             Unit tp e                   -> do
                                              (e', h) <- traverseExp lvl e
@@ -2381,6 +2391,16 @@ determineScopesSharingAcc config accOccMap = scopesAcc
                                        reconstruct (Apair a1' a2') (accCount1 +++ accCount2)
           Aprj ix a               -> travA (Aprj ix) a
 
+          Aassert cond acc        -> let
+                                       (cond', accCount1) = scopesExp cond
+                                       (acc',  accCount2) = scopesAcc acc
+                                     in
+                                       reconstruct (Aassert cond' acc') (accCount1 +++ accCount2)
+          Aassume cond acc        -> let
+                                       (cond', accCount1) = scopesExp cond
+                                       (acc',  accCount2) = scopesAcc acc
+                                     in
+                                       reconstruct (Aassume cond' acc') (accCount1 +++ accCount2)
           Atrace msg a1 a2        -> let
                                        (a1', accCount1) = scopesAcc a1
                                        (a2', accCount2) = scopesAcc a2

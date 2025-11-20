@@ -24,7 +24,7 @@
 
 module Data.Array.Accelerate.AST.Exp (
   -- ** Scalar expressions
-  ELeftHandSide, ExpVar, ExpVars, expVars,
+  ELeftHandSide, ExpVar, ExpVars, expVars, undefs,
   PreOpenFun(..),
   PreOpenExp(..),
   PrimConst(..),
@@ -238,6 +238,11 @@ expVars :: ExpVars env t -> PreOpenExp arr env t
 expVars TupRunit         = Nil
 expVars (TupRsingle var) = Evar var
 expVars (TupRpair v1 v2) = expVars v1 `Pair` expVars v2
+
+undefs :: TypeR t -> PreOpenExp arr env t
+undefs (TupRsingle tp) = Undef tp
+undefs (TupRpair t1 t2) = undefs t1 `Pair` undefs t2
+undefs TupRunit = Nil
 
 -- Types for scalar bindings
 --

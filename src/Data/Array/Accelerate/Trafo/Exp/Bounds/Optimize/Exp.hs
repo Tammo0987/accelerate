@@ -51,29 +51,27 @@ optimizeBoundsExp (Assert g e) = do
     (g', arG) <- optimizeBoundsExp g
     redundant <- isAlwaysTrueData (getSingle $ arG ^. rCS . rData)
     -- Remove the assertion if we already know it evaluates to true.
-    -- Note that we cannot do that if the condition itself contains another assertion.
-    -- This should be very rare, but we should still be sound in such a case.
-    -- For instance, consider `assert (assert x then x) then foo`.
-    -- The analysis will find that `assert x then x` always evaluates true
-    -- (if it doesn't panic in the assertion). We cannot remove the outer assertion,
-    -- as that would cause that the inner assertion is not checked.
-    --
-    if redundant && not (expHasAssert g) then do
+    if redundant then do
                     -- if the assertion is redundant pi-information does not introduce any useful information
                     (e', arE) <- optimizeBoundsExp e
                     return (e', arE)
                  else do
                     -- Turn assertion domination on and off
-                    (e', arE) <- withPiPersist True optimizeBoundsExp e (arG ^. rCS.rControl) 
+                    (e', _) <- withPiPersist True optimizeBoundsExp e (arG ^. rCS.rControl) 
                     -- (e', arE) <- optimizeBoundsExp e
-                    return (Assert g' e', arE)
+                    -- Note that we do not propagate information from 'e'
+                    -- outwards. If another part of this optimization uses that
+                    -- e's value is known statically, it would remove this
+                    -- assertion from the program and that might make the
+                    -- analysis unsound.
+                    return $ identityResult $ Assert g' e'
 
 -- Optimize the guard and non-persistently pi-constrain the variables. The lack of persistence
 -- is meant to contain the unsafe effect of an assumtion within intended scope
 optimizeBoundsExp (Assume g e) = do
     (_, arG) <- optimizeBoundsExp g
     (e', arE) <- withPi True optimizeBoundsExp e (arG ^. rCS.rControl)
-    return (e', arE)
+    return (Assume g e', arE)
 
 -- TODO: Implement SCEV/Hoisting?
 optimizeBoundsExp instr@(While g it init)
@@ -92,7 +90,7 @@ optimizeBoundsExp instr@(While g it init)
     case redundant of
       -- if the guard is always false when analyzed with init values, then the loop never iterates and we can safely
       -- restrict the constrants to init
-      Just False -> do
+      Just False ->
         return (init', rInit)
 
       -- Otherwise, optimize the body. If hoisting is implemented, the (Just True) marks the trip count is > 0
@@ -173,14 +171,16 @@ optimizeBoundsExp (Cond g t e) = do
 
     case redundant of
       -- if the guard is always true, only "then" branch is optimized
-      Just True ->
-        withPi True optimizeBoundsExp t (arG ^. rCS . rControl)
+      Just True
+        | not (expHasAssert g) ->
+            withPi True optimizeBoundsExp t (arG ^. rCS . rControl)
 
       -- if the guard is always false, only "else" branch is optimized
-      Just False -> do
-        withPi False optimizeBoundsExp e (arG ^. rCS . rControl)
+      Just False
+        | not (expHasAssert g) ->
+            withPi False optimizeBoundsExp e (arG ^. rCS . rControl)
 
-      Nothing -> do
+      _ -> do
         -- phi-combine constraints
         (t', arT) <- withPi True  optimizeBoundsExp t (arG ^. rCS . rControl)
         (e', arE) <- withPi False optimizeBoundsExp e (arG ^. rCS . rControl)

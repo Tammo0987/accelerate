@@ -841,13 +841,13 @@ fold1All f arr = fold1 f (flatten arr)
 --     40, 170, 0, 138]
 --
 foldSeg
-    :: forall sh e i. (Shape sh, Elt e, Elt i, i ~ EltR i, IsIntegral i)
+    :: forall sh e i. (Shape sh, Elt e, Elt i, i ~ EltR i, IsIntegral i, Ord i, Num i)
     => (Exp e -> Exp e -> Exp e)
     -> Exp e
     -> Acc (Array (sh:.Int) e)
     -> Acc (Segments i)
     -> Acc (Array (sh:.Int) e)
-foldSeg f z arr seg = foldSeg' f z arr (scanl plus zero seg)
+foldSeg f z arr seg = foldSeg' f z arr (scanl plus zero $ map (\sz -> assert (sz >= 0) sz) seg)
   where
     (plus, zero) =
       case integralType @i of
@@ -868,12 +868,12 @@ foldSeg f z arr seg = foldSeg' f z arr (scanl plus zero seg)
 -- descriptor species the length of each of the logical sub-arrays.
 --
 fold1Seg
-    :: forall sh e i. (Shape sh, Elt e, Elt i, i ~ EltR i, IsIntegral i)
+    :: forall sh e i. (Shape sh, Elt e, Elt i, i ~ EltR i, IsIntegral i, Ord i, Num i)
     => (Exp e -> Exp e -> Exp e)
     -> Acc (Array (sh:.Int) e)
     -> Acc (Segments i)
     -> Acc (Array (sh:.Int) e)
-fold1Seg f arr seg = fold1Seg' f arr (scanl plus zero seg)
+fold1Seg f arr seg = fold1Seg' f arr (scanl plus zero $ map (\sz -> assert (sz >= 0) sz) seg)
   where
     plus :: Exp i -> Exp i -> Exp i
     zero :: Exp i
@@ -1223,7 +1223,7 @@ scanl'Seg f z arr seg =
     -- the flags align with the last element of each body section, and when
     -- scanned, this element will be incremented over.
     --
-    offset      = scanl1 (+) seg
+    offset      = scanl1 (+) $ map (\sz -> assert (sz >= 0) sz) seg
     inc         = scanl1 (+)
                 $ permute (+) (fill (I1 $ size arr + 1) 0)
                               (\ix -> Just_ (index1' (offset ! ix)))
@@ -1502,7 +1502,7 @@ mkHeadFlags seg
   = init
   $ permute (+) zeros (\ix -> Just_ (index1' (offset ! ix))) ones
   where
-    T2 offset len = scanl' (+) 0 seg
+    T2 offset len = scanl' (+) 0 $ map (\sz -> assert (sz >= 0) sz) seg
     zeros         = fill (index1' $ the len + 1) 0
     ones          = fill (index1  $ size offset) 1
 
@@ -1517,7 +1517,7 @@ mkTailFlags seg
   = init
   $ permute (+) zeros (\ix -> Just_ (index1' (the len - 1 - offset ! ix))) ones
   where
-    T2 offset len = scanr' (+) 0 seg
+    T2 offset len = scanr' (+) 0 $ map (\sz -> assert (sz >= 0) sz) seg
     zeros         = fill (index1' $ the len + 1) 0
     ones          = fill (index1  $ size offset) 1
 
@@ -1907,7 +1907,7 @@ scatter
     -> Acc (Vector e)             -- ^ default values
     -> Acc (Vector e)             -- ^ source values
     -> Acc (Vector e)
-scatter to defaults input = permute const defaults pf input'
+scatter to defaults input = permuteUnique defaults pf input'
   where
     pf ix   = Just_ (I1 (to ! ix))
     input'  = backpermute (shape to `intersect` shape input) id input
@@ -1934,7 +1934,7 @@ scatterIf
     -> Acc (Vector b)             -- ^ default values
     -> Acc (Vector b)             -- ^ source values
     -> Acc (Vector b)
-scatterIf to maskV pred defaults input = permute const defaults pf input'
+scatterIf to maskV pred defaults input = permuteUnique defaults pf input'
   where
     input'  = backpermute (shape to `intersect` shape input) id input
     pf ix   = if pred (maskV ! ix)
@@ -2701,7 +2701,7 @@ expand :: (Elt a, Elt b)
        -> Acc (Vector b)
 expand f g xs =
   let
-      szs           = map f xs
+      szs           = map (\a -> let sz = f a in assert (sz >= 0) sz) xs
       T2 offset len = scanl' (+) 0 szs
       m             = the len
   in

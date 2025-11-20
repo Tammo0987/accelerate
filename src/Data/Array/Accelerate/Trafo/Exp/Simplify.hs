@@ -266,6 +266,11 @@ simplifyOpenExp env = first getAny . cvtE
            -> (Any, PreOpenExp arr env' t)
     cvtLet env' lhs (Assert c bnd) body = yes $ Assert c $ snd $ cvtLet env' lhs bnd body
     cvtLet env' lhs (Assume c bnd) body = yes $ Assume c $ snd $ cvtLet env' lhs bnd body
+    -- Let rotation
+    cvtLet env' lhs1 (Let lhs2 bnd expr) body =
+      yes $ snd $ cvtLet env' lhs2 bnd
+        $ \env'' -> case rebuildLHS lhs1 of
+          Exists lhs1' -> cvtLet env'' lhs1' expr (\e -> weakenE (sinkWithLHS lhs1 lhs1' $ weakenWithLHS lhs2) <$> body (rotateLetEnv lhs1 lhs1' lhs2 e))
     cvtLet env' lhs@(LeftHandSideSingle _) bnd          body = Let lhs bnd <$> body (incExp $ env' `pushExp` bnd) -- Single variable on the LHS, add binding to the environment
     cvtLet env' (LeftHandSideWildcard _)   _            body = body env'                                 -- Binding not used, remove let binding
     cvtLet env' (LeftHandSidePair l1 l2)   (Pair e1 e2) body                                             -- Split binding to multiple bindings
@@ -401,6 +406,9 @@ simplifyOpenExp env = first getAny . cvtE
     assert (PrimApp PrimLAnd (Pair c1 c2)) b =
       yes $ snd $ assert c1 $ snd $ assert c2 b
     assert (Const _ 1) b = yes b
+    assert c@(Const _ 0) b =
+      let u = undefs $ expType b
+      in (Any (isJust $ matchOpenExp b u), Assert c u)
     assert (Assert c a) b = yes $ Assert c $ snd $ assert a b
     assert (Assume c a) b = yes $ Assume c $ snd $ assert a b
     assert c b = (Any False, Assert c b)
@@ -409,6 +417,7 @@ simplifyOpenExp env = first getAny . cvtE
     assume (PrimApp PrimLAnd (Pair c1 c2)) b =
       yes $ snd $ assume c1 $ snd $ assume c2 b
     assume (Const _ 1) b = yes b
+    assume (Const _ 0) b = yes $ undefs $ expType b
     assume (Assume c a) b = yes $ Assume c $ snd $ assume a b
     assume c b = (Any False, Assume c b)
 

@@ -207,6 +207,12 @@ evalOpenAcc (OpenAcc pacc) aenv =
           | toBool (linearIndexArray (Sugar.eltR @Word8) (p x) 0) = go (f x)
           | otherwise                                             = x
 
+    Aassert cond acc
+      | toBool (evalE cond)       -> manifest acc
+      | otherwise                 -> error "Assertion failed"
+
+    Aassume _ acc                 -> manifest acc
+
     Atrace msg as bs              -> unsafePerformIO $ manifest bs <$ atraceOp msg (snd $ manifest as)
 
     Use repr arr                  -> (TupRsingle repr, arr)
@@ -968,6 +974,12 @@ evalOpenExp pexp runarr env =
     ShapeSize shr sh            -> size shr (evalE sh)
     Foreign _ _ f e             -> evalOpenFun f (\case {}) Empty $ evalE e
     Coerce t1 t2 e              -> evalCoerceScalar t1 t2 (evalE e)
+
+    Assert c e
+      | toBool (evalE c)        -> evalE e
+      | otherwise               -> error "Assertion failed"
+    
+    Assume _ e                  -> evalE e
 
 runArrayInstr :: forall aenv a b. HasCallStack => Val aenv -> ArrayInstr aenv (a -> b) -> a -> b
 runArrayInstr aenv instr arg =

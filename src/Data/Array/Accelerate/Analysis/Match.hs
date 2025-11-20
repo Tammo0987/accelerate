@@ -103,6 +103,10 @@ matchPreOpenAcc matchAcc = match
 
     match (Manifest a1) (Manifest a2)
       = matchAcc a1 a2
+    
+    match (Aassert c1 a1) (Aassert c2 a2)
+      | Just Refl <- matchExp c1 c2
+      = matchAcc a1 a2
 
     match (Aforeign _ ff1 f1 a1) (Aforeign _ ff2 f2 a2)
       | Just Refl <- matchAcc a1 a2

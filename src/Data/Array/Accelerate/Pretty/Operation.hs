@@ -108,6 +108,10 @@ prettyOpenAcc env = \case
     hang 2 (group $ vsep [annotate Statement "assert", prettyExp (val env) g])
     <> hardline
     <> prettyOpenAcc env e
+  Aassume g e ->
+    hang 2 (group $ vsep [annotate Statement "assume", prettyExp (val env) g])
+    <> hardline
+    <> prettyOpenAcc env e
   where
     notReturn Return{} = False
     notReturn _        = True

@@ -23,9 +23,12 @@ import Data.Array.Accelerate.AST.LeftHandSide
 import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.Representation.Array
 import Data.Array.Accelerate.Trafo.Substitution
+import Data.Array.Accelerate.Trafo.Exp.Substitution
 import Data.Array.Accelerate.Type
 
 import Data.Array.Accelerate.Debug.Internal.Stats                   as Stats
+
+import Data.Maybe
 
 
 -- An environment that holds let-bound scalar expressions. The second
@@ -44,6 +47,16 @@ data WeakOpenExp arr env t where
            -> PreOpenExp  arr env  t
            -> PreOpenExp  arr env' t {- LAZY -}
            -> WeakOpenExp arr env' t
+
+instance SinkExp (WeakOpenExp arr) where
+  weakenE k (Subst k' e1 e2) = Subst
+    (k .> k')
+    e1
+    (weakenE (k .> k') e1)
+
+instance SinkExp (Gamma arr) where
+  weakenE _ EmptyExp = EmptyExp
+  weakenE k (PushExp env e) = weakenE k env `PushExp` weakenE k e
 
 -- XXX: The simplifier calls this function every time it moves under a let
 -- binding. This means we have a number of calls to 'weakenE' exponential in the
@@ -71,6 +84,41 @@ prjExp (SuccIdx ix) (PushExp env _)             = prjExp ix env
 
 pushExp :: Gamma arr env env' -> PreOpenExp arr env t -> Gamma arr env (env',t)
 pushExp env e = env `PushExp` Subst weakenId e e
+
+-- Reconstruct environment after let rotation.
+-- Let rotations converts
+-- let lhs1 = (let lhs2 = a in b) in c
+-- to:
+-- let lhs2 = a in let lhs1' = b in c
+-- Expression c now lives in a different environment, and this function
+-- converts that new environment into the type of the old environment
+rotateLetEnv
+  :: ELeftHandSide b env0 env1
+  -> ELeftHandSide b env2 env1'
+  -> ELeftHandSide a env0 env2
+  -> Gamma arr env1' env1'
+  -> Gamma arr env1  env1
+rotateLetEnv lhs1 lhs1' lhs2 env =
+  rotateLetEnv' lhs1 lhs1' (dropLHS lhs2)
+    $ weakenE (sinkWithLHS lhs1' lhs1 $ Weaken $ fromMaybe (internalError "Variable missing after let rotation") . strengthenWithLHS lhs2) env
+
+dropLHS :: ELeftHandSide a env0 env1 -> Gamma arr env env1 -> Gamma arr env env0
+dropLHS (LeftHandSideWildcard _) env = env
+dropLHS (LeftHandSideSingle _) (PushExp env _) = env
+dropLHS (LeftHandSidePair l1 l2) env = dropLHS l1 $ dropLHS l2 env
+
+rotateLetEnv'
+  :: ELeftHandSide b env0  env1
+  -> ELeftHandSide b env0' env1'
+  -> (Gamma arr env env0' -> Gamma arr env env0)
+  -> Gamma arr env env1'
+  -> Gamma arr env env1
+rotateLetEnv' (LeftHandSideWildcard _) (LeftHandSideWildcard _) r env = r env
+rotateLetEnv' (LeftHandSideSingle _)   (LeftHandSideSingle _)   r env
+  | PushExp env' e <- env = PushExp (r env') e
+rotateLetEnv' (LeftHandSidePair a1 b1) (LeftHandSidePair a2 b2) r env =
+  rotateLetEnv' b1 b2 (rotateLetEnv' a1 a2 r) env
+rotateLetEnv' _ _ _ _ = internalError "left hand sides do not match"
 
 {--
 lookupExp

@@ -557,7 +557,8 @@ data Symbol (op :: Type -> Type) where
   SCmp  :: Env env -> Exp env a                                                        -> Symbol op
   SAlc  :: Env env -> ShapeR sh -> ScalarType e -> ExpVars env sh                      -> Symbol op
   SUnt  :: Env env -> ExpVar env e                                                     -> Symbol op
-  SAsr  :: Env env -> Exp env PrimBool                                   -> Symbol op
+  SAsr  :: Env env -> Exp env PrimBool                                                 -> Symbol op
+  SAsu  :: Env env -> Exp env PrimBool                                                 -> Symbol op
 
 instance Show (Symbol op) where
   show :: Symbol op -> String
@@ -575,6 +576,7 @@ instance Show (Symbol op) where
   show (SAlc {}) = "Alc"
   show (SUnt {}) = "Unt"
   show (SAsr {}) = "Asr"
+  show (SAsu {}) = "Asu"
 
 -- | Mapping from labels to symbols.
 type Symbols op = Map (Node Comp) (Symbol op)
@@ -1037,6 +1039,14 @@ mkFusionGraph (Aassert cond next) = do
   c `requiresBuffers` getExpDeps cond env
   symbol c ?= SAsr env cond
   currAssert .= Just c -- All later nodes will be placed after this assertion
+  mkFusionGraph next
+
+mkFusionGraph (Aassume cond next) = do
+  c    <- freshComp
+  env  <- use environment
+  c `requiresBuffers` getExpDeps cond env
+  symbol c ?= SAsu env cond
+  currAssert .= Just c -- All later nodes will be placed after this assumption
   mkFusionGraph next
 
 -- | Construct the fusion graph of a single-argument function.

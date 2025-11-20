@@ -251,6 +251,14 @@ data PreOpenAcc (acc :: Type -> Type -> Type) aenv a where
   Manifest    :: acc            aenv as
               -> PreOpenAcc acc aenv as
 
+  Aassume     :: Exp            aenv PrimBool
+              -> acc            aenv as
+              -> PreOpenAcc acc aenv as
+
+  Aassert     :: Exp            aenv PrimBool
+              -> acc            aenv as
+              -> PreOpenAcc acc aenv as
+
   -- Apply a backend-specific foreign function to an array, with a pure
   -- Accelerate version for use with other backends. The functions must be
   -- closed.
@@ -551,6 +559,8 @@ instance HasArraysR acc => HasArraysR (PreOpenAcc acc) where
   arraysR Anil                        = TupRunit
   arraysR (Atrace _ _ bs)             = arraysR bs
   arraysR (Manifest as)               = arraysR as
+  arraysR (Aassert _ as)              = arraysR as
+  arraysR (Aassume _ as)              = arraysR as
   arraysR (Aforeign r _ _ _)          = r
   arraysR (Acond _ a _)               = arraysR a
   arraysR (Awhile _ (Alam lhs _) _)   = lhsToTupR lhs
@@ -636,6 +646,8 @@ rnfPreOpenAcc rnfA pacc =
     Anil                      -> ()
     Atrace msg as bs          -> rnfM msg `seq` rnfA as `seq` rnfA bs
     Manifest as               -> rnfA as
+    Aassert cond as           -> rnfE cond `seq` rnfA as
+    Aassume cond as           -> rnfE cond `seq` rnfA as
     Aforeign repr asm afun a  -> rnfTupR rnfArrayR repr `seq` rnf (strForeign asm) `seq` rnfAF afun `seq` rnfA a
     Acond p a1 a2             -> rnfE p `seq` rnfA a1 `seq` rnfA a2
     Awhile p f a              -> rnfAF p `seq` rnfAF f `seq` rnfA a
@@ -719,6 +731,8 @@ liftPreOpenAcc liftA pacc =
     Anil                      -> [|| Anil ||]
     Atrace msg as bs          -> [|| Atrace $$(liftMessage (arraysR as) msg) $$(liftA as) $$(liftA bs) ||]
     Manifest as               -> [|| Manifest $$(liftA as) ||]
+    Aassert cond as           -> [|| Aassert $$(liftE cond) $$(liftA as) ||]
+    Aassume cond as           -> [|| Aassume $$(liftE cond) $$(liftA as) ||]
     Aforeign repr asm f a     -> [|| Aforeign $$(liftArraysR repr) $$(liftForeign asm) $$(liftPreOpenAfun liftA f) $$(liftA a) ||]
     Acond p t e               -> [|| Acond $$(liftE p) $$(liftA t) $$(liftA e) ||]
     Awhile p f a              -> [|| Awhile $$(liftAF p) $$(liftAF f) $$(liftA a) ||]
@@ -794,6 +808,8 @@ formatPreAccOp = later $ \case
   Use aR a          -> bformat ("Use " % string) (showArrayShort 5 (showsElt (arrayRtype aR)) aR a)
   Atrace{}          -> "Atrace"
   Manifest{}        -> "Manifest"
+  Aassert{}         -> "Aassert"
+  Aassume{}         -> "Aassume"
   Aforeign{}        -> "Aforeign"
   Acond{}           -> "Acond"
   Awhile{}          -> "Awhile"

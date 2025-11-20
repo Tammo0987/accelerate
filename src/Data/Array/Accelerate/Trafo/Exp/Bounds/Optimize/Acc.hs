@@ -43,9 +43,21 @@ optimizeBounds' (Aassert g e) = do
             return (e', arE)
         else do
             -- Turn assertion domination on and off
-            (e', arE) <- withPiPersist True optimizeBounds' e (arG ^. rCS.rControl)
-            -- (e', arE) <- optimizeBounds' e
-            return (Aassert g' e', arE)
+            (e', _) <- withPiPersist True optimizeBounds' e (arG ^. rCS.rControl)
+            -- (e', _) <- optimizeBounds' e
+            -- Note that we do not propagate information about e's value,
+            -- as acting on that may remove this assertion.
+            return $ identityResult $ Aassert g' e'
+
+optimizeBounds' (Aassume g e) = do
+    a <- get
+    let ((_, arG), a') = runState (optimizeBoundsExp g) (enterExpScope a)
+    put $ popLoopScope a'
+    
+    -- Turn assertion domination on and off
+    (e', arE) <- withPi True optimizeBounds' e (arG ^. rCS.rControl)
+    -- (e', arE) <- optimizeBounds' e
+    return (Aassume g e', arE)
 
 -- A bind inserts it's data constraints in the IG, and stores the control constraints in the environment, to be used on an eventual branch on the value
 optimizeBounds' (Alet lhs un bnd e) = do

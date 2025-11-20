@@ -229,6 +229,19 @@ stronglyLiveVariables' liveness returns us = \case
           in case e' re s of
               (Left  e'') -> Left  $ Aassert g' e''
               (Right e'') -> Right $ Aassert g' e''
+  Aassume g e
+    | free <- IdxSet.fromVarList $ expGroundVars g
+    , liveness1 <- setIdxSetLive free liveness
+    , LVAnalysis liveness2 e' <- stronglyLiveVariables' liveness1 returns us e
+    -> 
+      LVAnalysis
+        liveness2
+        $ \re s -> 
+          let
+            g' = mapArrayInstr (reEnvArrayInstr re) g
+          in case e' re s of
+              (Left  e'') -> Left  $ Aassume g' e''
+              (Right e'') -> Right $ Aassume g' e''
 
   where
     mkAcond :: ExpVar env' PrimBool -> PreOpenAcc op env' t' -> PreOpenAcc op env' t' -> PreOpenAcc op env' t'

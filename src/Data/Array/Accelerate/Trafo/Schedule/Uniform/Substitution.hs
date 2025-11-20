@@ -52,6 +52,7 @@ instance Sink' (UniformSchedule kernel) where
   weaken' k (Effect effect s)         = Effect (weaken' k effect) (weaken' k s)
   weaken' k (Acond cond true false s) = Acond (weaken k cond) (weaken' k true) (weaken' k false) (weaken' k s)
   weaken' k (Awhile io f input s)     = Awhile io (weaken k f) (mapTupR (weaken k) input) (weaken' k s)
+  weaken' k (AwhileSeq io f input s)  = AwhileSeq io (weaken k f) (mapTupR (weaken k) input) (weaken' k s)
   weaken' k (Spawn s1 s2)             = Spawn (weaken' k s1) (weaken' k s2)
 
 instance Sink (UniformScheduleFun kernel) where
@@ -117,6 +118,7 @@ reindexSchedule' k = \case
   Effect effect s -> Effect <$> reindexEffect' k effect <*> reindexSchedule' k s
   Acond cond t f continue -> Acond <$> reindexVarUnsafe k cond <*> reindexSchedule' k t <*> reindexSchedule' k f <*> reindexSchedule' k continue
   Awhile io f initial continue -> Awhile io <$> reindexScheduleFun' k f <*> traverseTupR (reindexVarUnsafe k) initial <*> reindexSchedule' k continue
+  AwhileSeq io f initial continue -> AwhileSeq io <$> reindexScheduleFun' k f <*> traverseTupR (reindexVarUnsafe k) initial <*> reindexSchedule' k continue
   Spawn s1 s2 -> Spawn <$> reindexSchedule' k s1 <*> reindexSchedule' k s2
 
 reindexVarUnsafe :: Applicative f => SunkReindexPartialN f env env' -> Var s env t -> f (Var s env' t)
@@ -134,6 +136,7 @@ reindexEffect' k = \case
   SignalAwait signals -> SignalAwait <$> traverse (fromNewIdxSignal <.> reindex' k) signals
   SignalResolve resolvers -> SignalResolve . mapMaybe toMaybe <$> traverse (reindex' k) resolvers
   RefWrite ref value -> RefWrite <$> reindexVar (fromNewIdxOutputRef <.> reindex' k) ref <*> reindexVar (fromNewIdxUnsafe <.> reindex' k) value
+  Aassert cond -> Aassert <$> reindexExp (fromNewIdxUnsafe <.> reindex' k) cond
   where
     toMaybe :: NewIdx env' a -> Maybe (Idx env' a)
     toMaybe (NewIdxJust idx) = Just idx

@@ -127,6 +127,7 @@ reindexA' k = \case
     Acond c t f -> Acond <$> reindexVar' k c <*> travA t <*> travA f
     Awhile uniqueness c f i -> Awhile uniqueness <$> reindexAfun' k c <*> reindexAfun' k f <*> reindexVars' k i
     Aassert g e -> Aassert <$> reindexExp' k g <*> reindexA' k e
+    Aassume g e -> Aassume <$> reindexExp' k g <*> reindexA' k e
   where
     travA :: PreOpenAcc op env s -> f (PreOpenAcc op env' s)
     travA = reindexA' k
@@ -173,12 +174,14 @@ makeManifest acc = case acc of
   Compute{} -> acc -- Doesn't return a buffer, only buffers should explicitely be marked as manifest
   Alloc{} -> acc -- Can't fuse anyway
   Use{} -> acc -- Can't fuse anyway
+  Unit{} -> acc -- Can't fuse anyway
   -- Acond can't fuse, but we still mark it explicitely as manifest in case the
   -- condition is evaluated at compile time.
   Acond c t f -> Acond c (makeManifest t) (makeManifest f)
   Awhile{} -> acc -- Can't fuse anyway
   Return vars -> go vars
   Aassert g e -> Aassert g $ makeManifest e
+  Aassume g e -> Aassume g $ makeManifest e
   where
     go :: GroundVars env t -> PreOpenAcc op env t
     go TupRunit = Return TupRunit
@@ -207,6 +210,9 @@ alet' lhs1 us (Alet lhs2 uniqueness a1 a2) a3
 alet' lhs us (Aassert cond bnd) a
   -- Move assertion out of let-binding
   = Aassert cond $ alet' lhs us bnd a
+alet' lhs us (Aassume cond bnd) a
+  -- Same as with assertions, move assumptions out of let-binding
+  = Aassume cond $ alet' lhs us bnd a
 alet' lhs@(LeftHandSideWildcard TupRunit) _ bnd a = case bnd of
   Compute _ -> a
   Return _  -> a

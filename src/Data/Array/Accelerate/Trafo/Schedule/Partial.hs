@@ -439,6 +439,7 @@ toPartial' us = \case
     ( IdxSet.fromList $ mapMaybe (\(Exists a) -> instrToSync a) $ arrayInstrsInExp cond
     , PartialSchedule $ PAssert cond )
   C.Aassert cond next -> toPartial' us $ C.Alet (LeftHandSideWildcard TupRunit) TupRunit (C.Aassert cond (C.Return TupRunit)) next
+  C.Aassume _ next -> toPartial' us next -- Assumptions are removed at this point
   where
     -- For all simple cases, with no free buffer variables.
     simple :: PrePartialSchedule PartialSchedule kernel env t -> (IdxSet env, PartialSchedule kernel env t)

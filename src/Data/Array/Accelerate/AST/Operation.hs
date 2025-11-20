@@ -193,6 +193,12 @@ data PreOpenAcc (op :: Type -> Type) env a where
           -> PreOpenAcc op env t
           -> PreOpenAcc op env t
 
+  -- | Assumes that the given expression evaluates to true,
+  -- without checking.
+  Aassume :: Exp env PrimBool
+          -> PreOpenAcc op env t
+          -> PreOpenAcc op env t
+
 -- | Function abstraction over parametrised array computations
 --
 data PreOpenAfun op env t where
@@ -385,6 +391,7 @@ instance HasGroundsR (PreOpenAcc op env) where
   groundsR (Acond _ a _)     = groundsR a
   groundsR (Awhile _ _ _ a)  = groundsR a
   groundsR (Aassert _ e)     = groundsR e
+  groundsR (Aassume _ e)     = groundsR e
 
 instance HasGroundsR (GroundVar env) where
   groundsR (Var repr _) = TupRsingle repr
@@ -536,6 +543,7 @@ reindexAcc r (Unit var) = Unit <$> reindexVar r var
 reindexAcc r (Acond var poa poa') = Acond <$> reindexVar r var <*> reindexAcc r poa <*> reindexAcc r poa'
 reindexAcc r (Awhile tr poa poa' tr') = Awhile tr <$> reindexAfun r poa <*> reindexAfun r poa' <*> reindexVars r tr'
 reindexAcc r (Aassert g e) = Aassert <$> reindexExp r g <*> reindexAcc r e
+reindexAcc r (Aassume g e) = Aassume <$> reindexExp r g <*> reindexAcc r e
 
 reindexAfun :: Applicative f => ReindexPartial f env env' -> PreOpenAfun op env t -> f (PreOpenAfun op env' t)
 reindexAfun r (Abody poa) = Abody <$> reindexAcc r poa
@@ -619,6 +627,7 @@ mapAccExecutable f = \case
   Acond var a1 a2               -> Acond var (mapAccExecutable f a1) (mapAccExecutable f a2)
   Awhile uniqueness c g a       -> Awhile uniqueness (mapAfunExecutable f c) (mapAfunExecutable f g) a
   Aassert g e                   -> Aassert g (mapAccExecutable f e)
+  Aassume g e                   -> Aassume g (mapAccExecutable f e)
 
 mapAfunExecutable :: (forall args benv'. op args -> Args benv' args -> op' args) -> PreOpenAfun op benv t -> PreOpenAfun op' benv t
 mapAfunExecutable f (Abody a)    = Abody    $ mapAccExecutable  f a
@@ -649,7 +658,8 @@ instance NFData' op => NFData (OperationAcc op env a) where
   rnf (Unit var)                    = rnfVar rnfScalarType var
   rnf (Acond cond true false)       = rnfVar rnfScalarType cond `seq` rnf true `seq` rnf false
   rnf (Awhile us cond step initial) = rnfTupR rnfUniqueness us `seq` rnf cond `seq` rnf step `seq` rnfGroundVars initial
-  rnf (Aassert g e)                 = rnfOpenExp g `seq` rnf e
+  rnf (Aassert g a)                 = rnfOpenExp g `seq` rnf a
+  rnf (Aassume g a)                 = rnfOpenExp g `seq` rnf a
 
 instance NFData' op => NFData (OperationAfun op env a) where
   rnf (Abody a) = rnf a

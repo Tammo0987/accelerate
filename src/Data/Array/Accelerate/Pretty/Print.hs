@@ -157,7 +157,8 @@ prettyPreOpenAcc config ctx prettyAcc extractAcc aenv pacc =
                       , hang shiftwidth (sep [ then_, t' ])
                       , hang shiftwidth (sep [ else_, e' ]) ]
 
-
+    Aassert cond a                  -> ppN "assert"      .$ [ ppE cond, ppA a]
+    Aassume cond a                  -> ppN "assume"      .$ [ ppE cond, ppA a]
     Atrace (Message _ _ msg) as bs  -> ppN "atrace"      .$ [ fromString (show msg), ppA as, ppA bs ]
     Aforeign _ ff _ a               -> ppN "aforeign"    .$ [ pretty (strForeign ff), ppA a ]
     Awhile p f a                    -> ppN "awhile"      .$ [ ppAF p, ppAF f, ppA a ]

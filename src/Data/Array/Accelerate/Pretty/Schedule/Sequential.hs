@@ -94,6 +94,8 @@ prettySeqSchedule env = \case
         <> hardline <> indent 2 (prettyVars (val env) 10 initial)
   Aassert cond
     -> hang 2 $ group $ vsep [annotate Statement "assert", prettyExp (val env) cond]
+  Aassume cond
+    -> hang 2 $ group $ vsep [annotate Statement "assume", prettyExp (val env) cond]
   where
     notReturn Return{} = False
     notReturn _        = True

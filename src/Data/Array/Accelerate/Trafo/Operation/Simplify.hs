@@ -275,6 +275,11 @@ simplify' uniquenesses = \case
       (setE, e') = simplify' uniquenesses e
       in (setE, \env -> assert (simplifyExp env g) $ e' env)
 
+  Aassume g e ->
+    let
+      (setE, e') = simplify' uniquenesses e
+      in (setE, \env -> assume (simplifyExp env g) $ e' env)
+
 
 
 variableIndices :: Uniquenesses t -> GroundVars env t -> IdxSet env
@@ -580,3 +585,8 @@ assert :: Exp env PrimBool -> OperationAcc op env t -> OperationAcc op env t
 assert (Const _ 1) a = a
 assert (PrimApp PrimLAnd (Pair c1 c2)) a = assert c1 $ assert c2 a
 assert c a = Aassert c a
+
+assume :: Exp env PrimBool -> OperationAcc op env t -> OperationAcc op env t
+assume (Const _ 1) a = a
+assume (PrimApp PrimLAnd (Pair c1 c2)) a = assume c1 $ assume c2 a
+assume c a = Aassume c a

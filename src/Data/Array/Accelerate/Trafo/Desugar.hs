@@ -374,6 +374,8 @@ desugarOpenAcc env = travA
       Named.Apair a b -> pair (travA a) (travA b)
       Named.Anil -> Return TupRunit
       Named.Manifest as -> makeManifest $ travA as
+      Named.Aassert cond as -> Aassert (travE cond) (travA as)
+      Named.Aassume cond as -> Aassume (travE cond) (travA as)
       Named.Aforeign repr asm (Named.Alam lhsA _) arg
         | DeclareVars lhs _ value <- declareVars $ desugarArraysR $ lhsToTupR lhsA
         , Just a <- mkForeign repr asm $ value weakenId

@@ -508,6 +508,9 @@ executeEffect env = \case
     let S.OutputRef ioref = prj (varIdx ref) env
     let value = prj (varIdx valueVar) env
     writeIORef ioref value
+  S.Aassert cond
+    | runIdentity (evalExp cond $ evalArrayInstrDefault env) == 1 -> return ()
+    | otherwise -> error "Assertion failed"
   where
     await :: Idx env S.Signal -> IO ()
     await idx = do

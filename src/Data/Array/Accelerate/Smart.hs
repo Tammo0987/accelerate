@@ -75,6 +75,7 @@ module Data.Array.Accelerate.Smart (
   ($$), ($$$), ($$$$), ($$$$$),
   ApplyAcc(..),
   unAcc, unAccFunction, mkExp, unExp, unExpFunction, unExpBinaryFunction, unPair, mkPairToTuple,
+  prj0, prj1, prjTail,
 
   -- ** Miscellaneous
   formatPreAccOp,
@@ -355,6 +356,14 @@ data PreSmartAcc acc exp as where
                 -> acc arrs1
                 -> acc arrs2
                 -> PreSmartAcc acc exp arrs2
+
+  Aassert       :: exp PrimBool
+                -> acc as
+                -> PreSmartAcc acc exp as
+
+  Aassume       :: exp PrimBool
+                -> acc as
+                -> PreSmartAcc acc exp as
 
   Use           :: ArrayR (Array sh e)
                 -> Array sh e
@@ -840,6 +849,8 @@ instance HasArraysR acc => HasArraysR (PreSmartAcc acc exp) where
                                    PairIdxRight -> t2
     Aprj _ _                  -> error "Ejector seat? You're joking!"
     Atrace _ _ a              -> arraysR a
+    Aassert _ a               -> arraysR a
+    Aassume _ a               -> arraysR a
     Use repr _                -> TupRsingle repr
     Unit tp _                 -> TupRsingle $ ArrayR ShapeRz $ tp
     Generate repr _ _         -> TupRsingle repr
@@ -1358,6 +1369,8 @@ formatPreAccOp = later $ \case
   Anil{}              -> "Anil"
   Aprj{}              -> "Aprj"
   Atrace{}            -> "Atrace"
+  Aassert{}           -> "Aassert"
+  Aassume{}           -> "Aassume"
   Unit{}              -> "Unit"
   Generate{}          -> "Generate"
   Reshape{}           -> "Reshape"
