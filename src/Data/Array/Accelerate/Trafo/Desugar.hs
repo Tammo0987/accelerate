@@ -998,9 +998,9 @@ desugarOpenAfun env (Named.Abody a) = case Named.arraysR a of
   -- We must pattern match on the arrays representation of the body
   -- to inform the type checker that 'a' is not a function, and thus
   -- that 'DesugaredAfun a' is equal to 'DesugaredArrays a'
-  TupRsingle ArrayR{} -> Abody $ desugarOpenAcc env a
-  TupRunit            -> Abody $ desugarOpenAcc env a
-  TupRpair _ _        -> Abody $ desugarOpenAcc env a
+  TupRsingle ArrayR{} -> Abody $ addShapeAssumes env $ desugarOpenAcc env a
+  TupRunit            -> Abody $ addShapeAssumes env $ desugarOpenAcc env a
+  TupRpair _ _        -> Abody $ addShapeAssumes env $ desugarOpenAcc env a
 desugarOpenAfun env (Named.Alam lhs f)
   | DesugaredLHS env' lhs' <- desugarLHS env lhs = Alam lhs' $ desugarOpenAfun env' f
 
@@ -1016,6 +1016,17 @@ desugarLHS env (LeftHandSideSingle (ArrayR shr tp))
   | DeclareVars lhsSh kSh valueSh <- declareVars $ mapTupR GroundRscalar $ shapeType shr
   , DeclareVars lhsBf kBf valueBf <- declareVars $ buffersR tp
   = DesugaredLHS (mapEnv (weakenArrayDescriptor $ kBf .> kSh) env `Push` ArrayDescriptor shr (valueSh kBf) (valueBf weakenId)) $ LeftHandSidePair lhsSh lhsBf
+
+addShapeAssumes :: BEnv benv aenv -> OperationAcc op benv a -> OperationAcc op benv a
+addShapeAssumes Empty acc = acc
+addShapeAssumes (env `Push` ArrayDescriptor shr sh _) acc = addShapeAssumes env $ go shr sh acc
+  where
+    go :: ShapeR sh -> GroundVars benv sh -> OperationAcc op benv a -> OperationAcc op benv a
+    go ShapeRz _ a = a
+    go (ShapeRsnoc shr') (TupRpair sh' (TupRsingle sz)) a
+      = go shr' sh'
+      $ Aassume (mkBinary (PrimGtEq singleType) (paramIn scalarTypeInt sz) (Const scalarTypeInt 0)) a
+    go _ _ _ = internalError "Shape impossible"
 
 desugarExp :: HasCallStack
            => BEnv benv aenv
