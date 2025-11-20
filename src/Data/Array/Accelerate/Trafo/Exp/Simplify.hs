@@ -342,6 +342,8 @@ simplifyOpenExp env = first getAny . cvtE
     shapeSize shr (_, sh)
       | Just c <- extractConstTuple sh
       = Stats.ruleFired "shapeSize/const" $ yes (Const scalarTypeInt (product (shapeToList shr c)))
+    shapeSize (ShapeRsnoc ShapeRz) (_, Pair _ sz)
+      = Stats.ruleFired "shapeSize/I1" $ yes sz
     shapeSize shr sh
       = ShapeSize shr <$> sh
 

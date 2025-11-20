@@ -708,7 +708,7 @@ permute'
     -> Acc (Array sh' a)                -- ^ array of default values
     -> Acc (Array sh  (Maybe (sh', a))) -- ^ array of source values to be permuted, alongside their target index
     -> Acc (Array sh' a)
-permute' f def src = Acc $$ applyAcc
+permute' f def src = Acc $ applyAcc
   (Permute (arrayR @sh @a) $ Just $ unExpBinaryFunction f)
   def
   $ map (\s@(Exp s') -> assert (not (isJust s) ||! inboundsOf def (Exp $ prj1 $ prj0 $ prj0 s')) s) src
