@@ -222,7 +222,7 @@ simplifyOpenExp env = first getAny . cvtE
       Let lhs bnd body -> (u <> v, exp')
         where
           (u, bnd') = cvtE bnd
-          (v, exp') = cvtLet env lhs bnd' (\env' -> cvtE' env' body)
+          (v, exp') = cvtLet env lhs bnd' $ Subst weakenId body body
       Evar var                  -> pure $ Evar var
       Const tp c                -> pure $ Const tp c
       Undef tp                  -> pure $ Undef tp
@@ -261,23 +261,31 @@ simplifyOpenExp env = first getAny . cvtE
 
     cvtLet :: Gamma arr env' env'
            -> ELeftHandSide bnd env' env''
-           -> PreOpenExp arr env' bnd
-           -> (Gamma arr env'' env'' -> (Any, PreOpenExp arr env'' t))
+           -> PreOpenExp arr env' bnd -- Optimized
+           -> WeakOpenExp arr env'' t -- Not optimized
            -> (Any, PreOpenExp arr env' t)
     cvtLet env' lhs (Assert c bnd) body = yes $ Assert c $ snd $ cvtLet env' lhs bnd body
     cvtLet env' lhs (Assume c bnd) body = yes $ Assume c $ snd $ cvtLet env' lhs bnd body
     -- Let rotation
-    cvtLet env' lhs1 (Let lhs2 bnd expr) body =
-      yes $ snd $ cvtLet env' lhs2 bnd
-        $ \env'' -> case rebuildLHS lhs1 of
-          Exists lhs1' -> cvtLet env'' lhs1' expr (\e -> weakenE (sinkWithLHS lhs1 lhs1' $ weakenWithLHS lhs2) <$> body (rotateLetEnv lhs1 lhs1' lhs2 e))
-    cvtLet env' lhs@(LeftHandSideSingle _) bnd          body = Let lhs bnd <$> body (incExp $ env' `pushExp` bnd) -- Single variable on the LHS, add binding to the environment
-    cvtLet env' (LeftHandSideWildcard _)   _            body = body env'                                 -- Binding not used, remove let binding
-    cvtLet env' (LeftHandSidePair l1 l2)   (Pair e1 e2) body                                             -- Split binding to multiple bindings
+    cvtLet env' lhs1 (Let lhs2 bnd expr) body
+      | Exists lhs1' <- rebuildLHS lhs1 =
+        yes $ snd $ cvtLet' env' lhs2 bnd $ \env'' ->
+          cvtLet env'' lhs1' expr $ weakenE (sinkWithLHS lhs1 lhs1' $ weakenWithLHS lhs2) body
+    cvtLet env' lhs bnd (Subst _ _ body) = cvtLet' env' lhs bnd $ \env'' -> cvtE' env'' body
+
+    cvtLet' :: Gamma arr env' env'
+            -> ELeftHandSide bnd env' env''
+            -> PreOpenExp arr env' bnd
+            -> (Gamma arr env'' env'' -> (Any, PreOpenExp arr env'' t))
+            -> (Any, PreOpenExp arr env' t)
+    -- Let rotation and hoisting of assertions are already handled in cvtLet
+    cvtLet' env' lhs@(LeftHandSideSingle _) bnd          body = Let lhs bnd <$> body (incExp $ env' `pushExp` bnd) -- Single variable on the LHS, add binding to the environment
+    cvtLet' env' (LeftHandSideWildcard _)   _            body = body env'                                 -- Binding not used, remove let binding
+    cvtLet' env' (LeftHandSidePair l1 l2)   (Pair e1 e2) body                                             -- Split binding to multiple bindings
       = first (const $ Any True)
-      $ cvtLet env' l1 e1
-      $ \env'' -> cvtLet env'' l2 (weakenE (weakenWithLHS l1) e2) body
-    cvtLet env' lhs                        bnd          body = Let lhs bnd <$> body (lhsExpr lhs env')   -- Cannot split this binding.
+      $ cvtLet' env' l1 e1
+      $ \env'' -> cvtLet' env'' l2 (weakenE (weakenWithLHS l1) e2) body
+    cvtLet' env' lhs                        bnd          body = Let lhs bnd <$> body (lhsExpr lhs env')   -- Cannot split this binding.
 
     -- Simplify conditional expressions, in particular by eliminating branches
     -- when the predicate is a known constant.

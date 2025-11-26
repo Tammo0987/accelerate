@@ -212,14 +212,7 @@ simplify' uniquenesses = \case
   Manifest var -> ( IdxSet.empty, const $ Manifest var )
   Compute expr ->
     ( IdxSet.empty
-    , \env ->
-        let expr' = simplifyExp env expr
-        in
-          if
-            | Just vars <- extractParams expr' ->
-              Return $ mapTupR (\(Var tp ix) -> Var (GroundRscalar tp) ix) vars
-            | otherwise ->
-              Compute expr'
+    , \env -> compute $ simplifyExp env expr
     )
   Alet lhs us bnd body ->
     let
@@ -590,3 +583,12 @@ assume :: Exp env PrimBool -> OperationAcc op env t -> OperationAcc op env t
 assume (Const _ 1) a = a
 assume (PrimApp PrimLAnd (Pair c1 c2)) a = assume c1 $ assume c2 a
 assume c a = Aassume c a
+
+compute :: Exp env a -> OperationAcc op env a
+compute (Assert c expr) = Aassert c $ compute expr
+compute (Assume c expr) = Aassume c $ compute expr
+compute expr
+  | Just vars <- extractParams expr =
+    Return $ mapTupR (\(Var tp ix) -> Var (GroundRscalar tp) ix) vars
+  | otherwise =
+    Compute expr
