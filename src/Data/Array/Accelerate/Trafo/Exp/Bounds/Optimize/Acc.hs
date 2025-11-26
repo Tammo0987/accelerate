@@ -27,12 +27,16 @@ import Data.Array.Accelerate.Trafo.Exp.Bounds.ESSA.ESSAIdx
 -- Array level bounds inference and assertion removal --
 --------------------------------------------------------
 
-optimizeBounds'
+optimizeBounds', optimizeBounds''
     :: forall benv op t loops
     .  BCOperation op => PreOpenAcc op benv t
     -> BCState GroundR op loops '(benv, ()) (PreOpenAcc op benv t, AnalysisResult t ())
+
+-- See comment on optimizeBoundsExp
+optimizeBounds' acc = isolateState $ optimizeBounds'' acc
+
 -- 
-optimizeBounds' (Aassert g e) = do
+optimizeBounds'' (Aassert g e) = do
     a <- get
     let ((g', arG), a') = runState (optimizeBoundsExp g) (enterExpScope a)
     put $ popLoopScope a'
@@ -49,7 +53,7 @@ optimizeBounds' (Aassert g e) = do
             -- as acting on that may remove this assertion.
             return $ identityResult $ Aassert g' e'
 
-optimizeBounds' (Aassume g e) = do
+optimizeBounds'' (Aassume g e) = do
     a <- get
     let ((_, arG), a') = runState (optimizeBoundsExp g) (enterExpScope a)
     put $ popLoopScope a'
@@ -60,7 +64,7 @@ optimizeBounds' (Aassume g e) = do
     return (Aassume g e', arE)
 
 -- A bind inserts it's data constraints in the IG, and stores the control constraints in the environment, to be used on an eventual branch on the value
-optimizeBounds' (Alet lhs un bnd e) = do
+optimizeBounds'' (Alet lhs un bnd e) = do
     (bnd', arBnd) <- optimizeBounds' bnd
     a <- get
     -- TODO: This current implementation assumes that 'bnd' runs before 'e', and that
@@ -75,13 +79,13 @@ optimizeBounds' (Alet lhs un bnd e) = do
     return (Alet lhs un bnd' e', arD')
 
 -- Delegate to expression level constraint analysis and trivially lift the same constraints to Array Level
-optimizeBounds' (Compute expr) = do
+optimizeBounds'' (Compute expr) = do
     a <- get
     let ((expr', ar), a') = runState (optimizeBoundsExp expr) (enterExpScope a)
     put $ popLoopScope a'
     return (Compute expr', ar)
 
-optimizeBounds' (Exec op args) = do
+optimizeBounds'' (Exec op args) = do
   let AbstInterpOperation absInt = bcOperation op
   (BCOptOperation op' args', idxs, varIdxs, ar, _) <- absInt args
   insertBCConstraintsInIGDOneDir (hfmap (hfmap hjust) idxs) (ar ^. rCS.rData)
@@ -90,7 +94,7 @@ optimizeBounds' (Exec op args) = do
   return $ identityResult (Exec op' args')
 
 -- The control constraints of the guard variable are retrieved from the environment. 
-optimizeBounds' (Acond g t e) = do
+optimizeBounds'' (Acond g t e) = do
     a <- get
     let env = a ^. essaEnvs . essaEnvArr
         dGuard = varToDataConstraint env g
@@ -118,7 +122,7 @@ optimizeBounds' (Acond g t e) = do
 
         return (Acond g t' e', analysisResult d c s)
 
-optimizeBounds' instr@(Awhile un g it init)
+optimizeBounds'' instr@(Awhile un g it init)
   | BCBodyDict <- oneParamAfunc it
   , BCBodyDict <- oneParamAfunc g = do
     a <- get
@@ -157,7 +161,7 @@ optimizeBounds' instr@(Awhile un g it init)
 
         return $ identityResult $ Awhile un g' it' init
 
-optimizeBounds' instr@(Unit v@(Var tp _)) =
+optimizeBounds'' instr@(Unit v@(Var tp _)) =
     case tp of
         (SingleScalarType (NumSingleType (IntegralNumType TypeInt))) -> do
             a <- get
@@ -169,7 +173,7 @@ optimizeBounds' instr@(Unit v@(Var tp _)) =
             return (instr, analysisResult d c s)
         _ -> return $ identityResult instr
 
-optimizeBounds' instr@(Use tp i bf) =
+optimizeBounds'' instr@(Use tp i bf) =
     case tp of
         (SingleScalarType (NumSingleType (IntegralNumType TypeInt))) ->
             if i > 0 then
@@ -180,8 +184,8 @@ optimizeBounds' instr@(Use tp i bf) =
             else return $ identityResult instr
         _ -> return $ identityResult instr
 
-optimizeBounds' instr@(Alloc _sh _tp _vars) = return $ identityResult instr
-optimizeBounds' instr@(Return e) = do
+optimizeBounds'' instr@(Alloc _sh _tp _vars) = return $ identityResult instr
+optimizeBounds'' instr@(Return e) = do
     a <- get
     let env = a ^. essaEnvs . essaEnvArr
         st  = a ^. stack
@@ -190,7 +194,7 @@ optimizeBounds' instr@(Return e) = do
         s   = hfmap (varToSCEVConstraint st env) e
     return (instr, analysisResult d c s)
 
-optimizeBounds' instr@(Manifest e) = do
+optimizeBounds'' instr@(Manifest e) = do
     a <- get
     let env = a ^. essaEnvs . essaEnvArr
         st  = a ^. stack

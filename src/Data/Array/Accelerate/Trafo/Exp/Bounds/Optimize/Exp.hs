@@ -40,14 +40,25 @@ import Data.Array.Accelerate.Representation.Shape (ShapeR (..))
 -- Expression level bounds inference and assertion removal --
 -------------------------------------------------------------
 
-optimizeBoundsExp :: forall benv env t l ls .
+optimizeBoundsExp, optimizeBoundsExp' :: forall benv env t l ls .
     PreOpenExp (ArrayInstr benv) env t -> BCState ScalarType (ArrayInstr benv) (ls:l) '(benv, env) (PreOpenExp (ArrayInstr benv) env t, AnalysisResult t ())
+
+-- Keep information gathered from assertions local to this expression, and not
+-- use it in later terms. For instance, in 'let x = bnd in body', we cannot use
+-- the information from 'bnd' when analyzing 'body'. When 'x' is dead, 'bnd'
+-- may be removed by a different compiler pass. Furthermore, if 'x' is not dead
+-- the code of 'bnd' may be moved and placed further in 'body'.
+--
+-- Ideally this function would run in a Reader monad instead of a State monad.
+-- Using 'isolateState' was an easier fix however, but we may want to revisit
+-- this later.
+optimizeBoundsExp expr = isolateState $ optimizeBoundsExp' expr
 
 -- Get the constraints of the guard. If it is lower bounded by 1,
 -- the boolean expression is always true, which results in a safe removal of the assertion.
 -- The variables that are constrianed by the assertion are redefined persistently, 
 -- to assure dominant checks remove further weaker checks
-optimizeBoundsExp (Assert g e) = do
+optimizeBoundsExp' (Assert g e) = do
     (g', arG) <- optimizeBoundsExp g
     redundant <- isAlwaysTrueData (getSingle $ arG ^. rCS . rData)
     -- Remove the assertion if we already know it evaluates to true.
@@ -68,13 +79,13 @@ optimizeBoundsExp (Assert g e) = do
 
 -- Optimize the guard and non-persistently pi-constrain the variables. The lack of persistence
 -- is meant to contain the unsafe effect of an assumtion within intended scope
-optimizeBoundsExp (Assume g e) = do
+optimizeBoundsExp' (Assume g e) = do
     (_, arG) <- optimizeBoundsExp g
     (e', arE) <- withPi True optimizeBoundsExp e (arG ^. rCS.rControl)
     return (Assume g e', arE)
 
 -- TODO: Implement SCEV/Hoisting?
-optimizeBoundsExp instr@(While g it init)
+optimizeBoundsExp' instr@(While g it init)
   | BCBodyDict <- oneParamFunc it
   , BCBodyDict <- oneParamFunc g = do
     a <- get
@@ -113,21 +124,23 @@ optimizeBoundsExp instr@(While g it init)
         return $ identityResult $ While g' it' init'
 
 -- The bound value is optimized and all its constraints are associated to the left hand side
-optimizeBoundsExp (Let lhs bnd e) = do
-    -- TODO: The current implementation assumes that 'bnd' runs before 'e'.
-    -- However, other transformations in the compiler may remove 'bnd' if its
-    -- result is not needed, the compiler may remove 'bnd'.
+optimizeBoundsExp' (Let lhs bnd e) = do
+    -- We cannot propagate information on assertions from 'bnd' to 'e'.
+    -- Other transformations in the compiler may remove 'bnd' if its
+    -- result is not needed, or reorder the program causing that 'bnd'
+    -- is executed later on.
     -- Hence we should not propagate the information from the assertions.
     -- Same applies to Alet in the Acc-level optimizer.
-    -- To reduce the impact of this,
-    (bnd', arD) <- optimizeBoundsExp bnd
+    -- To reduce the impact of this, we move assertions out of let bindings,
+    -- so more code is in the scope of an assertion.
+    (bnd', arD) <- isolateState $ optimizeBoundsExp bnd
     a <- get
     let (a', _) = declBind lhs (arD ^. rCS.rData) (arD ^. rCS.rControl) (arD ^. rSCEV.rSCEVExp) a
     let ((e', arE), a'') = runState (optimizeBoundsExp e) a'
     put $ snd $ popBind lhs a''
     return (Let lhs bnd' e', arE)
 
-optimizeBoundsExp (Case expr eqs def) = do
+optimizeBoundsExp' (Case expr eqs def) = do
     (expr', _) <- optimizeBoundsExp expr
 
     -- gather a list of analysis results
@@ -164,7 +177,7 @@ optimizeBoundsExp (Case expr eqs def) = do
                         (map (^. rSCEV . rSCEVExp) allArs)
         in return (Case expr' eqs' def', analysisResult d c s)
 
-optimizeBoundsExp (Cond g t e) = do
+optimizeBoundsExp' (Cond g t e) = do
     (g', arG) <- optimizeBoundsExp g
     redundant  <- valOfBool -- $ Debug.trace (show $ getSingle $ arG ^. rCS . rData) 
         $ getSingle $ arG ^. rCS . rData
@@ -192,12 +205,12 @@ optimizeBoundsExp (Cond g t e) = do
                          (arT ^. rSCEV . rSCEVExp) (arE ^. rSCEV . rSCEVExp)
         return (Cond g' t' e', analysisResult d c s)
 
-optimizeBoundsExp (Pair expr1 expr2) = do
+optimizeBoundsExp' (Pair expr1 expr2) = do
     (expr1', AnalysisResult (RCS d1 cD1) (RSCEV ch1 _)) <- optimizeBoundsExp expr1
     (expr2', AnalysisResult (RCS d2 cD2) (RSCEV ch2 _)) <- optimizeBoundsExp expr2
     return (Pair expr1' expr2', AnalysisResult (RCS (TupRpair d1 d2) (TupRpair cD1 cD2)) (RSCEV (TupRpair ch1 ch2) TupRunit))
 
-optimizeBoundsExp (Evar v) = do
+optimizeBoundsExp' (Evar v) = do
     a <- get
     let expEnv = a ^. essaEnvs.essaEnvExp
     let d = varToDataConstraint expEnv v
@@ -206,7 +219,7 @@ optimizeBoundsExp (Evar v) = do
     return (Evar v, analysisResult (t d) (t c) (t ch))
         where t = TupRsingle
 
-optimizeBoundsExp instr@(Const tp val) | BCScalarDict <- reprBCScalar tp = do
+optimizeBoundsExp' instr@(Const tp val) | BCScalarDict <- reprBCScalar tp = do
     let (d, s) = case tp of
             (SingleScalarType (NumSingleType (IntegralNumType int))) | IntegralDict <- integralDict int ->
                 let d' = TupRsingle . bccPut (cgTypeScalar tp) $ pure $ fromConst val
@@ -215,7 +228,7 @@ optimizeBoundsExp instr@(Const tp val) | BCScalarDict <- reprBCScalar tp = do
             _ -> (bccsEmpty instr, bccsEmpty instr)
         in return (Const tp val, analysisResult d (bccsEmpty instr) s)
 
-optimizeBoundsExp instr@(PrimConst tp) = do
+optimizeBoundsExp' instr@(PrimConst tp) = do
     let (d, s) = case tp of
             (PrimMinBound (IntegralBoundedType TypeInt)) ->
                 let d' = TupRsingle . bccPut (cgTypeScalar $ SingleScalarType $ NumSingleType $ IntegralNumType TypeInt) $ pure $ fromConst (minBound :: t)
@@ -228,7 +241,7 @@ optimizeBoundsExp instr@(PrimConst tp) = do
             _ -> (bccsEmpty instr, bccsEmpty instr)
         in return (PrimConst tp, analysisResult d (bccsEmpty instr) s)
 
-optimizeBoundsExp (ArrayInstr instr@(Parameter v) n) = do
+optimizeBoundsExp' (ArrayInstr instr@(Parameter v) n) = do
     a <- get
     let env = a ^. essaEnvs.essaEnvArr
         st  = a ^. stack
@@ -242,7 +255,7 @@ optimizeBoundsExp (ArrayInstr instr@(Parameter v) n) = do
             _ -> TupRsingle $ hfmap (const hnothing) c
     return (ArrayInstr instr n, analysisResult dArr ctrl sArr)
 
-optimizeBoundsExp (ArrayInstr instr@(Index v@(Var tp _)) expr) =
+optimizeBoundsExp' (ArrayInstr instr@(Index v@(Var tp _)) expr) =
     case tp of
         (GroundRbuffer tp') | BCScalarDict <- reprBCScalar tp' -> do
             a <- get
@@ -263,14 +276,14 @@ optimizeBoundsExp (ArrayInstr instr@(Index v@(Var tp _)) expr) =
             return (ArrayInstr instr expr', analysisResult dIndex (TupRsingle $ hfmap (const empty) c) sIndex)
         (GroundRscalar tp') -> case absurdScalarBuffer tp' of {}
 
-optimizeBoundsExp instr@(ShapeSize shr expr) = do
+optimizeBoundsExp' instr@(ShapeSize shr expr) = do
     (expr', r) <- optimizeBoundsExp expr
     d <- bcShapeSize shr (r ^. rCS . rData)
     return (ShapeSize shr expr', analysisResult (TupRsingle d) (bccsEmpty instr) (bccsEmpty instr))
 
-optimizeBoundsExp instr@(Undef tp) = return (instr, analysisResult (TupRsingle $ bccPut (toCGType (GroundRscalar tp)) $ pure $ hjust DiffUndef) (bccsEmpty instr) (bccsEmpty instr))
+optimizeBoundsExp' instr@(Undef tp) = return (instr, analysisResult (TupRsingle $ bccPut (toCGType (GroundRscalar tp)) $ pure $ hjust DiffUndef) (bccsEmpty instr) (bccsEmpty instr))
 
-optimizeBoundsExp instr@(PrimApp pf expr) = do
+optimizeBoundsExp' instr@(PrimApp pf expr) = do
     (expr', ar) <- optimizeBoundsExp expr
     ar' <- interpretPrimFun (groundsR instr) pf ar
     return (PrimApp pf expr', ar')
@@ -279,41 +292,41 @@ optimizeBoundsExp instr@(PrimApp pf expr) = do
 -- Nothing to infer: --
 -----------------------
 
-optimizeBoundsExp (Coerce tp1 tp2 expr) = do
+optimizeBoundsExp' (Coerce tp1 tp2 expr) = do
     (expr', _) <- optimizeBoundsExp expr
     return $ identityResult $ Coerce tp1 tp2 expr'
 
-optimizeBoundsExp (IndexSlice slix shExpr expr) = do
+optimizeBoundsExp' (IndexSlice slix shExpr expr) = do
     (shExpr', _) <- optimizeBoundsExp shExpr
     (expr'  , _) <- optimizeBoundsExp expr
     return $ identityResult $ IndexSlice slix shExpr' expr'
 
-optimizeBoundsExp (IndexFull slix shExpr expr) = do
+optimizeBoundsExp' (IndexFull slix shExpr expr) = do
     (shExpr', _) <- optimizeBoundsExp shExpr
     (expr'  , _) <- optimizeBoundsExp expr
     return $ identityResult $ IndexFull slix shExpr' expr'
 
-optimizeBoundsExp (ToIndex shr shrExpr expr) = do
+optimizeBoundsExp' (ToIndex shr shrExpr expr) = do
     (shrExpr', _) <- optimizeBoundsExp shrExpr
     (expr'   , _) <- optimizeBoundsExp expr
     return $ identityResult $ ToIndex shr shrExpr' expr'
 
-optimizeBoundsExp (FromIndex shr shrExpr expr) = do
+optimizeBoundsExp' (FromIndex shr shrExpr expr) = do
     (shrExpr', _) <- optimizeBoundsExp shrExpr
     (expr'   , _) <- optimizeBoundsExp expr
     return $ identityResult $ FromIndex shr shrExpr' expr'
 
-optimizeBoundsExp (VecPack vr expr) = do
+optimizeBoundsExp' (VecPack vr expr) = do
     (expr', _) <- optimizeBoundsExp expr
     return $ identityResult $ VecPack vr expr'
 
-optimizeBoundsExp (VecUnpack vr expr) = do
+optimizeBoundsExp' (VecUnpack vr expr) = do
     (expr', _) <- optimizeBoundsExp expr
     return $ identityResult $ VecUnpack vr expr'
 
-optimizeBoundsExp Nil = return $ identityResult Nil
+optimizeBoundsExp' Nil = return $ identityResult Nil
 
-optimizeBoundsExp instr@(Foreign {}) = return $ identityResult instr
+optimizeBoundsExp' instr@(Foreign {}) = return $ identityResult instr
 
 
 bcShapeSize :: ShapeR dim -> DataConstraints dim -> BCState s op prev env (DataConstraint Int)

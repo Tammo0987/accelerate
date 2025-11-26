@@ -292,3 +292,6 @@ bccToConst d = do
   let b' = runHMaybe <$> unwrapBCConstraint b
       r  = liftA2 (\g' mbd -> mbd >>= basicDiffToConst g') g b'
   return r
+
+isolateState :: State s a -> State s a
+isolateState action = evalState action <$> get
