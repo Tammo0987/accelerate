@@ -30,6 +30,11 @@ Chapter 6 of Simon Marlow's book [Parallel and Concurrent Programming in Haskell
 
 [Trevor's PhD thesis][Trevor-thesis] details the design and implementation of frontend optimisations and CUDA backend.
 
+**New pipeline**
+
+This branch contains a new, work-in-progress, version of the Accelerate compiler. The Native backend is near completion and the PTX backend is in active development.
+
+To use this new version, use the latest commit from this branch (new-pipeline) of accelerate and [accelerate-llvm](https://github.com/ivogabe/accelerate-llvm/tree/new-pipeline). Either add them as a git dependency to your cabal or stack configuration, or clone them manually and add them as a local dependency. Install `clang` and `cbc` and add them to your PATH. Accelerate uses clang and cbc via the command line (instead of linking with them). The new version of Accelerate should then be working. Note that some functionality is not implemented yet (including the FFI and the trace functions).
 
 **Table of Contents**
 
