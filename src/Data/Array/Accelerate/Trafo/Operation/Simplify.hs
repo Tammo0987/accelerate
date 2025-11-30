@@ -122,9 +122,17 @@ detectBackpermuteCopies (ArgFun f :>: input@(ArgArray _ _ sh _) :>: output@(ArgA
   , Just Refl <- isIdentity f = copyOperationsForArray input output
 detectBackpermuteCopies _ = []
 
+-- TODO for Fences: Add a way to store that one variable implies that another
+-- variable is also resolved. Eg in 'let e2 = fence { e1 } assert e0 >= 0', we
+-- know that after a fence on e2, e1 is also resolved.
 data Info env t where
-  InfoConst    :: ScalarType t -> t -> Info env t -- A constant scalar
-  InfoAlias    :: Idx env t -> Info env t
+  InfoConst    :: IdxSet env -- The set of variables one should synchronise with in a Fence
+               -> ScalarType t
+               -> t
+               -> Info env t -- A constant scalar
+  InfoAlias    :: IdxSet env -- The set of variables one should synchronise with in a Fence
+               -> Idx env t
+               -> Info env t
   InfoBuffer   :: Maybe (Idx env t) -- In case of a Unit, the index of the scalar variable that it contains.
                -- Copy of another buffer. This is similar to an alias, but a buffer may only
                -- be a copy of another buffer temporarily. A write to the original or copy
@@ -133,6 +141,7 @@ data Info env t where
                -> Maybe (Idx env (Buffer t))
                -> [Idx env (Buffer t)] -- List of buffers where this buffer is copied to
                -> Info env (Buffer t)
+  InfoResolved :: Info env t -- A value is resolved, as enforced by a Fence
   InfoNone     :: Info env t
 
 newtype InfoEnv env = InfoEnv { unInfoEnv :: WEnv Info env }
@@ -141,10 +150,11 @@ emptySimplifyEnv :: InfoEnv ()
 emptySimplifyEnv = InfoEnv wempty
 
 instance Sink Info where
-  weaken k (InfoAlias idx) = InfoAlias $ weaken k idx
-  weaken _ (InfoConst t c)   = InfoConst t c
+  weaken k (InfoAlias set idx) = InfoAlias (IdxSet.map (weaken k) set) $ weaken k idx
+  weaken k (InfoConst set t c) = InfoConst (IdxSet.map (weaken k) set) t c
   weaken k (InfoBuffer unitScalar copyOf copied) = InfoBuffer (fmap (weaken k) unitScalar) (fmap (weaken k) copyOf) (fmap (weaken k) copied)
-  weaken _ InfoNone        = InfoNone
+  weaken _ InfoResolved = InfoResolved
+  weaken _ InfoNone = InfoNone
 
 infoFor :: Idx env t -> InfoEnv env -> Info env t
 infoFor ix (InfoEnv env) = wprj ix env
@@ -154,11 +164,28 @@ infoFor ix (InfoEnv env) = wprj ix env
 -- of the alias. It does not remove the definition of the alias, a later pass
 -- should remove that (with a (strongly) live variable analysis).
 --
+-- These substitutions might only be sound after synchronising with certain
+-- variables. Function 'syncSubstitute' returns the set of these variables.
+-- This is needed to ensure that the right assertions are evaluated before
+-- using the substituted variable. This occurs for instance in this program:
+--
+-- let x = { fence c; return y }
+--
+-- Here we may substitute x with y, if we put a fence on c.
+--
 substitute :: InfoEnv env -> env :> env
 substitute env = Weaken $ \idx -> case infoFor idx env of
-  InfoAlias idx' -> idx'
+  InfoAlias _ idx' -> idx'
   InfoBuffer _ (Just idx') _ -> idx'
   _              -> idx
+
+substituteUnlessResolved :: InfoEnv env -> Exists (Idx env) -> Maybe (Exists (Idx env))
+substituteUnlessResolved env (Exists idx) = case infoFor idx env of
+  InfoConst _ _ _ -> Nothing
+  InfoResolved -> Nothing
+  InfoAlias _ idx' -> Just $ Exists idx'
+  InfoBuffer _ (Just idx') _ -> Just $ Exists idx'
+  _ -> Just $ Exists idx
 
 -- When reading from an array, we can read from another buffer with the same
 -- contents. The index of such copy is stored in InfoBuffer. When writing we
@@ -167,8 +194,27 @@ substitute env = Weaken $ \idx -> case infoFor idx env of
 --
 substituteOutput :: InfoEnv env -> env :> env
 substituteOutput env = Weaken $ \idx -> case infoFor idx env of
-  InfoAlias idx' -> idx'
-  _              -> idx
+  InfoAlias _ idx' -> idx'
+  _                -> idx
+
+-- The variables one should synchronise with, for 'substitute' to be sound.
+-- These variables should be passed to Fence.
+--
+syncSubstitute :: InfoEnv env -> Idx env t -> IdxSet env
+syncSubstitute env idx = case infoFor idx env of
+  InfoConst set _ _ -> set
+  InfoAlias set _ -> set
+  _ -> IdxSet.empty
+
+syncSubstitutes :: InfoEnv env -> IdxSet env -> IdxSet env
+syncSubstitutes env vars =
+  IdxSet.unions
+    $ map
+      (\case
+        Exists (InfoAlias set _) -> set
+        _ -> IdxSet.empty
+      )
+    $ wprjSet vars (unInfoEnv env)
 
 simplifyFun :: SimplifyOperation op => OperationAfun op () t -> OperationAfun op () t
 simplifyFun fun = snd (simplifyFun' fun) emptySimplifyEnv
@@ -200,19 +246,26 @@ simplify acc = snd (simplify' (TupRsingle Shared) acc) emptySimplifyEnv
 simplify' :: SimplifyOperation op => Uniquenesses t -> OperationAcc op env t -> (IdxSet env, InfoEnv env -> OperationAcc op env t)
 simplify' uniquenesses = \case
   Exec op args ->
-    (outputArrays args, \env -> Exec op $ mapArgs (simplifyArg env) args)
+    ( outputArrays args
+    , \env ->
+      fence (syncSubstitutes env $ IdxSet.fromVarList $ argsVars args)
+        $ Exec op $ mapArgs (simplifyArg env) args)
   Return vars ->
     -- Note that we do not need to check for writes to variables here.
     -- This construct may cause aliassing of variables, but an aliassed
     -- variable cannot be unique and thus we do not need to signal the
     -- original variable as mutated if it's returned.
     ( variableIndices uniquenesses vars
-    , \env -> Return $ simplifyReturnVars env uniquenesses vars
+    , \env ->
+      fence (syncSubstitutes env $ IdxSet.fromVars vars)
+        $ Return $ simplifyReturnVars env uniquenesses vars
     )
   Manifest var -> ( IdxSet.empty, const $ Manifest var )
   Compute expr ->
     ( IdxSet.empty
-    , \env -> compute $ simplifyExp env expr
+    , \env ->
+      fence (syncSubstitutes env $ IdxSet.fromVarList $ expGroundVars expr)
+        $ compute $ simplifyExp env expr
     )
   Alet lhs us bnd body ->
     let
@@ -223,10 +276,15 @@ simplify' uniquenesses = \case
       , \env ->
           let
             bnd'' = bnd' env
-            env' = bindingEnv setBnd lhs bnd'' (invalidate setBnd env)
+            env' = bindingEnv setBnd IdxSet.empty lhs bnd'' (invalidate setBnd env)
           in alet' lhs us bnd'' (body' env')
       )
-  Alloc shr tp sh -> (IdxSet.empty, \env -> Alloc shr tp $ mapTupR (weaken $ substitute env) sh)
+  Alloc shr tp sh ->
+    ( IdxSet.empty
+    , \env ->
+      fence (syncSubstitutes env $ IdxSet.fromVars sh)
+        $ Alloc shr tp $ mapTupR (weaken $ substitute env) sh
+    )
   Use tp 1 buffer ->
     ( IdxSet.empty
     , const
@@ -234,7 +292,12 @@ simplify' uniquenesses = \case
       $ Unit (Var tp ZeroIdx)
     )
   Use tp n buffer -> (IdxSet.empty, const $ Use tp n buffer)
-  Unit var -> (IdxSet.empty, \env -> Unit $ weaken (substitute env) var)
+  Unit var ->
+    ( IdxSet.empty
+    , \env ->
+      fence (syncSubstitute env $ varIdx var)
+        $ Unit $ weaken (substitute env) var
+    )
   Acond cond true false ->
     let
       (setT, true')  = simplify' uniquenesses true
@@ -243,10 +306,10 @@ simplify' uniquenesses = \case
     in
       ( set
       , \env -> case infoFor (varIdx cond) env of
-        InfoConst _ 0 -> false' env
-        InfoConst _ _ -> true'  env
-        InfoAlias ix -> Acond (cond{varIdx = ix}) (true' env) (false' env)
-        InfoNone     -> Acond cond                (true' env) (false' env)
+        InfoConst d _ 0  -> fence d $ false' env
+        InfoConst d _ _  -> fence d $ true'  env
+        InfoAlias d ix -> fence d $ Acond (cond{varIdx = ix}) (true' env) (false' env)
+        _              -> Acond cond (true' env) (false' env)
       )
 
   Awhile us cond step initial ->
@@ -260,20 +323,45 @@ simplify' uniquenesses = \case
           let
             env' = invalidate set env
           in
-            awhileSimplifyInvariant us (cond' env') (step' env') $ simplifyReturnVars env us initial
+            fence (syncSubstitutes env $ IdxSet.fromVars initial)
+              $ awhileSimplifyInvariant us (cond' env') (step' env') $ simplifyReturnVars env us initial
       )
 
-  Aassert g e ->
+  Aassert cond ->
+    ( IdxSet.empty
+    , \env ->
+      fence (syncSubstitutes env $ IdxSet.fromVarList $ expGroundVars cond)
+        $ assert $ simplifyExp env cond
+    )
+
+  Aassume cond ->
+    ( IdxSet.empty
+    , \env ->
+      fence (syncSubstitutes env $ IdxSet.fromVarList $ expGroundVars cond)
+        $ assume $ simplifyExp env cond)
+
+-- Mark all deps as evaluated in the environment
+-- Remove deps from the list if they were already evaluated.
+  Fence deps next ->
     let
-      (setE, e') = simplify' uniquenesses e
-      in (setE, \env -> assert (simplifyExp env g) $ e' env)
-
-  Aassume g e ->
-    let
-      (setE, e') = simplify' uniquenesses e
-      in (setE, \env -> assume (simplifyExp env g) $ e' env)
-
-
+      (set, next') = simplify' uniquenesses next
+    in
+      ( set
+      , \env ->
+          let
+            deps' = IdxSet.union (syncSubstitutes env deps) $ IdxSet.fromList $ mapMaybe (substituteUnlessResolved env) $ IdxSet.toList deps
+            env' = InfoEnv $ wupdateSetWeakened
+              (\_ -> \case
+                InfoNone -> InfoResolved
+                info -> info
+              )
+              deps'
+              $ unInfoEnv env
+          in
+            fence
+              deps'
+              (next' env')
+      )
 
 variableIndices :: Uniquenesses t -> GroundVars env t -> IdxSet env
 variableIndices (TupRsingle Unique) (TupRsingle var) = IdxSet.singleton $ varIdx var
@@ -293,10 +381,12 @@ findConstant env tp1 value1 = go env
   where
     go :: WEnv' Info env2 env1 -> Maybe (Idx env1 t)
     go WEmpty = Nothing
-    go (WPushA e (InfoConst tp2 value2))
-      | Just idx <- tryMatch tp2 value2 = Just idx
-    go (WPushB e (InfoConst tp2 value2))
-      | Just idx <- tryMatch tp2 value2 = Just idx
+    go (WPushA e (InfoConst d tp2 value2))
+      | IdxSet.null d
+      , Just idx <- tryMatch tp2 value2 = Just idx
+    go (WPushB e (InfoConst d tp2 value2))
+      | IdxSet.null d
+      , Just idx <- tryMatch tp2 value2 = Just idx
     go (WPushA e _) = SuccIdx <$> go e
     go (WPushB e _) = SuccIdx <$> go e
     go (WWeaken _ e) = go e
@@ -314,15 +404,15 @@ findConstant env tp1 value1 = go env
           _ -> Nothing
       | otherwise = Nothing
 
-bindingEnv :: forall op t env env'. SimplifyOperation op => IdxSet env -> GLeftHandSide t env env' -> OperationAcc op env t -> InfoEnv env -> InfoEnv env'
-bindingEnv _ lhs (Compute expr) (InfoEnv environment) = InfoEnv $ go weakenId lhs expr environment
+bindingEnv :: forall op t env env'. SimplifyOperation op => IdxSet env -> IdxSet env -> GLeftHandSide t env env' -> OperationAcc op env t -> InfoEnv env -> InfoEnv env'
+bindingEnv _ fenceSet lhs (Compute expr) (InfoEnv environment) = InfoEnv $ go weakenId lhs expr environment
   where
     go :: env :> env1 -> GLeftHandSide s env1 env2 -> Exp env s -> WEnv' Info env1 env1 -> WEnv' Info env2 env2
     go k (LeftHandSideSingle _) e env
-      | ArrayInstr (Parameter var) _ <- e = wpush env (InfoAlias $ weaken (weakenSucc' k) $ varIdx var)
+      | ArrayInstr (Parameter var) _ <- e = wpush env $ weaken (weakenSucc' k) $ InfoAlias fenceSet $ varIdx var
       | Const tp c <- e = case findConstant env tp c of
-        Just idx -> wpush env (InfoAlias $ SuccIdx idx)
-        Nothing -> wpush env (InfoConst tp c)
+        Just idx -> wpush env $ InfoAlias (IdxSet.map (weaken (weakenSucc' k)) fenceSet) $ SuccIdx idx
+        Nothing -> wpush env $ InfoConst (IdxSet.map (weaken (weakenSucc' k)) fenceSet) tp c
       | otherwise = wpush env InfoNone
 
     go k (LeftHandSidePair l1 l2) (Pair e1 e2) env
@@ -336,25 +426,29 @@ bindingEnv _ lhs (Compute expr) (InfoEnv environment) = InfoEnv $ go weakenId lh
     goUnknown (LeftHandSideSingle _)   env = wpush env InfoNone
     goUnknown (LeftHandSideWildcard _) env = env
     goUnknown (LeftHandSidePair l1 l2) env = goUnknown l2 $ goUnknown l1 env
-bindingEnv _ lhs (Return variables) (InfoEnv environment) = InfoEnv $ weaken (weakenWithLHS lhs) $ go lhs variables environment
+bindingEnv _ fenceSet lhs (Return variables) (InfoEnv environment) = InfoEnv $ weaken (weakenWithLHS lhs) $ go lhs variables environment
   where
     go :: GLeftHandSide s env1 env2 -> GroundVars env s -> WEnv' Info env env1 -> WEnv' Info env env2
-    go (LeftHandSideSingle _)   (TupRsingle (Var _ ix)) env = wpush' env $ InfoAlias ix
+    go (LeftHandSideSingle _)   (TupRsingle (Var _ ix)) env = wpush' env $ InfoAlias fenceSet ix
     go (LeftHandSidePair l1 l2) (TupRpair v1 v2)        env = go l2 v2 $ go l1 v1 env
     go (LeftHandSideWildcard _) _                       env = env
     go _                        _                       _   = internalError "Tuple mismatch"
-bindingEnv _ (LeftHandSideSingle _) (Unit (Var _ idx)) (InfoEnv env) = InfoEnv $ wpush env $ InfoBuffer (Just $ SuccIdx idx) Nothing []
-bindingEnv outputs (LeftHandSideWildcard _) (Exec op args)      env = foldl' addCopy env $ detectCopy op args
-  where
-    addCopy :: InfoEnv env -> CopyOperation env -> InfoEnv env
-    addCopy env' (CopyOperation input output)
-      | input `IdxSet.member` outputs = env' -- The operation both reads and writes to 'input'. We cannot register input and output as copies, as input will get different values
-      | otherwise = InfoEnv $ wupdate markCopy input $ wupdate (const $ InfoBuffer Nothing (Just input) []) output $ unInfoEnv env'
-      where
-        markCopy (InfoBuffer unitScalar copyOf list) = InfoBuffer unitScalar copyOf (output : list)
-        markCopy (InfoAlias _) = internalError "Operation contains aliased variable, which should be substituted already"
-        markCopy _ = (InfoBuffer Nothing Nothing [output])
-bindingEnv _ lhs _ env = bindEnv lhs env
+bindingEnv _ fenceSet (LeftHandSideSingle _) (Unit (Var _ idx)) (InfoEnv env)
+  | IdxSet.null fenceSet = InfoEnv $ wpush env $ InfoBuffer (Just $ SuccIdx idx) Nothing []
+bindingEnv outputs fenceSet (LeftHandSideWildcard _) (Exec op args) env
+  | IdxSet.null fenceSet = foldl' addCopy env $ detectCopy op args
+    where
+      addCopy :: InfoEnv env -> CopyOperation env -> InfoEnv env
+      addCopy env' (CopyOperation input output)
+        | input `IdxSet.member` outputs = env' -- The operation both reads and writes to 'input'. We cannot register input and output as copies, as input will get different values
+        | otherwise = InfoEnv $ wupdate markCopy input $ wupdate (const $ InfoBuffer Nothing (Just input) []) output $ unInfoEnv env'
+        where
+          markCopy (InfoBuffer unitScalar copyOf list) = InfoBuffer unitScalar copyOf (output : list)
+          markCopy (InfoAlias _ _) = internalError "Operation contains aliased variable, which should be substituted already"
+          markCopy _ = (InfoBuffer Nothing Nothing [output])
+bindingEnv outputs fenceSet lhs (Fence deps next) env
+  = bindingEnv outputs (IdxSet.union fenceSet deps) lhs next env
+bindingEnv _ _ lhs _ env = bindEnv lhs env
 
 -- Updates the InfoEnv, with the information that the buffers in 'indices' may
 -- have been updated. This breaks the 'is-copy-of' relation between buffers.
@@ -370,7 +464,7 @@ invalidate indices infoEnv@(InfoEnv env1) =
 
     findCopies :: Exists (Idx env) -> (IdxSet env, IdxSet env)
     findCopies (Exists idx) = case infoFor idx infoEnv of
-      InfoAlias idx' -> internalError "Alias should be substituted already"
+      InfoAlias _ _ -> internalError "Alias should be substituted already"
       InfoBuffer _ (Just idx') copies -> (IdxSet.singleton idx', IdxSet.fromList' copies)
       _ -> (IdxSet.empty, IdxSet.empty)
 
@@ -404,12 +498,12 @@ simplifyExpFun env = Exp.simplifyFun . runIdentity . rebuildArrayInstrFun (simpl
 
 simplifyArrayInstr :: InfoEnv env -> RebuildArrayInstr Identity (ArrayInstr env) (ArrayInstr env)
 simplifyArrayInstr env instr@(Parameter (Var tp idx)) = case infoFor idx env of
-  InfoAlias idx'   -> simplifyArrayInstr env (Parameter $ Var tp idx')
-  InfoConst _ c    -> Identity $ const $ Const tp c
+  InfoAlias _ idx' -> simplifyArrayInstr env (Parameter $ Var tp idx')
+  InfoConst _ _ c  -> Identity $ const $ Const tp c
   InfoBuffer _ _ _ -> bufferImpossible tp
-  InfoNone         -> Identity $ \arg -> ArrayInstr instr arg
+  _                -> Identity $ \arg -> ArrayInstr instr arg
 simplifyArrayInstr env instr@(Index (Var tp idx)) = case infoFor idx env of
-  InfoAlias idx' -> simplifyArrayInstr env (Index $ Var tp idx')
+  InfoAlias _ idx' -> simplifyArrayInstr env (Index $ Var tp idx')
   InfoBuffer (Just idx') _ _ -> Identity $ const $ runIdentity (simplifyArrayInstr env $ Parameter $ Var eltTp idx') Nil -- Unit
   InfoBuffer _ (Just idx') _  -> simplifyArrayInstr env (Index $ Var tp idx') -- Copy
   _              -> Identity $ \arg -> ArrayInstr instr arg
@@ -574,19 +668,27 @@ subTupSubstitution s (LeftHandSideWildcard t) _
   = SubTupSubstitution (LeftHandSideWildcard $ subTupR s t) weakenId
 subTupSubstitution _ _ _ = internalError "Tuple mismatch"
 
-assert :: Exp env PrimBool -> OperationAcc op env t -> OperationAcc op env t
-assert (Const _ 1) a = a
-assert (PrimApp PrimLAnd (Pair c1 c2)) a = assert c1 $ assert c2 a
-assert c a = Aassert c a
+assert :: Exp env PrimBool -> OperationAcc op env Word8
+assert (Const _ 1) = Compute (Const scalarTypeWord8 1)
+assert c = Aassert c
 
-assume :: Exp env PrimBool -> OperationAcc op env t -> OperationAcc op env t
-assume (Const _ 1) a = a
-assume (PrimApp PrimLAnd (Pair c1 c2)) a = assume c1 $ assume c2 a
-assume c a = Aassume c a
+assume :: Exp env PrimBool -> OperationAcc op env Word8
+assume (Const _ 1) = Compute (Const scalarTypeWord8 1)
+assume c = Aassume c
 
 compute :: Exp env a -> OperationAcc op env a
-compute (Assert c expr) = Aassert c $ compute expr
-compute (Assume c expr) = Aassume c $ compute expr
+compute (Assert c expr) =
+  alet
+    (LeftHandSideSingle $ GroundRscalar scalarTypeWord8)
+    (Aassert c)
+  $ Fence (IdxSet.singleton ZeroIdx)
+  $ compute $ mapArrayInstr (weaken $ weakenSucc weakenId) expr
+compute (Assume c expr) =
+  alet
+    (LeftHandSideSingle $ GroundRscalar scalarTypeWord8)
+    (Aassume c)
+  $ Fence (IdxSet.singleton ZeroIdx)
+  $ compute $ mapArrayInstr (weaken $ weakenSucc weakenId) expr
 compute expr
   | Just vars <- extractParams expr =
     Return $ mapTupR (\(Var tp ix) -> Var (GroundRscalar tp) ix) vars

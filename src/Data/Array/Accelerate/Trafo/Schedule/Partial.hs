@@ -191,7 +191,12 @@ data PrePartialSchedule schedule kernel env t where
 
   PAssert
     :: Exp env PrimBool
-    -> PrePartialSchedule schedule kernel env ()
+    -> PrePartialSchedule schedule kernel env PrimBool
+
+  PFence
+    :: IdxSet env
+    -> schedule kernel env t
+    -> PrePartialSchedule schedule kernel env t
 
 data Void' a where
 data Loop a where
@@ -238,7 +243,7 @@ newtype PartialSchedule kernel env t = PartialSchedule (PrePartialSchedule Parti
 type SyncScheduleFun = PrePartialScheduleFun SyncSchedule
 data SyncSchedule kernel env t =
   SyncSchedule {
-    syncEnv :: (SyncEnv env),
+    syncEnv :: SyncEnv env,
     -- Whether this term introduces no branching and no forks
     syncSimple :: Bool,
     syncSchedule :: (PrePartialSchedule SyncSchedule kernel env t)
@@ -435,11 +440,14 @@ toPartial' us = \case
       ( IdxSet.drop' lhs condFree `IdxSet.union` IdxSet.drop' lhs (IdxSet.drop stepFree) `IdxSet.union` IdxSet.fromList (groundBufferVars initial)
       , PartialSchedule $ PAwhile us' (Plam lhs $ Pbody fn) initial )
   C.Awhile{} -> internalError "Unary function impossible"
-  C.Aassert cond (C.Return TupRunit) ->
+  C.Aassert cond ->
     ( IdxSet.fromList $ mapMaybe (\(Exists a) -> instrToSync a) $ arrayInstrsInExp cond
     , PartialSchedule $ PAssert cond )
-  C.Aassert cond next -> toPartial' us $ C.Alet (LeftHandSideWildcard TupRunit) TupRunit (C.Aassert cond (C.Return TupRunit)) next
-  C.Aassume _ next -> toPartial' us next -- Assumptions are removed at this point
+  C.Aassume _ -> toPartial' us $ C.Compute $ Const scalarTypeWord8 0 -- Assumptions are removed at this point
+  C.Fence deps next
+    | (nextFree, next') <- toPartial' us next ->
+      ( deps `IdxSet.union` nextFree
+      , PartialSchedule $ PFence deps next' )
   where
     -- For all simple cases, with no free buffer variables.
     simple :: PrePartialSchedule PartialSchedule kernel env t -> (IdxSet env, PartialSchedule kernel env t)
@@ -518,6 +526,7 @@ rebuild' (PartialSchedule schedule) = case schedule of
   PContinue next -> buildContinue $ rebuild' next
   PBreak us vars -> buildBreak us vars
   PAssert cond -> buildAssert cond
+  PFence deps next -> buildFence deps $ rebuild' next
 
 rebuildUnary :: PartialScheduleFun kernel env f -> BuildUnary kernel env f
 rebuildUnary (Plam lhs (Pbody body)) = BuildUnary lhs $ rebuild' body
@@ -778,7 +787,7 @@ buildBreak us vars _ =
 
 buildAssert
   :: Exp env PrimBool
-  -> Build PartialSchedule kernel env ()
+  -> Build PartialSchedule kernel env PrimBool
 buildAssert cond available =
   Built{
     didChange = False,
@@ -790,6 +799,26 @@ buildAssert cond available =
   }
   where
     vars = expGroundVars cond
+
+buildFence
+  :: IdxSet env
+  -> Build PartialSchedule kernel env t
+  -> Build PartialSchedule kernel env t
+buildFence deps next' available
+  | IdxSet.null deps' =
+    next{ didChange = True }
+  | otherwise =
+    Built{
+      didChange = didChange next,
+      directlyAwaits = deps' `IdxSet.union` directlyAwaits next,
+      writes = writes next,
+      finallyReleases = finallyReleases next,
+      trivial = trivial next,
+      term = PartialSchedule $ PFence deps' $ term next
+    }
+  where
+    next = next' (IdxSet.union available deps)
+    deps' = deps IdxSet.\\ available
 
 updateCount :: UpdateTuple env t1 t2 -> Count
 updateCount UpdateKeep = Zero
@@ -899,6 +928,13 @@ analyseSyncEnv' (PartialSchedule sched) = case sched of
           (partialEnvFromList const bindings)
           True
           (PAssert cond)
+  PFence deps next
+    | ToSyncSchedule up next' <- analyseSyncEnv' next ->
+      ToSyncSchedule up
+        $ SyncSchedule
+          (syncEnv next')
+          (syncSimple next')
+          (PFence deps next')
   where
     noBuffers :: PrePartialSchedule SyncSchedule kernel env t -> ToSyncSchedule kernel env t
     noBuffers = ToSyncSchedule UpdateKeep . SyncSchedule PEnd True

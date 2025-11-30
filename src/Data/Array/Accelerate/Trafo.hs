@@ -149,8 +149,8 @@ convertAfunFullOptions
 convertAfunFullOptions config ft pprint f = runWriter $
   (   phase'' "sharing-recovery"    (Sharing.convertAfunWith config)                                (Pretty.prettyPreOpenAfun configPlain prettyOpenAcc Empty)
   >=> phase'' "array-split-lets"    LetSplit.convertAfun                                            (Pretty.prettyPreOpenAfun configPlain prettyOpenAcc Empty)
-  >=> phase'' "desugar"             (Operation.simplifyFun . desugarAfun)                            Pretty.prettyAfun
-  >=> phase'' "operation-bounds"    (Operation.simplifyFun . optimizeBoundsAFun)                     Pretty.prettyAfun
+  >=> phase'' "desugar"             (Operation.simplifyFun . Operation.simplifyFun . desugarAfun)                            Pretty.prettyAfun
+  -- >=> phase'' "operation-bounds"    (Operation.simplifyFun . optimizeBoundsAFun)                     Pretty.prettyAfun
   >=> phase'' "operation-live-vars" (Operation.simplifyFun . Operation.stronglyLiveVariablesFun)     Pretty.prettyAfun
   >=> phase'' "array-fusion"        (Operation.simplifyFun . NewNewFusion.convertAfunWith config ft) Pretty.prettyAfun
   >=> phase'' "partition-live-vars" (Operation.simplifyFun . Operation.stronglyLiveVariablesFun)     Pretty.prettyAfun

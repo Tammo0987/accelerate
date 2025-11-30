@@ -230,7 +230,7 @@ strengthenShrunkLHS _                        _                        _ = intern
 -- instance of beta-reduction to cases where the bound variable is used zero
 -- (dead-code elimination) or one (linear inlining) times.
 --
-shrinkExp :: HasCallStack => PreOpenExp arr env t -> (Bool, PreOpenExp arr env t)
+shrinkExp :: (HasCallStack, IsArrayInstr arr) => PreOpenExp arr env t -> (Bool, PreOpenExp arr env t)
 shrinkExp = Stats.substitution "shrinkE" . first getAny . shrinkE
   where
     -- If the bound variable is used at most this many times, it will be inlined
@@ -240,7 +240,7 @@ shrinkExp = Stats.substitution "shrinkE" . first getAny . shrinkE
     lIMIT :: Int
     lIMIT = 1
 
-    cheap :: PreOpenExp arr env t -> Bool
+    cheap :: IsArrayInstr arr => PreOpenExp arr env t -> Bool
     cheap (Evar _)       = True
     cheap (Pair e1 e2)   = cheap e1 && cheap e2
     cheap Nil            = True
@@ -248,9 +248,10 @@ shrinkExp = Stats.substitution "shrinkE" . first getAny . shrinkE
     cheap PrimConst{}    = True
     cheap Undef{}        = True
     cheap (Coerce _ _ e) = cheap e
+    cheap (ArrayInstr arr Nil) = inlineArrayInstr arr
     cheap _              = False
 
-    shrinkE :: HasCallStack => PreOpenExp arr env t -> (Any, PreOpenExp arr env t)
+    shrinkE :: (HasCallStack, IsArrayInstr arr) => PreOpenExp arr env t -> (Any, PreOpenExp arr env t)
     shrinkE exp = case exp of
       Let (LeftHandSideSingle _) bnd@Evar{} body -> Stats.inline "Var"   . yes $ shrinkE (inline body bnd)
       Let lhs bnd body
@@ -310,10 +311,10 @@ shrinkExp = Stats.substitution "shrinkE" . first getAny . shrinkE
       Assert e1 e2              -> Assert <$> shrinkE e1 <*> shrinkE e2
       Assume e1 e2              -> Assume <$> shrinkE e1 <*> shrinkE e2
 
-    shrinkF :: HasCallStack => PreOpenFun arr env t -> (Any, PreOpenFun arr env t)
+    shrinkF :: (HasCallStack, IsArrayInstr arr) => PreOpenFun arr env t -> (Any, PreOpenFun arr env t)
     shrinkF = first Any . shrinkFun
 
-    shrinkMaybeE :: HasCallStack => Maybe (PreOpenExp arr env t) -> (Any, Maybe (PreOpenExp arr env t))
+    shrinkMaybeE :: (HasCallStack, IsArrayInstr arr) => Maybe (PreOpenExp arr env t) -> (Any, Maybe (PreOpenExp arr env t))
     shrinkMaybeE Nothing  = pure Nothing
     shrinkMaybeE (Just e) = Just <$> shrinkE e
 
@@ -323,7 +324,7 @@ shrinkExp = Stats.substitution "shrinkE" . first getAny . shrinkE
     yes :: (Any, x) -> (Any, x)
     yes (_, x) = (Any True, x)
 
-shrinkFun :: HasCallStack => PreOpenFun arr env f -> (Bool, PreOpenFun arr env f)
+shrinkFun :: (HasCallStack, IsArrayInstr arr) => PreOpenFun arr env f -> (Bool, PreOpenFun arr env f)
 shrinkFun (Lam lhs f) = case lhsVarsRange lhs of
   Left Refl ->
     let b' = case lhs of

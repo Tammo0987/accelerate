@@ -310,7 +310,7 @@ generate
     => Exp sh
     -> (Exp sh -> Exp a)
     -> Acc (Array sh a)
-generate sh fun = assert (isNonNegative sh) $ Acc $ applyAcc (Generate $ arrayR @sh @a) sh fun
+generate sh fun = Acc $ applyAcc (Generate $ arrayR @sh @a) (assert (isNonNegative sh) $ sh) fun
 
 -- Shape manipulation
 -- ------------------
@@ -330,7 +330,7 @@ reshape
     => Exp sh
     -> Acc (Array sh' e)
     -> Acc (Array sh e)
-reshape sh as = assert (shapeSize sh == size as) $ Acc $ applyAcc (Reshape $ shapeR @sh) sh as
+reshape sh as = Acc $ applyAcc (Reshape $ shapeR @sh) (assert (shapeSize sh == size as) sh) as
 
 -- Extraction of sub-arrays
 -- ------------------------
@@ -772,8 +772,8 @@ backpermute
     -> (Exp sh' -> Exp sh)              -- ^ index permutation function
     -> Acc (Array sh  a)                -- ^ source array
     -> Acc (Array sh' a)
-backpermute sz f as = assert (isNonNegative sz)
-  $ Acc $ applyAcc (Backpermute $ shapeR @sh') sz f' as
+backpermute sz f as =
+  Acc $ applyAcc (Backpermute $ shapeR @sh') (assert (isNonNegative sz) sz) f' as
   where
     f' ix =
       let ix' = f ix

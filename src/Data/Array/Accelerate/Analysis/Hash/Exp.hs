@@ -30,6 +30,7 @@ module Data.Array.Accelerate.Analysis.Hash.Exp (
   encodeArraysType,
   encodeArrayType,
   encodeIdx,
+  encodeIdxSet,
   encodeShapeR,
   encodeScalarType,
   encodeScalarConst,
@@ -45,6 +46,8 @@ module Data.Array.Accelerate.Analysis.Hash.Exp (
 
 import Data.Array.Accelerate.AST.Exp
 import Data.Array.Accelerate.AST.Idx
+import Data.Array.Accelerate.AST.IdxSet (IdxSet)
+import qualified Data.Array.Accelerate.AST.IdxSet as IdxSet
 import Data.Array.Accelerate.AST.LeftHandSide
 import Data.Array.Accelerate.AST.Var
 import Data.Array.Accelerate.Analysis.Hash.TH
@@ -118,6 +121,13 @@ hashOpenExp
 
 encodeIdx :: Idx env t -> Builder
 encodeIdx = intHost . idxToInt
+
+encodeIdxSet :: IdxSet env -> Builder
+encodeIdxSet set =
+  intHost (length list)
+  <> mconcat (map (\(Exists idx) -> encodeIdx idx) list)
+  where
+    list = IdxSet.toList set
 
 encodeTupR :: (forall b. s b -> Builder) -> TupR s a -> Builder
 encodeTupR _ TupRunit         = intHost $(hashQ "TupRunit")

@@ -259,6 +259,9 @@ class IsArrayInstr arr where
   showArrayInstrOp :: arr t -> String
   encodeArrayInstr :: arr a -> Builder
   matchArrayInstr :: arr t -> arr s -> Maybe (t :~: s)
+  -- | Whether the array instruction may be inlined (and duplicated)
+  -- True for Parameter and False for Index
+  inlineArrayInstr :: arr t -> Bool
 
 -- | Allows no array instructions at all. Used for expressions
 -- which cannot perform array operations. The only use case
@@ -272,7 +275,8 @@ instance IsArrayInstr NoArrayInstr where
   rnfArrayInstr    = \case {}
   showArrayInstrOp = \case {}
   encodeArrayInstr = \case {}
-  matchArrayInstr  = \case{}
+  matchArrayInstr  = \case {}
+  inlineArrayInstr = \case {}
 
 data Direction = LeftToRight | RightToLeft
   deriving Eq

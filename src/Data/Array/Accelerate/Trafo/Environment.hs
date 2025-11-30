@@ -49,7 +49,7 @@ data WeakOpenExp arr env t where
            -> WeakOpenExp arr env' t
 
 instance SinkExp (WeakOpenExp arr) where
-  weakenE k (Subst k' e1 e2) = Subst
+  weakenE k (Subst k' e1 _) = Subst
     (k .> k')
     e1
     (weakenE (k .> k') e1)

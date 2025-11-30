@@ -26,6 +26,7 @@ module Data.Array.Accelerate.Trafo.Desugar
 import qualified Data.Array.Accelerate.AST as Named
 import Data.Array.Accelerate.AST.Environment          hiding ( Val )
 import Data.Array.Accelerate.AST.Idx
+import qualified Data.Array.Accelerate.AST.IdxSet as IdxSet
 import Data.Array.Accelerate.AST.Var
 import Data.Array.Accelerate.AST.Operation
 import Data.Array.Accelerate.AST.LeftHandSide
@@ -348,7 +349,7 @@ data ArrayDescriptor env a where
                   -> GroundVars env (Buffers e)
                   -> ArrayDescriptor env (Array sh e)
 
-weakenArrayDescriptor :: (env :> env') -> ArrayDescriptor env a -> ArrayDescriptor env' a
+weakenArrayDescriptor :: env :> env' -> ArrayDescriptor env a -> ArrayDescriptor env' a
 weakenArrayDescriptor k (ArrayDescriptor shr sh buffers) = ArrayDescriptor shr (weakenVars k sh) (weakenVars k buffers)
 
 type BEnv benv = Env (ArrayDescriptor benv)
@@ -372,8 +373,18 @@ desugarOpenAcc env = travA
       Named.Apair a b -> pair (travA a) (travA b)
       Named.Anil -> Return TupRunit
       Named.Manifest as -> makeManifest $ travA as
-      Named.Aassert cond as -> Aassert (travE cond) (travA as)
-      Named.Aassume cond as -> Aassume (travE cond) (travA as)
+      Named.Aassert cond as ->
+        alet
+          (LeftHandSideSingle $ GroundRscalar scalarTypeWord8)
+          (Aassert $ travE cond)
+          $ Fence (IdxSet.singleton ZeroIdx)
+          $ desugarOpenAcc (weakenBEnv (weakenSucc weakenId) env) as
+      Named.Aassume cond as ->
+        alet
+          (LeftHandSideSingle $ GroundRscalar scalarTypeWord8)
+          (Aassume $ travE cond)
+          $ Fence (IdxSet.singleton ZeroIdx)
+          $ desugarOpenAcc (weakenBEnv (weakenSucc weakenId) env) as
       Named.Aforeign repr asm (Named.Alam lhsA _) arg
         | DeclareVars lhs _ value <- declareVars $ desugarArraysR $ lhsToTupR lhsA
         , Just a <- mkForeign repr asm $ value weakenId
@@ -998,9 +1009,9 @@ desugarOpenAfun env (Named.Abody a) = case Named.arraysR a of
   -- We must pattern match on the arrays representation of the body
   -- to inform the type checker that 'a' is not a function, and thus
   -- that 'DesugaredAfun a' is equal to 'DesugaredArrays a'
-  TupRsingle ArrayR{} -> Abody $ addShapeAssumes env $ desugarOpenAcc env a
-  TupRunit            -> Abody $ addShapeAssumes env $ desugarOpenAcc env a
-  TupRpair _ _        -> Abody $ addShapeAssumes env $ desugarOpenAcc env a
+  TupRsingle ArrayR{} -> Abody $ addShapeAssumes env $ desugarOpenAcc (weakenBEnv (weakenSucc weakenId) env) a
+  TupRunit            -> Abody $ addShapeAssumes env $ desugarOpenAcc (weakenBEnv (weakenSucc weakenId) env) a
+  TupRpair _ _        -> Abody $ addShapeAssumes env $ desugarOpenAcc (weakenBEnv (weakenSucc weakenId) env) a
 desugarOpenAfun env (Named.Alam lhs f)
   | DesugaredLHS env' lhs' <- desugarLHS env lhs = Alam lhs' $ desugarOpenAfun env' f
 
@@ -1017,16 +1028,25 @@ desugarLHS env (LeftHandSideSingle (ArrayR shr tp))
   , DeclareVars lhsBf kBf valueBf <- declareVars $ buffersR tp
   = DesugaredLHS (mapEnv (weakenArrayDescriptor $ kBf .> kSh) env `Push` ArrayDescriptor shr (valueSh kBf) (valueBf weakenId)) $ LeftHandSidePair lhsSh lhsBf
 
-addShapeAssumes :: BEnv benv aenv -> OperationAcc op benv a -> OperationAcc op benv a
-addShapeAssumes Empty acc = acc
-addShapeAssumes (env `Push` ArrayDescriptor shr sh _) acc = addShapeAssumes env $ go shr sh acc
+addShapeAssumes :: BEnv benv aenv -> OperationAcc op (benv, Word8) a -> OperationAcc op benv a
+addShapeAssumes env acc =
+  alet
+    (LeftHandSideSingle $ GroundRscalar $ scalarTypeWord8)
+    (Aassume $ shapeAssumes env)
+    $ Fence (IdxSet.singleton ZeroIdx) acc
+
+shapeAssumes :: BEnv benv aenv -> Exp benv PrimBool
+shapeAssumes Empty = Const scalarTypeWord8 1
+shapeAssumes (env `Push` ArrayDescriptor shr sh _) =
+  mkBinary PrimLAnd (shapeAssumes env) (go shr sh)
   where
-    go :: ShapeR sh -> GroundVars benv sh -> OperationAcc op benv a -> OperationAcc op benv a
-    go ShapeRz _ a = a
-    go (ShapeRsnoc shr') (TupRpair sh' (TupRsingle sz)) a
-      = go shr' sh'
-      $ Aassume (mkBinary (PrimGtEq singleType) (paramIn scalarTypeInt sz) (Const scalarTypeInt 0)) a
-    go _ _ _ = internalError "Shape impossible"
+    go :: ShapeR sh -> GroundVars benv sh -> Exp benv PrimBool
+    go ShapeRz _ = Const scalarTypeWord8 1
+    go (ShapeRsnoc shr') (TupRpair sh' (TupRsingle sz)) =
+      mkBinary PrimLAnd
+        (go shr' sh')
+        (mkBinary (PrimGtEq singleType) (paramIn scalarTypeInt sz) (Const scalarTypeInt 0))
+    go _ _ = internalError "Shape impossible"
 
 desugarExp :: HasCallStack
            => BEnv benv aenv
@@ -1058,10 +1078,7 @@ desugarArrayInstr env (Named.Index (Var (ArrayR shr tp) array)) ix
     lhs = LeftHandSideSingle int
 
 weakenBEnv :: forall benv benv' aenv. benv :> benv' -> BEnv benv aenv -> BEnv benv' aenv
-weakenBEnv k = mapEnv f
-  where
-    f :: ArrayDescriptor benv a -> ArrayDescriptor benv' a
-    f (ArrayDescriptor shr sh buffers) = ArrayDescriptor shr (weakenVars k sh) (weakenVars k buffers)
+weakenBEnv k = mapEnv (weakenArrayDescriptor k)
 
 desugarUnzip :: GroundVars benv (Buffers s) -> ELeftHandSide s () env -> ExpVars env t -> GroundVars benv (Buffers t)
 desugarUnzip _       _   TupRunit                 = TupRunit

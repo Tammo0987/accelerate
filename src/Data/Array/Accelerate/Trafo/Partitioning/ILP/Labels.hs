@@ -24,6 +24,8 @@ either be a computation or a buffer.
 module Data.Array.Accelerate.Trafo.Partitioning.ILP.Labels where
 
 import Data.Array.Accelerate.AST.Idx
+import Data.Array.Accelerate.AST.IdxSet (IdxSet)
+import qualified Data.Array.Accelerate.AST.IdxSet as IdxSet
 import Data.Array.Accelerate.AST.LeftHandSide
 import Data.Array.Accelerate.AST.Operation
 import Data.Array.Accelerate.Error
@@ -514,9 +516,17 @@ getVarsDeps :: Vars s env t -> Env env -> Nodes GVal
 getVarsDeps vars = valsNodes . (^._2) . lookupVars vars
 
 
--- | Get the dependencies of a tuple of variables.
+-- | Get the dependencies of a variable.
 getVarDeps :: Var s env t -> Env env -> Nodes GVal
 getVarDeps var = valsNodes . (^._2) . lookupVar var
+
+-- | Get the dependencies, given the index of a variable.
+getIdxDeps :: Idx env t -> Env env -> Nodes GVal
+getIdxDeps idx = valsNodes . (^._2) . lookupIdx idx
+
+-- | Get the dependencies of a set of indices.
+getIdxSetDeps :: IdxSet env -> Env env -> Nodes GVal
+getIdxSetDeps deps env = mconcat $ map (\(Exists idx) -> getIdxDeps idx env) $ IdxSet.toList deps
 
 
 -- | Get the dependencies of an expression.

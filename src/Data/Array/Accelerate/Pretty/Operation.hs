@@ -72,9 +72,8 @@ prettyOpenAcc env = \case
   Manifest var -> hang 2 $ group $ vsep [annotate Statement "manifest", prettyVar (val env) var]
   Compute exp -> hang 2 $ group $ vsep [annotate Statement "compute", prettyExp (val env) exp]
   Alet LeftHandSideUnit _ bnd body
-    | notReturn bnd
-    -- A return looks very strange if there is no explict LHS. It's uncommon,
-    -- but also very strange when this does happens.
+    | Exec{} <- bnd
+    -- Only hide the left hand side if the right hand side is a kernel execution
     -> prettyOpenAcc env bnd
         <> hardline
         <> prettyOpenAcc env body
@@ -104,17 +103,15 @@ prettyOpenAcc env = \case
         <> hardline <> hang 4 ("  ( " <> prettyOpenAfun env step)
         <> hardline <> "  )"
         <> hardline <> indent 2 (prettyVars (val env) 10 initial)
-  Aassert g e ->
+  Aassert g ->
     hang 2 (group $ vsep [annotate Statement "assert", prettyExp (val env) g])
-    <> hardline
-    <> prettyOpenAcc env e
-  Aassume g e ->
+  Aassume g ->
     hang 2 (group $ vsep [annotate Statement "assume", prettyExp (val env) g])
+  Fence set next ->
+    hang 2 (group $ vsep [annotate Statement "fence", prettyIdxSet (val env) set])
     <> hardline
-    <> prettyOpenAcc env e
-  where
-    notReturn Return{} = False
-    notReturn _        = True
+    <> prettyOpenAcc env next
+
 prettyArgs :: Val benv -> Args benv f -> Adoc
 prettyArgs env args = tupled $ map (\(Exists a) -> prettyArg env a) $ argsToList args
 

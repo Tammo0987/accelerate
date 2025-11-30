@@ -29,7 +29,7 @@ module Data.Array.Accelerate.Trafo.Operation.Substitution (
   Sink(..), Sink'(..),
   reindexPartial,
   reindexPartialAfun,
-  pair, pair', pairUnique, alet, aletUnique, alet',
+  pair, pair', pairUnique, alet, aletUnique, alet', fence,
   makeManifest,
   weakenArrayInstr,
   strengthenArrayInstr,
@@ -49,6 +49,7 @@ import Data.Array.Accelerate.Trafo.Var
 import Data.Array.Accelerate.Trafo.Substitution       (Sink(..), Sink'(..))
 import Data.Array.Accelerate.Trafo.Exp.Substitution
 import Data.Functor.Identity
+import Data.Array.Accelerate.AST.IdxSet (IdxSet)
 import qualified Data.Array.Accelerate.AST.IdxSet as IdxSet
 
 data SunkReindexPartial f env env' where
@@ -105,12 +106,12 @@ reindexExp' k = rebuildArrayInstrPartial (rebuildArrayInstrMap $ reindexArrayIns
 reindexIdxSet'
   :: forall f env env' . Applicative f
   => SunkReindexPartial f env env'
-  -> IdxSet.IdxSet env
-  -> f (IdxSet.IdxSet env')
+  -> IdxSet env
+  -> f (IdxSet env')
 reindexIdxSet' k set =
   foldr go (pure IdxSet.empty) (IdxSet.toList set)
   where
-    go :: Exists (Idx env) -> f (IdxSet.IdxSet env') -> f (IdxSet.IdxSet env')
+    go :: Exists (Idx env) -> f (IdxSet env') -> f (IdxSet env')
     go (Exists ix) acc = IdxSet.insert <$> reindex' k ix <*> acc
 
 reindexA' :: forall op f env env' t. (Applicative f) => SunkReindexPartial f env env' -> PreOpenAcc op env t -> f (PreOpenAcc op env' t)
@@ -126,8 +127,9 @@ reindexA' k = \case
     Unit var -> Unit <$> reindexVar' k var
     Acond c t f -> Acond <$> reindexVar' k c <*> travA t <*> travA f
     Awhile uniqueness c f i -> Awhile uniqueness <$> reindexAfun' k c <*> reindexAfun' k f <*> reindexVars' k i
-    Aassert g e -> Aassert <$> reindexExp' k g <*> reindexA' k e
-    Aassume g e -> Aassume <$> reindexExp' k g <*> reindexA' k e
+    Aassert g -> Aassert <$> reindexExp' k g
+    Aassume g -> Aassume <$> reindexExp' k g
+    Fence set next -> Fence <$> reindexIdxSet' k set <*> travA next
   where
     travA :: PreOpenAcc op env s -> f (PreOpenAcc op env' s)
     travA = reindexA' k
@@ -172,6 +174,8 @@ makeManifest acc = case acc of
   Exec{} -> acc -- Doesn't return anything
   Manifest{} -> acc -- Already manifest
   Compute{} -> acc -- Doesn't return a buffer, only buffers should explicitely be marked as manifest
+  Aassert{} -> acc -- Same as compute
+  Aassume{} -> acc -- Same as compute
   Alloc{} -> acc -- Can't fuse anyway
   Use{} -> acc -- Can't fuse anyway
   Unit{} -> acc -- Can't fuse anyway
@@ -180,8 +184,7 @@ makeManifest acc = case acc of
   Acond c t f -> Acond c (makeManifest t) (makeManifest f)
   Awhile{} -> acc -- Can't fuse anyway
   Return vars -> go vars
-  Aassert g e -> Aassert g $ makeManifest e
-  Aassume g e -> Aassume g $ makeManifest e
+  Fence set next -> Fence set $ makeManifest next
   where
     go :: GroundVars env t -> PreOpenAcc op env t
     go TupRunit = Return TupRunit
@@ -197,22 +200,25 @@ aletUnique :: GLeftHandSide t env env' -> PreOpenAcc op env t -> PreOpenAcc op e
 aletUnique lhs = alet' lhs $ unique $ lhsToTupR lhs
 
 alet' :: GLeftHandSide t env env' -> Uniquenesses t -> PreOpenAcc op env t -> PreOpenAcc op env' s -> PreOpenAcc op env s
+alet' lhs us (Fence set1 bnd) (Fence set2 body)
+  | set3 <- IdxSet.intersect set1 (IdxSet.drop' lhs set2)
+  , not $ IdxSet.null set3
+  = Fence set3 $ alet' lhs us
+    (fence (set1 IdxSet.\\ set3) bnd)
+    (fence (set2 IdxSet.\\ IdxSet.skip' lhs set3) body)
 alet' lhs1 us (Alet lhs2 uniqueness a1 a2) a3
   -- Perform let rotation:
   -- let x = (let y = a1 in a2) in a3
   -- becomes
   -- let y = a1 in let x = a2 in a3
   | Exists lhs1' <- rebuildLHS lhs1 = Alet lhs2 uniqueness a1 $ alet' lhs1' us a2 $ weaken (sinkWithLHS lhs1 lhs1' $ weakenWithLHS lhs2) a3
--- Rotate assertions out of let-bindings. Downside of this is that it gives
--- fewer options for program reordering. Fusion reorders programs to enable
--- more optioins for fusion, and Aassert has certain guarantees related to
--- program ordering.
-alet' lhs us (Aassert cond bnd) a
-  -- Move assertion out of let-binding
-  = Aassert cond $ alet' lhs us bnd a
-alet' lhs us (Aassume cond bnd) a
-  -- Same as with assertions, move assumptions out of let-binding
-  = Aassume cond $ alet' lhs us bnd a
+-- If the binding is a fence containing a let binding,
+-- then push the fence into that let binding to enable let rotation
+alet' lhs1 us (Fence set (Alet lhs2 uniqueness a1 a2)) a3 =
+  alet' lhs1 us (Alet lhs2 uniqueness a1' a2') a3
+  where
+    a1' = fence set a1
+    a2' = fence (IdxSet.skip' lhs2 set) a2
 alet' lhs@(LeftHandSideWildcard TupRunit) _ bnd a = case bnd of
   Compute _ -> a
   Return _  -> a
@@ -224,6 +230,14 @@ alet' lhs us (Compute e)       a
   , TupRpair u1 u2 <- us
   , Pair e1 e2 <- e = alet' l1 u1 (Compute e1) $ alet' l2 u2 (weaken (weakenWithLHS l1) $ Compute e2) a
 alet' lhs us bnd               a = Alet lhs us bnd a
+
+fence :: IdxSet env -> PreOpenAcc op env t -> PreOpenAcc op env t
+fence set
+  | IdxSet.null set = id
+  | otherwise = \case
+    Fence set2 next -> fence (IdxSet.union set set2) next
+    -- Alet lhs us bnd body -> Alet lhs us (fence set bnd) (fence (IdxSet.skip' lhs set) body)
+    a -> Fence set a
 
 extractParams :: OpenExp env benv t -> Maybe (ExpVars benv t)
 extractParams Nil                          = Just TupRunit

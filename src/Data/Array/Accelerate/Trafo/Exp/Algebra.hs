@@ -53,20 +53,17 @@ import GHC.Float                                                    ( float2Doub
 propagate
     :: forall arr env exp.
        IsArrayInstr arr
-    => Gamma arr env env
-    -> PreOpenExp arr env exp
+    => PreOpenExp arr env exp
     -> Maybe exp
-propagate env = cvtE
+propagate = cvtE
   where
     cvtE :: PreOpenExp arr env e -> Maybe e
     cvtE exp = case exp of
       Const _ c                                 -> Just c
       PrimConst c                               -> Just (evalPrimConst c)
-      Evar (Var _  ix)
-        | e             <- prjExp ix env
-        , Nothing       <- matchOpenExp exp e   -> cvtE e
       Nil                                       -> Just ()
       Pair e1 e2                                -> (,) <$> cvtE e1 <*> cvtE e2
+      -- Evar is already inlined if it has a constant value
       _                                         -> Nothing
 
 
@@ -177,8 +174,8 @@ commutes f x env = case f of
   where
     swizzle :: PreOpenExp arr env (b,b) -> Maybe (PreOpenExp arr env (b,b))
     swizzle (Pair a b)
-      | Nothing         <- propagate env a
-      , Just _          <- propagate env b
+      | Nothing         <- propagate a
+      , Just _          <- propagate b
       = Stats.ruleFired (pprFun "commutes" f)
       $ Just $ Pair b a
 
@@ -186,8 +183,8 @@ commutes f x env = case f of
 --         disadvantageous: for example in (x &&* y), the user might have put a
 --         simpler condition first that is designed to fail fast.
 --
---      | Nothing         <- propagate env a
---      , Nothing         <- propagate env b
+--      | Nothing         <- propagate a
+--      , Nothing         <- propagate b
 --      , hashOpenExp a > hashOpenExp b
 --      = Just $ Tuple (NilTup `SnocTup` b `SnocTup` a)
 
@@ -256,13 +253,13 @@ type a :-> b = forall arr env. IsArrayInstr arr => PreOpenExp arr env a -> Gamma
 
 eval1 :: SingleType b -> (a -> b) -> a :-> b
 eval1 tp f x env
-  | Just a <- propagate env x   = Stats.substitution "constant fold" . Just $ Const (SingleScalarType tp) (f a)
-  | otherwise                   = Nothing
+  | Just a <- propagate x = Stats.substitution "constant fold" . Just $ Const (SingleScalarType tp) (f a)
+  | otherwise             = Nothing
 
 eval2 :: SingleType c -> (a -> b -> c) -> (a,b) :-> c
 eval2 tp f (untup2 -> Just (x,y)) env
-  | Just a <- propagate env x
-  , Just b <- propagate env y
+  | Just a <- propagate x
+  , Just b <- propagate y
   = Stats.substitution "constant fold"
   $ Just $ Const (SingleScalarType tp) (f a b)
 eval2 _ _ _ _
@@ -278,7 +275,7 @@ toBool _ = True
 
 bool1 :: (a -> Bool) -> a :-> PrimBool
 bool1 f x env
-  | Just a <- propagate env x
+  | Just a <- propagate x
   = Stats.substitution "constant fold"
   . Just $ Const scalarTypeWord8 (fromBool (f a))
 bool1 _ _ _
@@ -286,8 +283,8 @@ bool1 _ _ _
 
 bool2 :: (a -> b -> Bool) -> (a,b) :-> PrimBool
 bool2 f (untup2 -> Just (x,y)) env
-  | Just a <- propagate env x
-  , Just b <- propagate env y
+  | Just a <- propagate x
+  , Just b <- propagate y
   = Stats.substitution "constant fold"
   $ Just $ Const scalarTypeWord8 (fromBool (f a b))
 bool2 _ _ _
@@ -298,8 +295,8 @@ bool2IfEq ifEq f (untup2 -> Just (x,y)) env
   | Just _ <- matchOpenExp x y
   = Stats.substitution "equal comparison fold"
   $ Just $ Const scalarTypeWord8 (fromBool ifEq)
-  | Just a <- propagate env x
-  , Just b <- propagate env y
+  | Just a <- propagate x
+  , Just b <- propagate y
   = Stats.substitution "constant fold"
   $ Just $ Const scalarTypeWord8 (fromBool (f a b))
 bool2IfEq _ _ _ _
@@ -340,7 +337,7 @@ evalAdd ty@(FloatingNumType ty') | FloatingDict <- floatingDict ty' = evalAdd' t
 
 evalAdd' :: (Eq a, Num a) => NumType a -> (a,a) :-> a
 evalAdd' _  (untup2 -> Just (x,y)) env
-  | Just a      <- propagate env x
+  | Just a      <- propagate x
   , a == 0
   = Stats.ruleFired "x+0" $ Just y
 
@@ -354,12 +351,12 @@ evalSub ty@(FloatingNumType ty') | FloatingDict <- floatingDict ty' = evalSub' t
 
 evalSub' :: forall a. (Eq a, Num a) => NumType a -> (a,a) :-> a
 evalSub' ty (untup2 -> Just (x,y)) env
-  | Just b      <- propagate env y
+  | Just b      <- propagate y
   , b == 0
   = Stats.ruleFired "x-0" $ Just x
 
-  | Nothing     <- propagate env x
-  , Just b      <- propagate env y
+  | Nothing     <- propagate x
+  , Just b      <- propagate y
   = Stats.ruleFired "-y+x"
   $ Just . snd $ evalPrimApp env (PrimAdd ty) (Const tp (-b) `Pair` x)
   -- (Tuple $ NilTup `SnocTup` Const (fromElt (-b)) `SnocTup` x)
@@ -380,8 +377,8 @@ evalMul ty@(FloatingNumType ty') | FloatingDict <- floatingDict ty' = evalMul' t
 
 evalMul' :: (Eq a, Num a) => NumType a -> (a,a) :-> a
 evalMul' _  (untup2 -> Just (x,y)) env
-  | Just a      <- propagate env x
-  , Nothing     <- propagate env y
+  | Just a      <- propagate x
+  , Nothing     <- propagate y
   = case a of
       0         -> Stats.ruleFired "x*0" $ Just x
       1         -> Stats.ruleFired "x*1" $ Just y
@@ -427,11 +424,11 @@ evalQuotRem :: forall a. IntegralType a -> (a,a) :-> (a,a)
 evalQuotRem ty exp env
   | IntegralDict <- integralDict ty
   , Just (x, y)  <- untup2 exp
-  , Just b       <- propagate env y
+  , Just b       <- propagate y
   = case b of
       0 -> Nothing
       1 -> Stats.ruleFired "quotRem x 1" $ Just (tup2 (x, Const tp 0))
-      _ -> case propagate env x of
+      _ -> case propagate x of
              Nothing -> Nothing
              Just a  -> Stats.substitution "constant fold"
                       $ Just $ let (u,v) = quotRem a b
@@ -462,11 +459,11 @@ evalDivMod :: forall a. IntegralType a -> (a,a) :-> (a,a)
 evalDivMod ty exp env
   | IntegralDict <- integralDict ty
   , Just (x, y)  <- untup2 exp
-  , Just b       <- propagate env y
+  , Just b       <- propagate y
   = case b of
       0 -> Nothing
       1 -> Stats.ruleFired "divMod x 1" $ Just (tup2 (x, Const tp 0))
-      _ -> case propagate env x of
+      _ -> case propagate x of
              Nothing -> Nothing
              Just a  -> Stats.substitution "constant fold"
                       $ Just $ let (u,v) = divMod a b
@@ -484,7 +481,7 @@ evalBOr ty | IntegralDict <- integralDict ty = evalBOr' ty
 
 evalBOr' :: (Eq a, Num a, Bits a) => IntegralType a -> (a,a) :-> a
 evalBOr' _ (untup2 -> Just (x,y)) env
-  | Just 0 <- propagate env x
+  | Just 0 <- propagate x
   = Stats.ruleFired "x .|. 0" $ Just y
 
 evalBOr' ty arg env
@@ -498,7 +495,7 @@ evalBNot ty | IntegralDict <- integralDict ty = eval1 (NumSingleType $ IntegralN
 
 evalBShiftL :: IntegralType a -> (a,Int) :-> a
 evalBShiftL _ (untup2 -> Just (x,i)) env
-  | Just 0 <- propagate env i
+  | Just 0 <- propagate i
   = Stats.ruleFired "x `shiftL` 0" $ Just x
 
 evalBShiftL ty arg env
@@ -506,7 +503,7 @@ evalBShiftL ty arg env
 
 evalBShiftR :: IntegralType a -> (a,Int) :-> a
 evalBShiftR _ (untup2 -> Just (x,i)) env
-  | Just 0 <- propagate env i
+  | Just 0 <- propagate i
   = Stats.ruleFired "x `shiftR` 0" $ Just x
 
 evalBShiftR ty arg env
@@ -514,14 +511,14 @@ evalBShiftR ty arg env
 
 evalBRotateL :: IntegralType a -> (a,Int) :-> a
 evalBRotateL _ (untup2 -> Just (x,i)) env
-  | Just 0 <- propagate env i
+  | Just 0 <- propagate i
   = Stats.ruleFired "x `rotateL` 0" $ Just x
 evalBRotateL ty arg env
   | IntegralDict <- integralDict ty = eval2 (NumSingleType $ IntegralNumType ty) rotateL arg env
 
 evalBRotateR :: IntegralType a -> (a,Int) :-> a
 evalBRotateR _ (untup2 -> Just (x,i)) env
-  | Just 0 <- propagate env i
+  | Just 0 <- propagate i
   = Stats.ruleFired "x `rotateR` 0" $ Just x
 evalBRotateR ty arg env
   | IntegralDict <- integralDict ty = eval2 (NumSingleType $ IntegralNumType ty) rotateR arg env
@@ -544,7 +541,7 @@ evalFDiv ty | FloatingDict <- floatingDict ty = evalFDiv' ty
 
 evalFDiv' :: (Fractional a, Eq a) => FloatingType a -> (a,a) :-> a
 evalFDiv' _ (untup2 -> Just (x,y)) env
-  | Just 1      <- propagate env y
+  | Just 1      <- propagate y
   = Stats.ruleFired "x/1" $ Just x
 
 evalFDiv' ty arg env
@@ -697,12 +694,12 @@ evalMin ty args env
 
 evalLAnd :: (PrimBool,PrimBool) :-> PrimBool
 evalLAnd (untup2 -> Just (x,y)) env
-  | Just a      <- propagate env x
+  | Just a      <- propagate x
   = Just
   $ if toBool a then Stats.ruleFired "True &&" y
                 else Stats.ruleFired "False &&" $ Const scalarTypeWord8 0
 
-  | Just b      <- propagate env y
+  | Just b      <- propagate y
   = Just
   $ if toBool b then Stats.ruleFired "True &&" x
                 else Stats.ruleFired "False &&" $ Const scalarTypeWord8 0
@@ -712,12 +709,12 @@ evalLAnd _ _
 
 evalLOr  :: (PrimBool,PrimBool) :-> PrimBool
 evalLOr (untup2 -> Just (x,y)) env
-  | Just a      <- propagate env x
+  | Just a      <- propagate x
   = Just
   $ if toBool a then Stats.ruleFired "True ||" $ Const scalarTypeWord8 1
                 else Stats.ruleFired "False ||" y
 
-  | Just b      <- propagate env y
+  | Just b      <- propagate y
   = Just
   $ if toBool b then Stats.ruleFired "True ||" $ Const scalarTypeWord8 1
                 else Stats.ruleFired "False ||" x

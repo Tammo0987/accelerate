@@ -36,7 +36,7 @@ optimizeBounds', optimizeBounds''
 optimizeBounds' acc = isolateState $ optimizeBounds'' acc
 
 -- 
-optimizeBounds'' (Aassert g e) = do
+{- optimizeBounds'' (Aassert g e) = do
     a <- get
     let ((g', arG), a') = runState (optimizeBoundsExp g) (enterExpScope a)
     put $ popLoopScope a'
@@ -61,7 +61,7 @@ optimizeBounds'' (Aassume g e) = do
     -- Turn assertion domination on and off
     (e', arE) <- withPi True optimizeBounds' e (arG ^. rCS.rControl)
     -- (e', arE) <- optimizeBounds' e
-    return (Aassume g e', arE)
+    return (Aassume g e', arE) -}
 
 -- A bind inserts it's data constraints in the IG, and stores the control constraints in the environment, to be used on an eventual branch on the value
 optimizeBounds'' (Alet lhs un bnd e) = do

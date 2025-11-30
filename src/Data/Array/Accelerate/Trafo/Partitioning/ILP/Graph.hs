@@ -559,6 +559,7 @@ data Symbol (op :: Type -> Type) where
   SUnt  :: Env env -> ExpVar env e                                                     -> Symbol op
   SAsr  :: Env env -> Exp env PrimBool                                                 -> Symbol op
   SAsu  :: Env env -> Exp env PrimBool                                                 -> Symbol op
+  SFen  :: Env env -> IdxSet env                                                       -> Symbol op
 
 instance Show (Symbol op) where
   show :: Symbol op -> String
@@ -577,6 +578,7 @@ instance Show (Symbol op) where
   show (SUnt {}) = "Unt"
   show (SAsr {}) = "Asr"
   show (SAsu {}) = "Asu"
+  show (SFen {}) = "Fen"
 
 -- | Mapping from labels to symbols.
 type Symbols op = Map (Node Comp) (Symbol op)
@@ -653,7 +655,7 @@ data FusionGraphState op env = FusionGraphState
   , _allocators :: Allocators        -- ^ Mapping from buffers to their allocator.
   , _symbols    :: Symbols op        -- ^ The symbols for the ILP.
   , _currComp   :: Node Comp         -- ^ The current computation label.
-  , _currAssert :: Maybe (Node Comp) -- ^ The current assertion. All new nodes should be linked with an edge from currAssert, so the assertion runs before that node.
+  , _currFence  :: Maybe (Node Comp) -- ^ The current fence. All new nodes should be linked with an edge from currFence, so the fence is placed before that node.
   , _currEnvL   :: EnvLabel          -- ^ The current environment label.
   }
 
@@ -712,8 +714,8 @@ instance HasSymbols (FusionGraphState op env) op where
 currComp :: Lens' (FusionGraphState op env) (Node Comp)
 currComp f s = f (_currComp s) <&> \c -> s{_currComp = c}
 
-currAssert :: Lens' (FusionGraphState op env) (Maybe (Node Comp))
-currAssert f s = f (_currAssert s) <&> \c -> s{_currAssert = c}
+currFence :: Lens' (FusionGraphState op env) (Maybe (Node Comp))
+currFence f s = f (_currFence s) <&> \c -> s{_currFence = c}
 
 currEnvL :: Lens' (FusionGraphState op env) EnvLabel
 currEnvL f s = f (_currEnvL s) <&> \l -> s{_currEnvL = l}
@@ -775,7 +777,7 @@ local env' f s = (environment .~ s^.environment) <$> f (s & environment .~ env')
 freshComp :: State (FusionGraphState op env) (Node Comp)
 freshComp = do
   c <- zoom currComp freshL'
-  assertion' <- use currAssert
+  assertion' <- use currFence
   case assertion' of
     Nothing -> return ()
     Just a -> fusionILP %= a `before` c
@@ -1033,20 +1035,26 @@ mkFusionGraph (Awhile u cond body init) = do
     symbol whileN ?= SWhl env condN bodyN init u
   return res                                      -- to return a fresh value of the same type as the initial value.
 
-mkFusionGraph (Aassert cond next) = do
+mkFusionGraph (Aassert cond) = do
   c    <- freshComp
   env  <- use environment
   c `requiresBuffers` getExpDeps cond env
   symbol c ?= SAsr env cond
-  currAssert .= Just c -- All later nodes will be placed after this assertion
-  mkFusionGraph next
+  TupRsingle <$> freshVal c (GroundRscalar scalarTypeWord8)
 
-mkFusionGraph (Aassume cond next) = do
+mkFusionGraph (Aassume cond) = do
   c    <- freshComp
   env  <- use environment
   c `requiresBuffers` getExpDeps cond env
   symbol c ?= SAsu env cond
-  currAssert .= Just c -- All later nodes will be placed after this assumption
+  TupRsingle <$> freshVal c (GroundRscalar scalarTypeWord8)
+
+mkFusionGraph (Fence deps next) = do
+  c    <- freshComp
+  env  <- use environment
+  c `requiresBuffers` getIdxSetDeps deps env
+  symbol c ?= SFen env deps
+  currFence .= Just c -- All later nodes will be placed after this fence
   mkFusionGraph next
 
 -- | Construct the fusion graph of a single-argument function.

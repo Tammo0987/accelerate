@@ -509,10 +509,14 @@ instance IsArrayInstr (ArrayInstr aenv) where
   matchArrayInstr (LinearIndex v1) (LinearIndex v2) | Just Refl <- matchVar v1 v2 = Just Refl
   matchArrayInstr _                _                                              = Nothing
 
-  encodeArrayInstr arr = case arr of
+  encodeArrayInstr = \case
     Index a                     -> intHost $(hashQ ("Index" :: String))       <> encodeArrayVar a
     LinearIndex a               -> intHost $(hashQ ("LinearIndex" :: String)) <> encodeArrayVar a
     Shape a                     -> intHost $(hashQ ("Shape" :: String))       <> encodeArrayVar a
+
+  inlineArrayInstr = \case
+    Shape _ -> True
+    _ -> False
 
 encodeArrayVar :: ArrayVar aenv a -> Hash.Builder
 encodeArrayVar (Var repr v) = encodeArrayType repr <> encodeIdx v

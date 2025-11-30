@@ -223,7 +223,7 @@ simplifyOpenExp env = first getAny . cvtE
         where
           (u, bnd') = cvtE bnd
           (v, exp') = cvtLet env lhs bnd' $ Subst weakenId body body
-      Evar var                  -> pure $ Evar var
+      Evar var                  -> cvtVar var
       Const tp c                -> pure $ Const tp c
       Undef tp                  -> pure $ Undef tp
       Nil                       -> pure Nil
@@ -286,6 +286,28 @@ simplifyOpenExp env = first getAny . cvtE
       $ cvtLet' env' l1 e1
       $ \env'' -> cvtLet' env'' l2 (weakenE (weakenWithLHS l1) e2) body
     cvtLet' env' lhs                        bnd          body = Let lhs bnd <$> body (lhsExpr lhs env')   -- Cannot split this binding.
+
+    cvtVar :: ExpVar env t -> (Any, PreOpenExp arr env t)
+    cvtVar var
+      | shouldInline bnd
+      , Nothing <- matchOpenExp bnd (Evar var)
+        = yes bnd
+      | otherwise
+        = pure $ Evar var
+      where
+        bnd = prjExp (varIdx var) env
+
+    -- Note: we also do inlining in Shrink.hs, but we can easily do it here as
+    -- well since we already have an environment.
+    -- TODO: We may want to consider to remove the environment (Gamma) from
+    -- this function and let Shrink do the inlining. The environment was
+    -- annoying for let rotation for instance.
+    shouldInline :: PreOpenExp arr env t -> Bool
+    shouldInline Evar{} = True
+    shouldInline (ArrayInstr arr Nil) = inlineArrayInstr arr
+    shouldInline Const{} = True
+    shouldInline PrimConst{} = True
+    shouldInline _ = False
 
     -- Simplify conditional expressions, in particular by eliminating branches
     -- when the predicate is a known constant.
@@ -413,8 +435,6 @@ simplifyOpenExp env = first getAny . cvtE
       = IndexSlice sliceIdx slx sh
 
     assert :: PreOpenExp arr env PrimBool -> PreOpenExp arr env t -> (Any, PreOpenExp arr env t)
-    assert (PrimApp PrimLAnd (Pair c1 c2)) b =
-      yes $ snd $ assert c1 $ snd $ assert c2 b
     assert (Const _ 1) b = yes b
     assert c@(Const _ 0) b =
       let u = undefs $ expType b
@@ -424,11 +444,10 @@ simplifyOpenExp env = first getAny . cvtE
     assert c b = (Any False, Assert c b)
 
     assume :: PreOpenExp arr env PrimBool -> PreOpenExp arr env t -> (Any, PreOpenExp arr env t)
-    assume (PrimApp PrimLAnd (Pair c1 c2)) b =
-      yes $ snd $ assume c1 $ snd $ assume c2 b
     assume (Const _ 1) b = yes b
     assume (Const _ 0) b = yes $ undefs $ expType b
     assume (Assume c a) b = yes $ Assume c $ snd $ assume a b
+    assume c1 (Assume c2 b) = yes $ snd $ assume (PrimApp PrimLAnd (Pair c1 c2)) b
     assume c b = (Any False, Assume c b)
 
     first :: (a -> a') -> (a,b) -> (a',b)
