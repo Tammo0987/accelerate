@@ -401,26 +401,24 @@ data PreOpenAcc (acc :: Type -> Type -> Type) aenv a where
               -> acc            aenv (Array (sh, Int) e)
               -> PreOpenAcc acc aenv (Array (sh, Int) e, Array sh e)
 
-  -- Generalised forward permutation is characterised by a permutation function
-  -- that determines for each element of the source array where it should go in
-  -- the output. The permutation can be between arrays of varying shape and
-  -- dimensionality. This permutation function is implicit in this representation.
+  -- Generalised forward permutation. The source array contains values combined
+  -- with the indices they should be written to.
   --
-  -- Other characteristics of the permutation function 'f':
+  -- Characteristics of the permutation mapping:
   --
-  --   1. 'f' is a (morally) partial function: only the elements of the domain
+  --   1. it is a (morally) partial mapping: only the elements of the domain
   --      for which the source array contains a 'Just' value are mapped in the
   --      result.
   --
-  --   2. 'f' is not surjective: positions in the target array need not be
+  --   2. it is not surjective: positions in the target array need not be
   --      picked up by the permutation function, so the target array must first
   --      be initialised from an array of default values.
   --
-  --   3. 'f' is not injective: distinct elements of the domain may map to the
+  --   3. it is not injective: distinct elements of the domain may map to the
   --      same position in the target array. In this case the combination
   --      function is used to combine elements, which needs to be /associative/
-  --      and /commutative/. When the combination function is missing (and thus
-  --      set to `const`), we assume that 'f' is injective.
+  --      and /commutative/. When the combination function is missing,
+  --      we assume that 'f' is injective.
   --
   Permute     :: Maybe (Fun     aenv (e -> e -> e))                  -- combination function
               -> acc            aenv (Array sh' e)                   -- default values

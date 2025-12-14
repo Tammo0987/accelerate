@@ -126,13 +126,18 @@ detectBackpermuteCopies _ = []
 -- variable is also resolved. Eg in 'let e2 = fence { e1 } assert e0 >= 0', we
 -- know that after a fence on e2, e1 is also resolved.
 data Info env t where
+  -- | This variable has a known value
   InfoConst    :: IdxSet env -- The set of variables one should synchronise with in a Fence
                -> ScalarType t
                -> t
                -> Info env t -- A constant scalar
+  -- | This variable is alias of another variable
   InfoAlias    :: IdxSet env -- The set of variables one should synchronise with in a Fence
                -> Idx env t
                -> Info env t
+  -- | This is a buffer with undefined content (e.g. directly after an Alloc)
+  InfoUndef    :: Info env (Buffer t)
+  -- | Information on a buffer
   InfoBuffer   :: Maybe (Idx env t) -- In case of a Unit, the index of the scalar variable that it contains.
                -- Copy of another buffer. This is similar to an alias, but a buffer may only
                -- be a copy of another buffer temporarily. A write to the original or copy
@@ -141,7 +146,9 @@ data Info env t where
                -> Maybe (Idx env (Buffer t))
                -> [Idx env (Buffer t)] -- List of buffers where this buffer is copied to
                -> Info env (Buffer t)
-  InfoResolved :: Info env t -- A value is resolved, as enforced by a Fence
+  -- | This variable is resolved, as enforced by a Fence
+  InfoResolved :: Info env t
+  -- | No information available
   InfoNone     :: Info env t
 
 newtype InfoEnv env = InfoEnv { unInfoEnv :: WEnv Info env }
@@ -153,6 +160,7 @@ instance Sink Info where
   weaken k (InfoAlias set idx) = InfoAlias (IdxSet.map (weaken k) set) $ weaken k idx
   weaken k (InfoConst set t c) = InfoConst (IdxSet.map (weaken k) set) t c
   weaken k (InfoBuffer unitScalar copyOf copied) = InfoBuffer (fmap (weaken k) unitScalar) (fmap (weaken k) copyOf) (fmap (weaken k) copied)
+  weaken _ InfoUndef = InfoUndef
   weaken _ InfoResolved = InfoResolved
   weaken _ InfoNone = InfoNone
 
@@ -245,11 +253,18 @@ simplify acc = snd (simplify' (TupRsingle Shared) acc) emptySimplifyEnv
 -- Returns the simplified program and a set of array variables which may have been written to
 simplify' :: SimplifyOperation op => Uniquenesses t -> OperationAcc op env t -> (IdxSet env, InfoEnv env -> OperationAcc op env t)
 simplify' uniquenesses = \case
-  Exec op args ->
-    ( outputArrays args
-    , \env ->
-      fence (syncSubstitutes env $ IdxSet.fromVarList $ argsVars args)
-        $ Exec op $ mapArgs (simplifyArg env) args)
+  Exec op args
+    | output <- outputArrays args ->
+      ( outputArrays args
+      , \env ->
+        let
+          fenceSet = syncSubstitutes env $ IdxSet.fromVarList $ argsVars args
+          args' = mapArgs (simplifyArg env) args
+        in
+          if isUndefCopy env output $ detectCopy op args then
+            Return TupRunit
+          else
+            fence fenceSet $ Exec op args')
   Return vars ->
     -- Note that we do not need to check for writes to variables here.
     -- This construct may cause aliassing of variables, but an aliassed
@@ -363,6 +378,22 @@ simplify' uniquenesses = \case
               (next' env')
       )
 
+-- Given an environment, the set of updated variables and a list of copies of
+-- an operation, checks whether the operation copies all its outputs from
+-- undefined buffers.
+--
+-- This is specifically needed for permute, as it is common to use
+-- `generate .. (const undef)` as defaults array. Permute introduces a map to
+-- copy the defaults array and make it unique. The generate is already removed
+-- in an earlier pass, and the map will be removed here.
+isUndefCopy :: InfoEnv env -> IdxSet env -> [CopyOperation env] -> Bool
+isUndefCopy env outputs copies
+  = outputs == IdxSet.fromList (map (\(CopyOperation _ o) -> Exists o) copies)
+  && all (\(CopyOperation i _) -> isUndef $ infoFor i env) copies
+  where
+    isUndef InfoUndef = True
+    isUndef _ = False
+
 variableIndices :: Uniquenesses t -> GroundVars env t -> IdxSet env
 variableIndices (TupRsingle Unique) (TupRsingle var) = IdxSet.singleton $ varIdx var
 variableIndices (TupRpair u1 u2) (TupRpair v1 v2) = variableIndices u1 v1 `IdxSet.union` variableIndices u2 v2
@@ -433,6 +464,8 @@ bindingEnv _ fenceSet lhs (Return variables) (InfoEnv environment) = InfoEnv $ w
     go (LeftHandSidePair l1 l2) (TupRpair v1 v2)        env = go l2 v2 $ go l1 v1 env
     go (LeftHandSideWildcard _) _                       env = env
     go _                        _                       _   = internalError "Tuple mismatch"
+bindingEnv _ fenceSet (LeftHandSideSingle _) Alloc{} (InfoEnv env)
+  | IdxSet.null fenceSet = InfoEnv $ wpush env InfoUndef
 bindingEnv _ fenceSet (LeftHandSideSingle _) (Unit (Var _ idx)) (InfoEnv env)
   | IdxSet.null fenceSet = InfoEnv $ wpush env $ InfoBuffer (Just $ SuccIdx idx) Nothing []
 bindingEnv outputs fenceSet (LeftHandSideWildcard _) (Exec op args) env
@@ -506,6 +539,7 @@ simplifyArrayInstr env instr@(Index (Var tp idx)) = case infoFor idx env of
   InfoAlias _ idx' -> simplifyArrayInstr env (Index $ Var tp idx')
   InfoBuffer (Just idx') _ _ -> Identity $ const $ runIdentity (simplifyArrayInstr env $ Parameter $ Var eltTp idx') Nil -- Unit
   InfoBuffer _ (Just idx') _  -> simplifyArrayInstr env (Index $ Var tp idx') -- Copy
+  InfoUndef -> Identity $ const $ Undef eltTp
   _              -> Identity $ \arg -> ArrayInstr instr arg
   where
     eltTp = case tp of

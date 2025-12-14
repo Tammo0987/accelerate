@@ -45,6 +45,13 @@ member idx (IdxSet set) = isJust $ prjPartial idx set
 varMember :: Var s env t -> IdxSet env -> Bool
 varMember (Var _ idx) = member idx
 
+instance Eq (IdxSet env) where
+  (IdxSet PEnd) == b = isEmpty b
+  a == (IdxSet PEnd) = isEmpty a
+  (IdxSet (PPush a _)) == (IdxSet (PPush b _)) = IdxSet a == IdxSet b
+  (IdxSet (PNone a)) == (IdxSet (PNone b)) = IdxSet a == IdxSet b
+  _ == _ = False
+
 overlaps :: IdxSet env -> IdxSet env -> Bool
 overlaps (IdxSet (PPush _ _)) (IdxSet (PPush _ _)) = True
 overlaps (IdxSet (PPush a _)) (IdxSet (PNone b  )) = overlaps (IdxSet a) (IdxSet b)

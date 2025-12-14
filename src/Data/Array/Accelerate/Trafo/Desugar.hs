@@ -459,30 +459,6 @@ desugarOpenAcc env = travA
       --
 
       Named.Permute c (def :: Named.OpenAcc aenv (Array sh' e)) src
-        | resultIsUnique def
-        , ArrayR shr' tp <- Named.arrayR def
-        , ArrayR shr tsht@(tag `TupRpair` (TupRunit `TupRpair` ((TupRunit `TupRpair` sht) `TupRpair` a))) <- Named.arrayR src
-        , DeclareVars lhsSh' kSh' valueSh' <- declareVars $ shapeType shr'
-        , DeclareVars lhsDef kDef valueDef <- declareVars $ buffersR tp
-        , DeclareVars lhsSh  kSh  valueSh  <- declareVars $ shapeType shr
-        , DeclareVarsPrimMaybe lhsSrc kSrc valueSrc <- fixprimmaybepermute @_ @sh' @e $ declareVars $ buffersR tsht ->
-          let
-            srcR   = tag `TupRpair` (TupRunit `TupRpair` (sht `TupRpair` a))
-            lhs'   = LeftHandSidePair (mapLeftHandSide GroundRscalar lhsSh') lhsDef
-            lhs    = LeftHandSidePair (mapLeftHandSide GroundRscalar lhsSh)  lhsSrc
-            sh'    = mapVars GroundRscalar $ valueSh' (kSrc .> kSh .> kDef)
-            sh     = mapVars GroundRscalar $ valueSh kSrc
-            env'   = weakenBEnv (kSrc .> kSh .> kDef .> kSh') env
-            argMut = ArgArray Mut (ArrayR shr' tp) sh' (valueDef $ kSrc .> kSh)
-            argSrc = ArgArray In  (ArrayR shr  srcR) sh  (valueSrc weakenId)
-            argC   = ArgFun . desugarFun env' <$> c
-          in
-            aletUnique lhs' (travA def)
-              $ alet lhs    (desugarOpenAcc (weakenBEnv (kDef .> kSh') env) src)
-              $ alet (LeftHandSideWildcard TupRunit) (mkPermute argC argMut argSrc)
-              $ Return (sh' `TupRpair` valueDef (kSrc .> kSh))
-
-      Named.Permute c (def :: Named.OpenAcc aenv (Array sh' e)) src
         | ArrayR shr' tp <- Named.arrayR def
         , ArrayR shr tsht@(tag `TupRpair` (TupRunit `TupRpair` ((TupRunit `TupRpair` sht) `TupRpair` a))) <- Named.arrayR src
         , DeclareVars lhsSh' kSh' valueSh' <- declareVars $ shapeType shr'
@@ -946,24 +922,6 @@ desugarOpenAcc env = travA
               $ alet (LeftHandSideWildcard TupRunit) (mkStencil2 sr1 sr2 argF b1' argIn1 b2' argIn2 argOut)
               $ Return (sh `TupRpair` valueOut weakenId)
       Named.Atrace _ _ _ -> error "implement me"
-
-resultIsUnique :: Named.OpenAcc aenv a -> Bool
-resultIsUnique (Named.OpenAcc acc) = case acc of
-  Named.Alet _ _ body -> resultIsUnique body
-  Named.Unit{} -> True
-  Named.Generate{} -> True
-  Named.Replicate{} -> True
-  Named.Slice{} -> True
-  Named.Map{} -> True
-  Named.ZipWith{} -> True
-  Named.Fold{} -> True
-  Named.FoldSeg{} -> True
-  Named.Scan{} -> True
-  Named.Permute{} -> True
-  Named.Backpermute{} -> True
-  Named.Stencil{} -> True
-  Named.Stencil2{} -> True
-  _ -> False
 
 isUndef :: Named.OpenExp aenv env a -> Bool
 isUndef (Let _ _ e) = isUndef e
