@@ -114,7 +114,6 @@ import Data.Array.Accelerate.Sugar.Foreign
 import Data.Array.Accelerate.Sugar.Shape                            ( Shape(..), Slice(..), (:.) )
 import Data.Array.Accelerate.Type
 import qualified Data.Array.Accelerate.Representation.Array         as R
-import qualified Data.Array.Accelerate.Representation.Tag           as R
 
 import Data.Array.Accelerate.Classes.Eq
 import Data.Array.Accelerate.Classes.Fractional
@@ -310,7 +309,7 @@ generate
     => Exp sh
     -> (Exp sh -> Exp a)
     -> Acc (Array sh a)
-generate sh fun = Acc $ applyAcc (Generate $ arrayR @sh @a) (assert (isNonNegative sh) $ sh) fun
+generate sh fun = Acc $ applyAcc (Generate $ arrayR @sh @a) (assert isNonNegative sh) fun
 
 -- Shape manipulation
 -- ------------------
@@ -330,7 +329,7 @@ reshape
     => Exp sh
     -> Acc (Array sh' e)
     -> Acc (Array sh e)
-reshape sh as = Acc $ applyAcc (Reshape $ shapeR @sh) (assert (shapeSize sh == size as) sh) as
+reshape sh as = Acc $ applyAcc (Reshape $ shapeR @sh) (assert (\s -> shapeSize s == size as) sh) as
 
 -- Extraction of sub-arrays
 -- ------------------------
@@ -549,9 +548,9 @@ fold1 :: forall sh a.
       => (Exp a -> Exp a -> Exp a)
       -> Acc (Array (sh:.Int) a)
       -> Acc (Array sh a)
-fold1 f xs = assert (innerNonEmpty (shapeR @sh) sh) $ Acc $ applyAcc (Fold (eltR @a) (unExpBinaryFunction f) Nothing) xs
-  where
-    Exp sh = shape xs
+fold1 f =
+  Acc . applyAcc (Fold (eltR @a) (unExpBinaryFunction f) Nothing)
+  . assert (\xs -> let Exp sh = shape xs in innerNonEmpty (shapeR @sh) sh)
 
 -- | Segmented reduction along the innermost dimension of an array. The
 -- segment descriptor specifies the starting index (offset) along the
@@ -711,7 +710,7 @@ permute'
 permute' f def src = Acc $ applyAcc
   (Permute (arrayR @sh @a) $ Just $ unExpBinaryFunction f)
   def
-  $ map (\s@(Exp s') -> assert (not (isJust s) ||! inboundsOf def (Exp $ prj1 $ prj0 $ prj0 s')) s) src
+  $ map (assert (\s@(Exp s') -> not (isJust s) ||! inboundsOf def (Exp $ prj1 $ prj0 $ prj0 s'))) src
 
 permuteUnique'
     :: forall sh sh' a. (Shape sh, Shape sh', Elt a)
@@ -721,7 +720,7 @@ permuteUnique'
 permuteUnique' def src = Acc $ applyAcc
   (Permute (arrayR @sh @a) Nothing)
   def
-  $ map (\s@(Exp s') -> assert (not (isJust s) ||! inboundsOf def (Exp $ prj1 $ prj0 $ prj0 s')) s) src
+  $ map (assert (\s@(Exp s') -> not (isJust s) ||! inboundsOf def (Exp $ prj1 $ prj0 $ prj0 s'))) src
 
 -- | Generalised backward permutation operation (array gather).
 --
@@ -773,11 +772,9 @@ backpermute
     -> Acc (Array sh  a)                -- ^ source array
     -> Acc (Array sh' a)
 backpermute sz f as =
-  Acc $ applyAcc (Backpermute $ shapeR @sh') (assert (isNonNegative sz) sz) f' as
+  Acc $ applyAcc (Backpermute $ shapeR @sh') (assert isNonNegative sz) f' as
   where
-    f' ix =
-      let ix' = f ix
-      in assert (inboundsOf as ix') ix'
+    f' ix = assert (inboundsOf as) $ f ix
 
 -- Stencil operations
 -- ------------------
@@ -1238,12 +1235,14 @@ toIndex
     => Exp sh                     -- ^ extent of the array
     -> Exp sh                     -- ^ index to remap
     -> Exp Int
-toIndex sh@(Exp sh') ix@(Exp ix') = assert (inbounds sh ix) $ mkExp $ ToIndex (shapeR @sh) sh' ix'
+toIndex sh@(Exp sh') ix = mkExp $ ToIndex (shapeR @sh) sh' ix'
+  where Exp ix' = assert (inbounds sh) ix
 
 -- | Inverse of 'toIndex'
 --
 fromIndex :: forall sh. Shape sh => Exp sh -> Exp Int -> Exp sh
-fromIndex sh@(Exp sh') e@(Exp e') = assert (e >= 0 &&! e < shapeSize sh) $ mkExp $ FromIndex (shapeR @sh) sh' e'
+fromIndex sh@(Exp sh') e = mkExp $ FromIndex (shapeR @sh) sh' e'
+  where Exp e' = assert (\s -> s >= 0 &&! s < shapeSize sh) e
 
 -- | Intersection of two shapes
 --
@@ -1300,16 +1299,32 @@ while c f (Exp e) =
             (unExp . f . Exp) e
 
 class Assert a where
-  assert :: Exp Bool -> a -> a
-  assume :: Exp Bool -> a -> a
+  -- | Verifies whether a predicate holds. The predicate is evaluated before
+  -- the result of this function is used, and the program will crash if the
+  -- predicate returns false.
+  --
+  -- Note that the predicate is only guaranteed to run if the result of this
+  -- function is used. If the result is not used, it may (or may not) be
+  -- removed from the program.
+  --
+  assert :: (a -> Exp Bool) -> a -> a
+  
+  -- | Informs the compiler that a certain property holds on the given value.
+  -- The compiler may use this information to optimize the program.
+  --
+  assume :: (a -> Exp Bool) -> a -> a
 
 instance Elt t => Assert (Exp t) where
-  assert (Exp g) (Exp e) = mkExp $ Assert (mkCoerce' g) e
-  assume (Exp g) (Exp e) = mkExp $ Assume (mkCoerce' g) e
+  assert f (Exp e) = mkExp $ Assert (mkCoerce' g) e
+    where Exp g = f $ Exp e
+  assume f (Exp e) = mkExp $ Assume (mkCoerce' g) e
+    where Exp g = f $ Exp e
 
 instance Arrays t => Assert (Acc t) where
-  assert (Exp g) (Acc a) = Acc $ SmartAcc $ Aassert (mkCoerce' g) a
-  assume (Exp g) (Acc a) = Acc $ SmartAcc $ Aassume (mkCoerce' g) a
+  assert f (Acc a) = Acc $ SmartAcc $ Aassert (mkCoerce' g) a
+    where Exp g = f $ Acc a
+  assume f (Acc a) = Acc $ SmartAcc $ Aassume (mkCoerce' g) a
+    where Exp g = f $ Acc a
 
 -- Some conditions for assertions that we use for the built-in functions of Accelerate
 
@@ -1364,7 +1379,8 @@ inboundsOf = inbounds . shape
 --
 infixl 9 !
 (!) :: forall sh e. (Shape sh, Elt e) => Acc (Array sh e) -> Exp sh -> Exp e
-a@(Acc a') ! ix@(Exp ix') = assert (inboundsOf a ix) $ mkExp $ Index (eltR @e) a' ix'
+a@(Acc a') ! ix = mkExp $ Index (eltR @e) a' ix'
+  where Exp ix' = assert (inboundsOf a) ix
 
 -- | Extract the value from an array at the specified linear index.
 -- Multidimensional arrays in Accelerate are stored in row-major order with
@@ -1384,7 +1400,8 @@ a@(Acc a') ! ix@(Exp ix') = assert (inboundsOf a ix) $ mkExp $ Index (eltR @e) a
 --
 infixl 9 !!
 (!!) :: forall sh e. (Shape sh, Elt e) => Acc (Array sh e) -> Exp Int -> Exp e
-a@(Acc a') !! ix@(Exp ix') = assert (0 <= ix &&! ix < size a) $ mkExp $ LinearIndex (eltR @e) a' ix'
+a@(Acc a') !! ix = mkExp $ LinearIndex (eltR @e) a' ix'
+  where Exp ix' = assert (\i -> 0 <= i &&! i < size a) ix
 
 -- | Extract the shape (extent) of an array.
 --

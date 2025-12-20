@@ -847,7 +847,7 @@ foldSeg
     -> Acc (Array (sh:.Int) e)
     -> Acc (Segments i)
     -> Acc (Array (sh:.Int) e)
-foldSeg f z arr seg = foldSeg' f z arr (scanl plus zero $ map (\sz -> assert (sz >= 0) sz) seg)
+foldSeg f z arr seg = foldSeg' f z arr (scanl plus zero $ map (assert (>= 0)) seg)
   where
     (plus, zero) =
       case integralType @i of
@@ -873,7 +873,7 @@ fold1Seg
     -> Acc (Array (sh:.Int) e)
     -> Acc (Segments i)
     -> Acc (Array (sh:.Int) e)
-fold1Seg f arr seg = fold1Seg' f arr (scanl plus zero $ map (\sz -> assert (sz >= 0) sz) seg)
+fold1Seg f arr seg = fold1Seg' f arr (scanl plus zero $ map (assert (>= 0)) seg)
   where
     plus :: Exp i -> Exp i -> Exp i
     zero :: Exp i
@@ -1223,7 +1223,7 @@ scanl'Seg f z arr seg =
     -- the flags align with the last element of each body section, and when
     -- scanned, this element will be incremented over.
     --
-    offset      = scanl1 (+) $ map (\sz -> assert (sz >= 0) sz) seg
+    offset      = scanl1 (+) $ map (assert (>= 0)) seg
     inc         = scanl1 (+)
                 $ permute (+) (fill (I1 $ size arr + 1) 0)
                               (\ix -> Just_ (index1' (offset ! ix)))
@@ -1502,7 +1502,7 @@ mkHeadFlags seg
   = init
   $ permute (+) zeros (\ix -> Just_ (index1' (offset ! ix))) ones
   where
-    T2 offset len = scanl' (+) 0 $ map (\sz -> assert (sz >= 0) sz) seg
+    T2 offset len = scanl' (+) 0 $ map (assert (>= 0)) seg
     zeros         = fill (index1' $ the len + 1) 0
     ones          = fill (index1  $ size offset) 1
 
@@ -1517,7 +1517,7 @@ mkTailFlags seg
   = init
   $ permute (+) zeros (\ix -> Just_ (index1' (the len - 1 - offset ! ix))) ones
   where
-    T2 offset len = scanr' (+) 0 $ map (\sz -> assert (sz >= 0) sz) seg
+    T2 offset len = scanr' (+) 0 $ map (assert (>= 0)) seg
     zeros         = fill (index1' $ the len + 1) 0
     ones          = fill (index1  $ size offset) 1
 
@@ -2701,7 +2701,7 @@ expand :: (Elt a, Elt b)
        -> Acc (Vector b)
 expand f g xs =
   let
-    szs            = map (\a -> let sz = f a in assert (sz >= 0) sz) xs
+    szs            = map (\a -> let sz = f a in assert (>= 0) sz) xs
     T2 offsets len = scanl' (+) 0 szs
     -- TODO: Make the OperationAcc simplifier better and remove 'the $ unit $'.
     -- Our simplifier currently only knows that multiple array of size 'm' are
