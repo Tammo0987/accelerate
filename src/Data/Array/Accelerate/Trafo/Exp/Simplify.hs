@@ -42,6 +42,7 @@ import Data.Array.Accelerate.Analysis.Match
 import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.Representation.Shape                   ( ShapeR(..), shapeToList )
 import Data.Array.Accelerate.Representation.Type
+import Data.Array.Accelerate.Representation.Vec
 import Data.Array.Accelerate.Representation.Slice                   ( SliceIndex(..) )
 import Data.Array.Accelerate.Trafo.Exp.Algebra
 import Data.Array.Accelerate.Trafo.Environment
@@ -59,6 +60,8 @@ import Data.List                                                    ( partition 
 import Data.Maybe
 import Data.Monoid
 import Data.Text.Lazy.Builder
+import Data.Primitive.Vec
+import GHC.TypeNats
 import Formatting
 import Lens.Micro                                                   hiding ( ix )
 import Prelude                                                      hiding ( exp, iterate )
@@ -227,25 +230,22 @@ simplifyOpenExp env = first getAny . cvtE
       Const tp c                -> pure $ Const tp c
       Undef tp                  -> pure $ Undef tp
       Nil                       -> pure Nil
-      Pair e1 e2                -> Pair <$> cvtE e1 <*> cvtE e2
-      VecPack   vec e           -> VecPack   vec <$> cvtE e
-      VecUnpack vec e           -> VecUnpack vec <$> cvtE e
-      IndexSlice x ix sh        -> indexSlice x <$> cvtE ix <*> cvtE sh
-      IndexFull x ix sl         -> indexFull x <$> cvtE ix <*> cvtE sl
-      ToIndex shr sh ix         -> toIndex shr (cvtE sh) (cvtE ix)
-      FromIndex shr sh ix       -> fromIndex shr (cvtE sh) (cvtE ix)
-      Case e rhs def            -> caseof (cvtE e) (sequenceA [ (t,) <$> cvtE c | (t,c) <- rhs ]) (cvtMaybeE def)
-      Cond p t e                -> cond (cvtE p) (cvtE t) (cvtE e)
+      Pair e1 e2                -> hoist2 (\a b -> pure $ Pair a b) (cvtE e1) (cvtE e2)
+      VecPack   vec e           -> hoist (vecPack   vec) (cvtE e)
+      VecUnpack vec e           -> hoist (vecUnpack vec) (cvtE e)
+      IndexSlice x ix sh        -> hoist2 (indexSlice x) (cvtE ix) (cvtE sh)
+      IndexFull x ix sl         -> hoist2 (indexFull  x) (cvtE ix) (cvtE sl)
+      ToIndex shr sh ix         -> hoist2 (toIndex shr) (cvtE sh) (cvtE ix)
+      FromIndex shr sh ix       -> hoist2 (fromIndex shr) (cvtE sh) (cvtE ix)
+      Case e rhs def            -> hoist (\e' -> caseof e' (sequenceA [ (t,) <$> cvtE c | (t,c) <- rhs ]) (cvtMaybeE def)) (cvtE e)
+      Cond p t e                -> hoist (\p' -> cond p' (cvtE t) (cvtE e)) (cvtE p)
       PrimConst c               -> pure $ PrimConst c
-      PrimApp f x               -> (u<>v, fx)
-        where
-          (u, x') = cvtE x
-          (v, fx) = evalPrimApp env f x'
-      ArrayInstr arr e            -> cvtE e >>= arrayInstr arr
-      ShapeSize shr sh          -> shapeSize shr (cvtE sh)
-      Foreign tp ff f e         -> Foreign tp ff <$> first Any (simplifyOpenFun EmptyExp f) <*> cvtE e
+      PrimApp f x               -> hoist (evalPrimApp env f) (cvtE x)
+      ArrayInstr arr e          -> hoist (arrayInstr arr) (cvtE e)
+      ShapeSize shr sh          -> hoist (shapeSize shr) (cvtE sh)
+      Foreign tp ff f e         -> hoist (\e' -> Foreign tp ff <$> first Any (simplifyOpenFun EmptyExp f) <*> pure e') (cvtE e)
       While p f x               -> While <$> cvtF env p <*> cvtF env f <*> cvtE x
-      Coerce t1 t2 e            -> Coerce t1 t2 <$> cvtE e
+      Coerce t1 t2 e            -> hoist (pure . Coerce t1 t2) (cvtE e)
       Assert e1 e2              -> join (assert <$> cvtE e1 <*> cvtE e2)
       Assume e1 e2              -> join (assume <$> cvtE e1 <*> cvtE e2)
 
@@ -312,39 +312,39 @@ simplifyOpenExp env = first getAny . cvtE
     -- Simplify conditional expressions, in particular by eliminating branches
     -- when the predicate is a known constant.
     --
-    cond :: (Any, PreOpenExp arr env PrimBool)
+    cond :: PreOpenExp arr env PrimBool
          -> (Any, PreOpenExp arr env t)
          -> (Any, PreOpenExp arr env t)
          -> (Any, PreOpenExp arr env t)
-    cond p@(_,p') t@(_,t') e@(_,e')
-      | Const _ 1 <- p'                 = Stats.knownBranch "True"      (yes t')
-      | Const _ 0 <- p'                 = Stats.knownBranch "False"     (yes e')
+    cond p t@(_,t') e@(_,e')
+      | Const _ 1 <- p                  = Stats.knownBranch "True"      (yes t')
+      | Const _ 0 <- p                  = Stats.knownBranch "False"     (yes e')
       | Just Refl <- matchOpenExp t' e' = Stats.knownBranch "redundant" (yes e')
-      | otherwise                       = Cond <$> p <*> t <*> e
+      | otherwise                       = Cond p <$> t <*> e
 
-    caseof :: (Any, PreOpenExp arr env TAG)
+    caseof :: PreOpenExp arr env TAG
            -> (Any, [(TAG, PreOpenExp arr env b)])
            -> (Any, Maybe (PreOpenExp arr env b))
            -> (Any, PreOpenExp arr env b)
-    caseof x@(_,x') xs@(_,xs') md@(_,md')
-      | Const _ t   <- x'
-      = Stats.caseElim "known" (yes (fromJust $ lookup t xs'))
+    caseof x xs@(_,xs') md@(_,md')
+      | Const _ t   <- x
+      = Stats.caseElim "known" $ yes $ fromMaybe (fromJust md') $ lookup t xs'
       | Just d      <- md'
       , []          <- xs'
       = Stats.caseElim "redundant" (yes d)
       | Just d      <- md'
       , [(_,(_,u))] <- us
       , Just Refl   <- matchOpenExp d u
-      = Stats.caseDefault "merge" $ yes (Case x' (map snd vs) (Just u))
+      = Stats.caseDefault "merge" $ yes $ Case x (map snd vs) (Just u)
       | Nothing     <- md'
       , []          <- vs
       , [(_,(_,u))] <- us
-      = Stats.caseElim "overlap" (yes u)
+      = Stats.caseElim "overlap" $ yes u
       | Nothing     <- md'
       , [(_,(_,u))] <- us
-      = Stats.caseDefault "introduction" $ yes (Case x' (map snd vs) (Just u))
+      = Stats.caseDefault "introduction" $ yes $ Case x (map snd vs) (Just u)
       | otherwise
-      = Case <$> x <*> xs <*> md
+      = Case x <$> xs <*> md
       where
         (us,vs) = partition (\(n,_) -> n > 1)
                 $ Map.elems
@@ -368,71 +368,82 @@ simplifyOpenExp env = first getAny . cvtE
 
     -- Shape manipulations
     --
-    shapeSize :: ShapeR sh -> (Any, PreOpenExp arr env sh) -> (Any, PreOpenExp arr env Int)
-    shapeSize shr (_, sh)
+    shapeSize :: ShapeR sh -> PreOpenExp arr env sh -> (Any, PreOpenExp arr env Int)
+    shapeSize shr sh
       | Just c <- extractConstTuple sh
       = Stats.ruleFired "shapeSize/const" $ yes (Const scalarTypeInt (product (shapeToList shr c)))
-    shapeSize (ShapeRsnoc ShapeRz) (_, Pair _ sz)
+    shapeSize (ShapeRsnoc ShapeRz) (Pair _ sz)
       = Stats.ruleFired "shapeSize/I1" $ yes sz
     shapeSize shr sh
-      = ShapeSize shr <$> sh
+      = pure $ ShapeSize shr sh
 
     toIndex :: ShapeR sh
-            -> (Any, PreOpenExp arr env sh)
-            -> (Any, PreOpenExp arr env sh)
+            -> PreOpenExp arr env sh
+            -> PreOpenExp arr env sh
             -> (Any, PreOpenExp arr env Int)
-    toIndex _ (_,sh) (_,FromIndex _ sh' ix)
+    toIndex _ sh (FromIndex _ sh' ix)
       | Just Refl <- matchOpenExp sh sh' = Stats.ruleFired "toIndex/fromIndex" $ yes ix
     toIndex ShapeRz _ _                  = Stats.ruleFired "toIndex DIM0" $ yes $ Const scalarTypeInt 0
-    toIndex (ShapeRsnoc ShapeRz) _ (_, Pair _ ix)
+    toIndex (ShapeRsnoc ShapeRz) _ (Pair _ ix)
                                          = Stats.ruleFired "toIndex DIM1" $ yes ix
-    toIndex (ShapeRsnoc ShapeRz) _ (_, ix)
+    toIndex (ShapeRsnoc ShapeRz) _ ix
                                          = Stats.ruleFired "toIndex DIM1" $ yes
                                          $ Let (LeftHandSidePair (LeftHandSideWildcard TupRunit) (LeftHandSideSingle scalarTypeInt))
                                            ix $ Evar $ Var scalarTypeInt ZeroIdx
-    toIndex shr sh ix                    = ToIndex shr <$> sh <*> ix
+    toIndex shr sh ix                    = pure $ ToIndex shr sh ix
 
     fromIndex :: ShapeR sh
+              -> PreOpenExp arr env sh
+              -> PreOpenExp arr env Int
               -> (Any, PreOpenExp arr env sh)
-              -> (Any, PreOpenExp arr env Int)
-              -> (Any, PreOpenExp arr env sh)
-    fromIndex _ (_,sh) (_,ToIndex _ sh' ix)
+    fromIndex _ sh (ToIndex _ sh' ix)
       | Just Refl <- matchOpenExp sh sh' = Stats.ruleFired "fromIndex/toIndex" $ yes ix
     fromIndex ShapeRz _ _                = Stats.ruleFired "fromIndex DIM0" $ yes Nil
-    fromIndex (ShapeRsnoc ShapeRz) _ (_, ix)
+    fromIndex (ShapeRsnoc ShapeRz) _ ix
                                          = Stats.ruleFired "fromIndex DIM1" $ yes $ Pair Nil ix
-    fromIndex shr sh ix                  = FromIndex shr <$> sh <*> ix
+    fromIndex shr sh ix                  = pure $ FromIndex shr sh ix
 
     indexFull
       :: SliceIndex slix sl co t
       -> PreOpenExp arr env slix
       -> PreOpenExp arr env sl
-      -> PreOpenExp arr env t
-    indexFull SliceNil _ _ = Nil
+      -> (Any, PreOpenExp arr env t)
+    indexFull SliceNil _ _ = yes Nil
     indexFull (SliceAll sliceIdx)   (Pair slx _) (Pair sh sz)
-      = Pair (indexFull sliceIdx slx sh) sz
+      = yes $ Pair (snd $ indexFull sliceIdx slx sh) sz
     indexFull (SliceFixed sliceIdx) (Pair slx sz) sh
-      = Pair (indexFull sliceIdx slx sh) sz
+      = yes $ Pair (snd $ indexFull sliceIdx slx sh) sz
+    indexFull sliceIdx slx sh
       -- Expression slx or sh isn't a pair.
       -- TODO: We could bind them in a Let, which may allow further reasoning
       -- by the simplifier.
-    indexFull sliceIdx slx sh = IndexFull sliceIdx slx sh
+      = pure $ IndexFull sliceIdx slx sh
 
     indexSlice
       :: SliceIndex slix t co sh
       -> PreOpenExp arr env slix
       -> PreOpenExp arr env sh
-      -> PreOpenExp arr env t
-    indexSlice SliceNil _ _ = Nil
+      -> (Any, PreOpenExp arr env t)
+    indexSlice SliceNil _ _ = yes Nil
     indexSlice (SliceAll sliceIdx)   (Pair slx _) (Pair sl sz)
-      = Pair (indexSlice sliceIdx slx sl) sz
+      = yes $ Pair (snd $ indexSlice sliceIdx slx sl) sz
     indexSlice (SliceFixed sliceIdx) (Pair slx _) (Pair sl _)
-      = indexSlice sliceIdx slx sl
+      = yes $ snd $ indexSlice sliceIdx slx sl
     indexSlice sliceIdx slx sh
       -- Expression slx or sh isn't a pair.
       -- TODO: We could bind them in a Let, which may allow further reasoning
       -- by the simplifier.
-      = IndexSlice sliceIdx slx sh
+      = pure $ IndexSlice sliceIdx slx sh
+
+    vecPack :: KnownNat n => VecR n s tup -> PreOpenExp arr env tup -> (Any, PreOpenExp arr env (Vec n s))
+    vecPack vecR (VecUnpack vecR' v)
+      | Just Refl <- matchVecR vecR vecR' = yes v
+    vecPack vecR e = pure $ VecPack vecR e
+
+    vecUnpack :: KnownNat n => VecR n s tup -> PreOpenExp arr env (Vec n s) -> (Any, PreOpenExp arr env tup)
+    vecUnpack vecR (VecPack vecR' v)
+      | Just Refl <- matchVecR vecR vecR' = yes v
+    vecUnpack vecR e = pure $ VecUnpack vecR e
 
     assert :: PreOpenExp arr env PrimBool -> PreOpenExp arr env t -> (Any, PreOpenExp arr env t)
     assert (Const _ 1) b = yes b
@@ -453,8 +464,32 @@ simplifyOpenExp env = first getAny . cvtE
     first :: (a -> a') -> (a,b) -> (a',b)
     first f (x,y) = (f x, y)
 
-    yes :: x -> (Any, x)
-    yes x = (Any True, x)
+yes :: x -> (Any, x)
+yes x = (Any True, x)
+
+hoist'
+  :: (PreOpenExp arr env a -> (Any, PreOpenExp arr env t))
+  -> PreOpenExp arr env a
+  -> (Any, PreOpenExp arr env t)
+hoist' f = \case
+  Assert c a -> yes $ Assert c $ snd $ hoist' f a
+  Assume c a -> yes $ Assume c $ snd $ hoist' f a
+  e -> f e
+  -- TODO: Should we also hoist let-bindings here?
+  -- That would make the types more difficult
+
+hoist
+  :: (PreOpenExp arr env a -> (Any, PreOpenExp arr env t))
+  -> (Any, PreOpenExp arr env a)
+  -> (Any, PreOpenExp arr env t)
+hoist f a = a >>= hoist' f
+
+hoist2
+  :: (PreOpenExp arr env a -> PreOpenExp arr env b -> (Any, PreOpenExp arr env t))
+  -> (Any, PreOpenExp arr env a)
+  -> (Any, PreOpenExp arr env b)
+  -> (Any, PreOpenExp arr env t)
+hoist2 f a b = hoist (\a' -> hoist (f a') b) a
 
 extractConstTuple :: PreOpenExp arr env t -> Maybe t
 extractConstTuple Nil          = Just ()

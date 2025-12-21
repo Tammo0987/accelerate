@@ -32,7 +32,8 @@ module Data.Array.Accelerate.Analysis.Match (
   matchIdx, matchVar, matchVars, matchArrayR, matchArraysR, matchGroundR,
   matchGroundsR, matchTypeR, matchShapeR, matchShapeType, matchIntegralType,
   matchFloatingType, matchNumType, matchScalarType, matchLeftHandSide,
-  matchALeftHandSide, matchELeftHandSide, matchSingleType, matchTupR
+  matchALeftHandSide, matchELeftHandSide, matchSingleType, matchTupR,
+  matchVecR
 
 ) where
 
@@ -45,7 +46,9 @@ import Data.Array.Accelerate.Representation.Array
 import Data.Array.Accelerate.Representation.Shape
 import Data.Array.Accelerate.Representation.Slice
 import Data.Array.Accelerate.Representation.Stencil
+import Data.Array.Accelerate.Representation.Tag
 import Data.Array.Accelerate.Representation.Type
+import Data.Array.Accelerate.Representation.Vec
 import Data.Array.Accelerate.Representation.Ground
 import Data.Array.Accelerate.Type
 import Data.Primitive.Vec
@@ -490,6 +493,16 @@ matchOpenExp (Pair a1 b1) (Pair a2 b2)
 matchOpenExp Nil Nil
   = Just Refl
 
+matchOpenExp (VecPack r1 e1) (VecPack r2 e2)
+  | Just Refl <- matchVecR r1 r2
+  , Just Refl <- matchOpenExp e1 e2
+  = Just Refl
+
+matchOpenExp (VecUnpack r1 e1) (VecUnpack r2 e2)
+  | Just Refl <- matchVecR r1 r2
+  , Just Refl <- matchOpenExp e1 e2
+  = Just Refl
+
 matchOpenExp (IndexSlice sliceIndex1 ix1 sh1) (IndexSlice sliceIndex2 ix2 sh2)
   | Just Refl <- matchOpenExp ix1 ix2
   , Just Refl <- matchOpenExp sh1 sh2
@@ -512,6 +525,13 @@ matchOpenExp (FromIndex _ sh1 i1) (FromIndex _ sh2 i2)
   , Just Refl <- matchOpenExp sh1 sh2
   = Just Refl
 
+matchOpenExp c1@(Case t1 alts1 d1) c2@(Case t2 alts2 d2)
+  | Just Refl <- matchOpenExp t1 t2
+  , Just Refl <- matchTypeR (expType c1) (expType c2)
+  , matchAlts alts1 alts2
+  , matchMaybeExp d1 d2
+  = Just Refl
+
 matchOpenExp (Cond p1 t1 e1) (Cond p2 t2 e2)
   | Just Refl <- matchOpenExp p1 p2
   , Just Refl <- matchOpenExp t1 t2
@@ -523,6 +543,14 @@ matchOpenExp (While p1 f1 x1) (While p2 f2 x2)
   , Just Refl <- matchOpenFun p1 p2
   , Just Refl <- matchOpenFun f1 f2
   = Just Refl
+
+matchOpenExp (Assert g1 e1) (Assert g2 e2)
+  | Just Refl <- matchOpenExp g1 g2
+  = matchOpenExp e1 e2
+
+matchOpenExp (Assume g1 e1) (Assume g2 e2)
+  | Just Refl <- matchOpenExp g1 g2
+  = matchOpenExp e1 e2
 
 matchOpenExp (PrimConst c1) (PrimConst c2)
   = matchPrimConst c1 c2
@@ -550,6 +578,31 @@ matchOpenExp (ShapeSize _ sh1) (ShapeSize _ sh2)
 matchOpenExp _ _
   = Nothing
 
+matchAlts :: IsArrayInstr arr => [(TAG, PreOpenExp arr env t)] -> [(TAG, PreOpenExp arr env t)] -> Bool
+matchAlts [] [] = True
+matchAlts ((t1, e1) : alts1) ((t2, e2) : alts2)
+  | t1 == t2
+  , Just Refl <- matchOpenExp e1 e2
+  = matchAlts alts1 alts2
+matchAlts _ _ = False
+
+matchMaybeExp
+    :: IsArrayInstr arr
+    => Maybe (PreOpenExp arr env t)
+    -> Maybe (PreOpenExp arr env t)
+    -> Bool
+matchMaybeExp Nothing Nothing = True
+matchMaybeExp (Just a) (Just b) = isJust $ matchOpenExp a b
+matchMaybeExp _ _ = False
+
+matchVecR :: VecR n1 s1 t1 -> VecR n2 s2 t2 -> Maybe ((Vec n1 s1, t1) :~: (Vec n2 s2, t2))
+matchVecR (VecRnil t1) (VecRnil t2)
+  | Just Refl <- matchSingleType t1 t2
+  = Just Refl
+matchVecR (VecRsucc r1) (VecRsucc r2)
+  | Just Refl <- matchVecR r1 r2
+  = Just Refl
+matchVecR _ _ = Nothing
 
 -- Match scalar functions
 --
@@ -884,6 +937,9 @@ matchFloatingType _            _            = Nothing
 -- a stable ordering such that matching recognises expressions modulo
 -- commutativity.
 --
+-- TODO: Should we remove this functionality? The expression simplifier
+-- already converts commutative operations to a normal form, and we
+-- compare expressions only after simplification.
 commutes
     :: forall arr env a r.
        IsArrayInstr arr
