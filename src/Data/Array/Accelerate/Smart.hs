@@ -1179,10 +1179,10 @@ mkLt :: (Elt t, IsSingle (EltR t)) => Exp t -> Exp t -> Exp Bool
 mkLt = mkPrimBinaryBool $ PrimCmp singleType CmpLt
 
 mkGt :: (Elt t, IsSingle (EltR t)) => Exp t -> Exp t -> Exp Bool
-mkGt = mkPrimBinaryBool $ PrimCmp singleType CmpGt
+mkGt = flip mkLt
 
 mkLtEq :: (Elt t, IsSingle (EltR t)) => Exp t -> Exp t -> Exp Bool
-mkLtEq = mkPrimBinaryBool $ PrimCmp singleType CmpLtEq
+mkLtEq = flip mkGtEq
 
 mkGtEq :: (Elt t, IsSingle (EltR t)) => Exp t -> Exp t -> Exp Bool
 mkGtEq = mkPrimBinaryBool $ PrimCmp singleType CmpGtEq

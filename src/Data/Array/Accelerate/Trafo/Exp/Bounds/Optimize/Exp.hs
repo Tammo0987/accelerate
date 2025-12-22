@@ -558,14 +558,6 @@ primFunData g pf (TupRpair dx@(TupRsingle x) dy@(TupRsingle y)) =
                 always <- alwaysLT x y;
                 never  <- neverLT x y;
                 return $ TupRsingle $ boolData ((True <$ guard always) <|> (False <$ guard never))
-            (PrimCmp _ CmpGt) -> do
-                always <- alwaysGT x y;
-                never  <- neverGT x y;
-                return $ TupRsingle $ boolData ((True <$ guard always) <|> (False <$ guard never))
-            (PrimCmp _ CmpLtEq) -> do
-                always <- alwaysLTEQ x y;
-                never  <- neverLTEQ x y;
-                return $ TupRsingle $ boolData ((True <$ guard always) <|> (False <$ guard never))
             (PrimCmp _ CmpGtEq) -> do
                 always <- alwaysGTEQ x y;
                 never  <- neverGTEQ x y;
@@ -728,16 +720,6 @@ interpretControlComparisson pf (TupRpair (TupRsingle bcd1) (TupRsingle bcd2)) = 
             PrimCmp _ CmpLt -> -- Debug.trace (show bd1 ++ "<" ++ show bd2 ++ "?") $
                 m (ifI i1 i2 (w2 - w1 - 1)) (ifI i2 i1 (w1 - w2))
 
-            -- i1 + w1 > i2 + w2
-            -- True branch: i2 <= i1 + (w1 - w2 - 1)
-            -- False branch: i1 <= i2 + (w2 - w1)
-            PrimCmp _ CmpGt -> m (ifI i2 i1 (w1 - w2 - 1)) (ifI i1 i2 (w2 - w1))
-
-            -- i1 + w1 <= i2 + w2
-            -- True branch: i1 <= i2 + (w2 - w1)
-            -- False branch: i2 <= i1 + (w1 - w2 - 1)
-            PrimCmp _ CmpLtEq -> m (ifI i1 i2 (w2 - w1))     (ifI i2 i1 (w1 - w2 - 1))
-
             -- i1 + w1 >= i2 + w2
             -- True branch: i2 <= i1 + (w1 - w2)
             -- False branch: i1 <= i2 + (w2 - w1 - 1)
@@ -752,16 +734,6 @@ interpretControlComparisson pf (TupRpair (TupRsingle bcd1) (TupRsingle bcd2)) = 
             -- True  : i2 > i1 + (w1 - w2)  =>  i2 >= i1 + (w1 - w2 + 1)
             -- False : i1 >= i2 + (w2 - w1)
             PrimCmp _ CmpLt -> m (ifI i2 i1 (w1 - w2 + 1)) (ifI i1 i2 (w2 - w1))
-
-            -- i1 + w1 > i2 + w2
-            -- True  : i1 > i2 + (w2 - w1)  =>  i1 >= i2 + (w2 - w1 + 1)
-            -- False : i2 >= i1 + (w1 - w2)
-            PrimCmp _ CmpGt -> m (ifI i1 i2 (w2 - w1 + 1)) (ifI i2 i1 (w1 - w2))
-
-            -- i1 + w1 <= i2 + w2
-            -- True  : i2 >= i1 + (w1 - w2)
-            -- False : i1 > i2 + (w2 - w1)  =>  i1 >= i2 + (w2 - w1 + 1)
-            PrimCmp _ CmpLtEq -> m (ifI i2 i1 (w1 - w2)) (ifI i1 i2 (w2 - w1 + 1))
 
             -- i1 + w1 >= i2 + w2
             -- True  : i1 >= i2 + (w2 - w1)

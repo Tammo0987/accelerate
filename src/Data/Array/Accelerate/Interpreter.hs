@@ -1054,8 +1054,6 @@ evalPrim (PrimAtan2              ty) = evalAtan2 ty
 evalPrim (PrimIsNaN              ty) = evalIsNaN ty
 evalPrim (PrimIsInfinite         ty) = evalIsInfinite ty
 evalPrim (PrimCmp ty CmpLt         ) = evalLt ty
-evalPrim (PrimCmp ty CmpGt         ) = evalGt ty
-evalPrim (PrimCmp ty CmpLtEq       ) = evalLtEq ty
 evalPrim (PrimCmp ty CmpGtEq       ) = evalGtEq ty
 evalPrim (PrimCmp ty CmpEq         ) = evalEq ty
 evalPrim (PrimCmp ty CmpNEq        ) = evalNEq ty
@@ -1306,14 +1304,6 @@ evalRecip ty | FloatingDict <- floatingDict ty = recip
 evalLt :: SingleType a -> ((a, a) -> PrimBool)
 evalLt (NumSingleType (IntegralNumType ty)) | IntegralDict <- integralDict ty = fromBool . uncurry (<)
 evalLt (NumSingleType (FloatingNumType ty)) | FloatingDict <- floatingDict ty = fromBool . uncurry (<)
-
-evalGt :: SingleType a -> ((a, a) -> PrimBool)
-evalGt (NumSingleType (IntegralNumType ty)) | IntegralDict <- integralDict ty = fromBool . uncurry (>)
-evalGt (NumSingleType (FloatingNumType ty)) | FloatingDict <- floatingDict ty = fromBool . uncurry (>)
-
-evalLtEq :: SingleType a -> ((a, a) -> PrimBool)
-evalLtEq (NumSingleType (IntegralNumType ty)) | IntegralDict <- integralDict ty = fromBool . uncurry (<=)
-evalLtEq (NumSingleType (FloatingNumType ty)) | FloatingDict <- floatingDict ty = fromBool . uncurry (<=)
 
 evalGtEq :: SingleType a -> ((a, a) -> PrimBool)
 evalGtEq (NumSingleType (IntegralNumType ty)) | IntegralDict <- integralDict ty = fromBool . uncurry (>=)

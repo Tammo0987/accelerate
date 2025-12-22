@@ -295,8 +295,6 @@ encodePrimFun PrimLNot                   = intHost $(hashQ "PrimLNot")
 
 encodeCmp :: Cmp -> Builder
 encodeCmp CmpLt   = intHost $(hashQ "CmpLt")
-encodeCmp CmpGt   = intHost $(hashQ "CmpGt")
-encodeCmp CmpLtEq = intHost $(hashQ "CmpLtEq")
 encodeCmp CmpGtEq = intHost $(hashQ "CmpGtEq")
 encodeCmp CmpEq   = intHost $(hashQ "CmpEq")
 encodeCmp CmpNEq  = intHost $(hashQ "CmpNEq")

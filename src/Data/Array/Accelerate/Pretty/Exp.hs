@@ -466,8 +466,6 @@ primOperator PrimAtan2{}              = Operator "atan2"              App    L 1
 primOperator PrimIsNaN{}              = Operator "isNaN"              App    L 10
 primOperator PrimIsInfinite{}         = Operator "isInfinite"         App    L 10
 primOperator (PrimCmp _ CmpLt)        = Operator "<"                  Infix  N 4
-primOperator (PrimCmp _ CmpGt)        = Operator ">"                  Infix  N 4
-primOperator (PrimCmp _ CmpLtEq)      = Operator "<="                 Infix  N 4
 primOperator (PrimCmp _ CmpGtEq)      = Operator ">="                 Infix  N 4
 primOperator (PrimCmp _ CmpEq)        = Operator "=="                 Infix  N 4
 primOperator (PrimCmp _ CmpNEq)       = Operator "/="                 Infix  N 4

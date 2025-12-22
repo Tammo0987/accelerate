@@ -386,7 +386,12 @@ data PrimFun sig where
   PrimToFloating   :: NumType a -> FloatingType b -> PrimFun (a -> b)
 
 -- | Comparison operator
-data Cmp = CmpLt | CmpGt | CmpLtEq | CmpGtEq | CmpEq | CmpNEq deriving Eq
+-- Greater-than and less-than-equal are missing, as they are equal to
+-- respectively less-than and greater-than-equal with their arguments swapped.
+-- We kept less-than and greater-than-equal as they are each others negation
+-- (similar to equal and not-equal).
+--
+data Cmp = CmpLt | CmpGtEq | CmpEq | CmpNEq deriving Eq
 
 expType :: (HasCallStack, IsArrayInstr arr) => PreOpenExp arr env t -> TypeR t
 expType = \case
@@ -771,8 +776,6 @@ liftExpVar = liftVar liftScalarType
 
 liftCmp :: Cmp -> CodeQ Cmp
 liftCmp CmpLt   = [|| CmpLt ||]
-liftCmp CmpGt   = [|| CmpGt ||]
-liftCmp CmpLtEq = [|| CmpLtEq ||]
 liftCmp CmpGtEq = [|| CmpGtEq ||]
 liftCmp CmpEq   = [|| CmpEq ||]
 liftCmp CmpNEq  = [|| CmpNEq ||]

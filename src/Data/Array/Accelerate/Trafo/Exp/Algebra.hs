@@ -135,8 +135,6 @@ evalPrimApp env f x
       PrimIsNaN ty              -> evalIsNaN ty x env
       PrimIsInfinite ty         -> evalIsInfinite ty x env
       PrimCmp ty CmpLt          -> evalLt ty x env
-      PrimCmp ty CmpGt          -> evalGt ty x env
-      PrimCmp ty CmpLtEq        -> evalLtEq ty x env
       PrimCmp ty CmpGtEq        -> evalGtEq ty x env
       PrimCmp ty CmpEq          -> evalEq ty x env
       PrimCmp ty CmpNEq         -> evalNEq ty x env
@@ -643,14 +641,6 @@ evalLt :: SingleType a -> (a,a) :-> PrimBool
 evalLt (NumSingleType (IntegralNumType ty)) | IntegralDict <- integralDict ty = bool2IfEq False (<)
 evalLt (NumSingleType (FloatingNumType ty)) | FloatingDict <- floatingDict ty = bool2 (<)
 
-evalGt :: SingleType a -> (a,a) :-> PrimBool
-evalGt (NumSingleType (IntegralNumType ty)) | IntegralDict <- integralDict ty = bool2IfEq False (>)
-evalGt (NumSingleType (FloatingNumType ty)) | FloatingDict <- floatingDict ty = bool2 (>)
-
-evalLtEq :: SingleType a -> (a,a) :-> PrimBool
-evalLtEq (NumSingleType (IntegralNumType ty)) | IntegralDict <- integralDict ty = bool2IfEq True (<=)
-evalLtEq (NumSingleType (FloatingNumType ty)) | FloatingDict <- floatingDict ty = bool2 (<=)
-
 evalGtEq :: SingleType a -> (a,a) :-> PrimBool
 evalGtEq (NumSingleType (IntegralNumType ty)) | IntegralDict <- integralDict ty = bool2IfEq True (>=)
 evalGtEq (NumSingleType (FloatingNumType ty)) | FloatingDict <- floatingDict ty = bool2 (>=)
@@ -723,8 +713,28 @@ evalLOr _ _
   = Nothing
 
 evalLNot :: PrimBool :-> PrimBool
-evalLNot x _   | PrimApp PrimLNot x' <- x = Stats.ruleFired "not/not" $ Just x'
-evalLNot x env                            = bool1 (not . toBool) x env
+evalLNot (PrimApp PrimLNot y)  _ = Stats.ruleFired "not/not" $ Just y
+evalLNot (PrimApp (PrimCmp tp c) y) _
+  -- Only negate a comparison operator on integral type.
+  -- On floating point types this is unsound due to the NaN semantics.
+  | NumSingleType (IntegralNumType _) <- tp
+  = Stats.ruleFired "not/cmp" $ Just $ PrimApp (PrimCmp tp (negateCmp c)) y
+-- Replace 'not (a && b)' by 'not a || not b',
+-- so other simplifications can trigger
+evalLNot (PrimApp PrimLAnd (Pair a b)) _ = Stats.ruleFired "not/and" $ Just $ PrimApp PrimLOr $ Pair
+  (PrimApp PrimLNot a)
+  (PrimApp PrimLNot b)
+-- Similarly, replace 'not (a || b)' by 'not a && not b'
+evalLNot (PrimApp PrimLOr (Pair a b)) _ = Stats.ruleFired "not/or" $ Just $ PrimApp PrimLAnd $ Pair
+  (PrimApp PrimLNot a)
+  (PrimApp PrimLNot b)
+evalLNot x env                     = bool1 (not . toBool) x env
+
+negateCmp :: Cmp -> Cmp
+negateCmp CmpLt = CmpGtEq
+negateCmp CmpGtEq = CmpLt
+negateCmp CmpEq = CmpNEq
+negateCmp CmpNEq = CmpEq
 
 evalFromIntegral :: IntegralType a -> NumType b -> a :-> b
 evalFromIntegral ta (IntegralNumType tb)
