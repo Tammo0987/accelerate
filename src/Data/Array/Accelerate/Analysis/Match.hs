@@ -721,12 +721,8 @@ matchPrimFun (PrimFloor _ s)            (PrimFloor _ t)            = matchIntegr
 matchPrimFun (PrimCeiling _ s)          (PrimCeiling _ t)          = matchIntegralType s t
 matchPrimFun (PrimIsNaN _)              (PrimIsNaN _)              = Just Refl
 matchPrimFun (PrimIsInfinite _)         (PrimIsInfinite _)         = Just Refl
-matchPrimFun (PrimLt _)                 (PrimLt _)                 = Just Refl
-matchPrimFun (PrimGt _)                 (PrimGt _)                 = Just Refl
-matchPrimFun (PrimLtEq _)               (PrimLtEq _)               = Just Refl
-matchPrimFun (PrimGtEq _)               (PrimGtEq _)               = Just Refl
-matchPrimFun (PrimEq _)                 (PrimEq _)                 = Just Refl
-matchPrimFun (PrimNEq _)                (PrimNEq _)                = Just Refl
+matchPrimFun (PrimCmp _ c1)             (PrimCmp _ c2)
+  | c1 == c2                                                       = Just Refl
 matchPrimFun (PrimMax _)                (PrimMax _)                = Just Refl
 matchPrimFun (PrimMin _)                (PrimMin _)                = Just Refl
 matchPrimFun (PrimFromIntegral _ s)     (PrimFromIntegral _ t)     = matchNumType s t
@@ -737,7 +733,6 @@ matchPrimFun PrimLNot                   PrimLNot                   = Just Refl
 
 matchPrimFun _ _
   = Nothing
-
 
 -- Contravariant function matching
 --
@@ -800,29 +795,9 @@ matchPrimFun' PrimLAnd                   PrimLAnd                   = Just Refl
 matchPrimFun' PrimLOr                    PrimLOr                    = Just Refl
 matchPrimFun' PrimLNot                   PrimLNot                   = Just Refl
 
-matchPrimFun' (PrimLt s) (PrimLt t)
-  | Just Refl <- matchSingleType s t
-  = Just Refl
-
-matchPrimFun' (PrimGt s) (PrimGt t)
-  | Just Refl <- matchSingleType s t
-  = Just Refl
-
-matchPrimFun' (PrimLtEq s) (PrimLtEq t)
-  | Just Refl <- matchSingleType s t
-  = Just Refl
-
-matchPrimFun' (PrimGtEq s) (PrimGtEq t)
-  | Just Refl <- matchSingleType s t
-  = Just Refl
-
-matchPrimFun' (PrimEq s) (PrimEq t)
-  | Just Refl <- matchSingleType s t
-  = Just Refl
-
-matchPrimFun' (PrimNEq s) (PrimNEq t)
-  | Just Refl <- matchSingleType s t
-  = Just Refl
+matchPrimFun' (PrimCmp s c1)             (PrimCmp t c2)
+  | c1 == c2                                                       
+  , Just Refl <- matchSingleType s t                                = Just Refl
 
 matchPrimFun' _ _
   = Nothing
@@ -952,8 +927,8 @@ commutes f x = case f of
   PrimBAnd{}    -> Just (swizzle x)
   PrimBOr{}     -> Just (swizzle x)
   PrimBXor{}    -> Just (swizzle x)
-  PrimEq{}      -> Just (swizzle x)
-  PrimNEq{}     -> Just (swizzle x)
+  PrimCmp _ CmpEq  -> Just (swizzle x)
+  PrimCmp _ CmpNEq -> Just (swizzle x)
   PrimMax{}     -> Just (swizzle x)
   PrimMin{}     -> Just (swizzle x)
   PrimLAnd      -> Just (swizzle x)

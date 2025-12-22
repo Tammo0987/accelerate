@@ -134,12 +134,12 @@ evalPrimApp env f x
       PrimCeiling ta tb         -> evalCeiling ta tb x env
       PrimIsNaN ty              -> evalIsNaN ty x env
       PrimIsInfinite ty         -> evalIsInfinite ty x env
-      PrimLt ty                 -> evalLt ty x env
-      PrimGt ty                 -> evalGt ty x env
-      PrimLtEq ty               -> evalLtEq ty x env
-      PrimGtEq ty               -> evalGtEq ty x env
-      PrimEq ty                 -> evalEq ty x env
-      PrimNEq ty                -> evalNEq ty x env
+      PrimCmp ty CmpLt          -> evalLt ty x env
+      PrimCmp ty CmpGt          -> evalGt ty x env
+      PrimCmp ty CmpLtEq        -> evalLtEq ty x env
+      PrimCmp ty CmpGtEq        -> evalGtEq ty x env
+      PrimCmp ty CmpEq          -> evalEq ty x env
+      PrimCmp ty CmpNEq         -> evalNEq ty x env
       PrimMax ty                -> evalMax ty x env
       PrimMin ty                -> evalMin ty x env
       PrimLAnd                  -> evalLAnd x env
@@ -166,8 +166,8 @@ commutes f x env = case f of
   PrimBAnd _    -> swizzle x
   PrimBOr _     -> swizzle x
   PrimBXor _    -> swizzle x
-  PrimEq _      -> swizzle x
-  PrimNEq _     -> swizzle x
+  PrimCmp _ CmpEq  -> swizzle x
+  PrimCmp _ CmpNEq -> swizzle x
   PrimMax _     -> swizzle x
   PrimMin _     -> swizzle x
   _             -> Nothing

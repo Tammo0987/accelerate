@@ -105,7 +105,7 @@ import qualified Data.Array.Accelerate.Sugar.Shape                  as Sugar
 
 import Data.Array.Accelerate.AST                                    ( Direction(..), Message(..)
                                                                     , PrimBool, PrimMaybe
-                                                                    , PrimFun(..), primFunType
+                                                                    , PrimFun(..), Cmp(..), primFunType
                                                                     , PrimConst(..), primConstType )
 import Data.Primitive.Vec
 
@@ -1176,22 +1176,22 @@ mkIsInfinite = mkPrimUnaryBool $ PrimIsInfinite floatingType
 -- Relational and equality operators
 
 mkLt :: (Elt t, IsSingle (EltR t)) => Exp t -> Exp t -> Exp Bool
-mkLt = mkPrimBinaryBool $ PrimLt singleType
+mkLt = mkPrimBinaryBool $ PrimCmp singleType CmpLt
 
 mkGt :: (Elt t, IsSingle (EltR t)) => Exp t -> Exp t -> Exp Bool
-mkGt = mkPrimBinaryBool $ PrimGt singleType
+mkGt = mkPrimBinaryBool $ PrimCmp singleType CmpGt
 
 mkLtEq :: (Elt t, IsSingle (EltR t)) => Exp t -> Exp t -> Exp Bool
-mkLtEq = mkPrimBinaryBool $ PrimLtEq singleType
+mkLtEq = mkPrimBinaryBool $ PrimCmp singleType CmpLtEq
 
 mkGtEq :: (Elt t, IsSingle (EltR t)) => Exp t -> Exp t -> Exp Bool
-mkGtEq = mkPrimBinaryBool $ PrimGtEq singleType
+mkGtEq = mkPrimBinaryBool $ PrimCmp singleType CmpGtEq
 
 mkEq :: (Elt t, IsSingle (EltR t)) => Exp t -> Exp t -> Exp Bool
-mkEq = mkPrimBinaryBool $ PrimEq singleType
+mkEq = mkPrimBinaryBool $ PrimCmp singleType CmpEq
 
 mkNEq :: (Elt t, IsSingle (EltR t)) => Exp t -> Exp t -> Exp Bool
-mkNEq = mkPrimBinaryBool $ PrimNEq singleType
+mkNEq = mkPrimBinaryBool $ PrimCmp singleType CmpNEq
 
 mkMax :: (Elt t, IsSingle (EltR t)) => Exp t -> Exp t -> Exp t
 mkMax = mkPrimBinary $ PrimMax singleType

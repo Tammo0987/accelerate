@@ -260,7 +260,7 @@ class NFData' op => DesugarAcc (op :: Type -> Type) where
         c = Alam (LeftHandSidePair (LeftHandSideSingle $ GroundRscalar scalarTypeInt) $ LeftHandSideWildcard $ buffersR tp)
               $ Abody
               $ Compute
-              $ mkBinary (PrimLt singleType) (paramIn' $ Var scalarTypeInt ZeroIdx)
+              $ mkBinary (PrimCmp singleType CmpLt) (paramIn' $ Var scalarTypeInt ZeroIdx)
               $ mkBinary
                 (PrimBShiftR integralType)
                 (mkBinary (PrimAdd numType) n (mkConstant (TupRsingle scalarTypeInt) 1))
@@ -1003,7 +1003,7 @@ shapeAssumes (env `Push` ArrayDescriptor shr sh _) =
     go (ShapeRsnoc shr') (TupRpair sh' (TupRsingle sz)) =
       mkBinary PrimLAnd
         (go shr' sh')
-        (mkBinary (PrimGtEq singleType) (paramIn scalarTypeInt sz) (Const scalarTypeInt 0))
+        (mkBinary (PrimCmp singleType CmpGtEq) (paramIn scalarTypeInt sz) (Const scalarTypeInt 0))
     go _ _ = internalError "Shape impossible"
 
 desugarExp :: HasCallStack
@@ -1131,8 +1131,8 @@ desugarBoundaryToFunction boundary (ArgArray _ repr@(ArrayR shr tp) sh buffers) 
     inbounds (ShapeRsnoc shr') (TupRpair ixs (TupRsingle ix)) (TupRpair szs (TupRsingle sz)) =
       mkBinary PrimLAnd
         (mkBinary PrimLAnd
-          (mkBinary (PrimGtEq singleType) (Evar ix) $ Const scalarTypeInt 0)
-          (mkBinary (PrimLt singleType) (Evar ix) $ paramIn scalarTypeInt sz)
+          (mkBinary (PrimCmp singleType CmpGtEq) (Evar ix) $ Const scalarTypeInt 0)
+          (mkBinary (PrimCmp singleType CmpLt) (Evar ix) $ paramIn scalarTypeInt sz)
         )
         (inbounds shr' ixs szs)
     inbounds _ _ _ = internalError "Illegal tuple for shape"
@@ -1145,16 +1145,16 @@ desugarBoundaryToFunction boundary (ArgArray _ repr@(ArrayR shr tp) sh buffers) 
     clamp ix sz = mkBinary (PrimMax singleType) (Const scalarTypeInt 0) $ mkBinary (PrimMin singleType) ix $ sub sz $ Const scalarTypeInt 1
 
     -- if ix < 0 then -ix
-    mirror ix sz = Cond (mkBinary (PrimLt singleType) ix (Const scalarTypeInt 0)) (PrimApp (PrimNeg numType) ix)
+    mirror ix sz = Cond (mkBinary (PrimCmp singleType CmpLt) ix (Const scalarTypeInt 0)) (PrimApp (PrimNeg numType) ix)
                  -- else if ix >= sz then sz - ((ix - sz) + 2)
-                 $ Cond (mkBinary (PrimGtEq singleType) ix sz) (sub sz (add (sub ix sz) $ Const scalarTypeInt 2))
+                 $ Cond (mkBinary (PrimCmp singleType CmpGtEq) ix sz) (sub sz (add (sub ix sz) $ Const scalarTypeInt 2))
                  -- else ix
                  $ ix
 
     -- if ix < 0 then sz + ix
-    wrap ix sz = Cond (mkBinary (PrimLt singleType) ix (Const scalarTypeInt 0)) (add sz ix)
+    wrap ix sz = Cond (mkBinary (PrimCmp singleType CmpLt) ix (Const scalarTypeInt 0)) (add sz ix)
                  -- else if ix >= sz then ix - sz
-                 $ Cond (mkBinary (PrimGtEq singleType) ix sz) (sub ix sz)
+                 $ Cond (mkBinary (PrimCmp singleType CmpGtEq) ix sz) (sub ix sz)
                  -- else ix
                  $ ix
 
@@ -1339,7 +1339,7 @@ mkDefaultFoldFunction (ArgFun op) def (ArgArray _ (ArrayR (ShapeRsnoc shr) tp) (
 
       condition =
         Lam (LeftHandSidePair (LeftHandSideSingle scalarTypeInt) (LeftHandSideWildcard tp))
-        $ Body $ mkBinary (PrimLt singleType) (Evar $ Var scalarTypeInt ZeroIdx) (paramsIn (TupRsingle scalarType) n)
+        $ Body $ mkBinary (PrimCmp singleType CmpLt) (Evar $ Var scalarTypeInt ZeroIdx) (paramsIn (TupRsingle scalarType) n)
     in
       ArgFun $ Lam lhsIdx $ Body
         $ Let lhs (While condition step initial)
@@ -1364,7 +1364,7 @@ mkDefaultScanPrepend dir (ArgExp def) (ArgArray _ repr@(ArrayR (ShapeRsnoc shr) 
     in
       Lam (lhs `LeftHandSidePair` LeftHandSideSingle scalarTypeInt)
         $ Body
-        $ Cond (mkBinary (PrimEq singleType) (Evar $ Var scalarTypeInt ZeroIdx) first) (weakenE (weakenSucc' k) def)
+        $ Cond (mkBinary (PrimCmp singleType CmpEq) (Evar $ Var scalarTypeInt ZeroIdx) first) (weakenE (weakenSucc' k) def)
         $ index repr sh input
         $ Pair (expVars $ value $ weakenSucc weakenId) x
 
@@ -1378,9 +1378,9 @@ mkDefaultScanFunction dir inc (ArgFun f) (ArgArray _ repr@(ArrayR (ShapeRsnoc sh
       x = Evar $ Var scalarTypeInt ZeroIdx
       y = mkBinary (op numType) x (paramIn scalarTypeInt inc)
       condition = case dir of
-        LeftToRight -> mkBinary (PrimGtEq singleType) y (mkConstant (TupRsingle scalarTypeInt) 0)
+        LeftToRight -> mkBinary (PrimCmp singleType CmpGtEq) y (mkConstant (TupRsingle scalarTypeInt) 0)
         RightToLeft -> case sh of
-          TupRpair _ n -> mkBinary (PrimLt singleType) y (paramsIn (TupRsingle scalarTypeInt) n)
+          TupRpair _ n -> mkBinary (PrimCmp singleType CmpLt) y (paramsIn (TupRsingle scalarTypeInt) n)
           _ -> error "Impossible pair"
       ix = expVars $ value $ weakenSucc weakenId
       index' = index repr sh input . Pair ix
@@ -1415,7 +1415,7 @@ mkDefaultFoldSegFunction itp (ArgFun f) def (ArgArray _ (ArrayR shr tp) sh input
       start  = PrimApp (PrimFromIntegral itp numType) $ index reprSeg shSeg segments $ Pair Nil x1
       end    = PrimApp (PrimFromIntegral itp numType) $ index reprSeg shSeg segments $ Pair Nil $ mkBinary (PrimAdd numType) x2 (mkConstant (TupRsingle scalarTypeInt) 1)
       index' = index (ArrayR shr tp) sh input
-      cond   = Lam (lhsE `LeftHandSidePair` LeftHandSideSingle scalarTypeInt) $ Body $ mkBinary (PrimLt singleType) (Evar $ Var scalarTypeInt ZeroIdx) end
+      cond   = Lam (lhsE `LeftHandSidePair` LeftHandSideSingle scalarTypeInt) $ Body $ mkBinary (PrimCmp singleType CmpLt) (Evar $ Var scalarTypeInt ZeroIdx) end
       step   = Lam (lhsE `LeftHandSidePair` LeftHandSideSingle scalarTypeInt) $ Body $ Pair
         (apply2 tp f (expVars $ valueE $ weakenSucc weakenId) (index' $ Pair (expVars $ fst' $ valueSh (weakenSucc' kE)) $ Evar $ Var scalarTypeInt ZeroIdx))
         (mkBinary (PrimAdd numType) (Evar $ Var scalarTypeInt ZeroIdx) (mkConstant (TupRsingle scalarTypeInt) 1))

@@ -758,12 +758,7 @@ summariseOpenExp = (terms +~ 1) . goE
             PrimIsNaN              t -> travFloatingType t
             PrimIsInfinite         t -> travFloatingType t
             PrimAtan2              t -> travFloatingType t
-            PrimLt                 t -> travSingleType t
-            PrimGt                 t -> travSingleType t
-            PrimLtEq               t -> travSingleType t
-            PrimGtEq               t -> travSingleType t
-            PrimEq                 t -> travSingleType t
-            PrimNEq                t -> travSingleType t
+            PrimCmp t _              -> travSingleType t
             PrimMax                t -> travSingleType t
             PrimMin                t -> travSingleType t
             PrimLAnd                 -> zero

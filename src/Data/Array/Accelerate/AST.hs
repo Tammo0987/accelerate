@@ -89,10 +89,8 @@ module Data.Array.Accelerate.AST (
   Exp, OpenExp, PreOpenExp(..),
   ArrayInstr(..), IsArrayInstr(..), NoArrayInstr,
   Boundary(..),
-  PrimConst(..),
-  PrimFun(..),
-  PrimBool,
-  PrimMaybe,
+  PrimConst(..), PrimFun(..), Cmp(..),
+  PrimBool, PrimMaybe,
 
   -- ** Extracting type information
   HasArraysR(..), arrayR,

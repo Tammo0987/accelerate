@@ -29,6 +29,7 @@ module Data.Array.Accelerate.AST.Exp (
   PreOpenExp(..),
   PrimConst(..),
   PrimFun(..),
+  Cmp(..),
   PrimBool,
   PrimMaybe,
   TAG,
@@ -362,12 +363,7 @@ data PrimFun sig where
   PrimIsInfinite :: FloatingType a -> PrimFun (a -> PrimBool)
 
   -- relational and equality operators
-  PrimLt   :: SingleType a -> PrimFun ((a, a) -> PrimBool)
-  PrimGt   :: SingleType a -> PrimFun ((a, a) -> PrimBool)
-  PrimLtEq :: SingleType a -> PrimFun ((a, a) -> PrimBool)
-  PrimGtEq :: SingleType a -> PrimFun ((a, a) -> PrimBool)
-  PrimEq   :: SingleType a -> PrimFun ((a, a) -> PrimBool)
-  PrimNEq  :: SingleType a -> PrimFun ((a, a) -> PrimBool)
+  PrimCmp  :: SingleType a -> Cmp -> PrimFun ((a, a) -> PrimBool)
   PrimMax  :: SingleType a -> PrimFun ((a, a) -> a)
   PrimMin  :: SingleType a -> PrimFun ((a, a) -> a)
 
@@ -388,6 +384,9 @@ data PrimFun sig where
   -- general conversion between types
   PrimFromIntegral :: IntegralType a -> NumType b -> PrimFun (a -> b)
   PrimToFloating   :: NumType a -> FloatingType b -> PrimFun (a -> b)
+
+-- | Comparison operator
+data Cmp = CmpLt | CmpGt | CmpLtEq | CmpGtEq | CmpEq | CmpNEq deriving Eq
 
 expType :: (HasCallStack, IsArrayInstr arr) => PreOpenExp arr env t -> TypeR t
 expType = \case
@@ -494,12 +493,7 @@ primFunType = \case
   PrimIsInfinite t          -> unary (floating t) tbool
 
   -- Relational and equality
-  PrimLt t                  -> compare' t
-  PrimGt t                  -> compare' t
-  PrimLtEq t                -> compare' t
-  PrimGtEq t                -> compare' t
-  PrimEq t                  -> compare' t
-  PrimNEq t                 -> compare' t
+  PrimCmp t _               -> compare' t
   PrimMax t                 -> binary' $ single t
   PrimMin t                 -> binary' $ single t
 
@@ -631,12 +625,7 @@ rnfPrimFun (PrimCeiling f i)          = rnfFloatingType f `seq` rnfIntegralType 
 rnfPrimFun (PrimIsNaN t)              = rnfFloatingType t
 rnfPrimFun (PrimIsInfinite t)         = rnfFloatingType t
 rnfPrimFun (PrimAtan2 t)              = rnfFloatingType t
-rnfPrimFun (PrimLt t)                 = rnfSingleType t
-rnfPrimFun (PrimGt t)                 = rnfSingleType t
-rnfPrimFun (PrimLtEq t)               = rnfSingleType t
-rnfPrimFun (PrimGtEq t)               = rnfSingleType t
-rnfPrimFun (PrimEq t)                 = rnfSingleType t
-rnfPrimFun (PrimNEq t)                = rnfSingleType t
+rnfPrimFun (PrimCmp t !_)             = rnfSingleType t
 rnfPrimFun (PrimMax t)                = rnfSingleType t
 rnfPrimFun (PrimMin t)                = rnfSingleType t
 rnfPrimFun PrimLAnd                   = ()
@@ -757,12 +746,7 @@ liftPrimFun (PrimCeiling ta tb)        = [|| PrimCeiling $$(liftFloatingType ta)
 liftPrimFun (PrimIsNaN t)              = [|| PrimIsNaN $$(liftFloatingType t) ||]
 liftPrimFun (PrimIsInfinite t)         = [|| PrimIsInfinite $$(liftFloatingType t) ||]
 liftPrimFun (PrimAtan2 t)              = [|| PrimAtan2 $$(liftFloatingType t) ||]
-liftPrimFun (PrimLt t)                 = [|| PrimLt $$(liftSingleType t) ||]
-liftPrimFun (PrimGt t)                 = [|| PrimGt $$(liftSingleType t) ||]
-liftPrimFun (PrimLtEq t)               = [|| PrimLtEq $$(liftSingleType t) ||]
-liftPrimFun (PrimGtEq t)               = [|| PrimGtEq $$(liftSingleType t) ||]
-liftPrimFun (PrimEq t)                 = [|| PrimEq $$(liftSingleType t) ||]
-liftPrimFun (PrimNEq t)                = [|| PrimNEq $$(liftSingleType t) ||]
+liftPrimFun (PrimCmp t c)              = [|| PrimCmp $$(liftSingleType t) $$(liftCmp c) ||]
 liftPrimFun (PrimMax t)                = [|| PrimMax $$(liftSingleType t) ||]
 liftPrimFun (PrimMin t)                = [|| PrimMin $$(liftSingleType t) ||]
 liftPrimFun PrimLAnd                   = [|| PrimLAnd ||]
@@ -784,6 +768,14 @@ liftELeftHandSide = liftLeftHandSide liftScalarType
 
 liftExpVar :: ExpVar env t -> CodeQ (ExpVar env t)
 liftExpVar = liftVar liftScalarType
+
+liftCmp :: Cmp -> CodeQ Cmp
+liftCmp CmpLt   = [|| CmpLt ||]
+liftCmp CmpGt   = [|| CmpGt ||]
+liftCmp CmpLtEq = [|| CmpLtEq ||]
+liftCmp CmpGtEq = [|| CmpGtEq ||]
+liftCmp CmpEq   = [|| CmpEq ||]
+liftCmp CmpNEq  = [|| CmpNEq ||]
 
 mkConstant :: TypeR t -> t -> PreOpenExp arr env t
 mkConstant (TupRsingle tp)  c        = Const tp c

@@ -465,12 +465,12 @@ primOperator PrimCeiling{}            = Operator "ceiling"            App    L 1
 primOperator PrimAtan2{}              = Operator "atan2"              App    L 10
 primOperator PrimIsNaN{}              = Operator "isNaN"              App    L 10
 primOperator PrimIsInfinite{}         = Operator "isInfinite"         App    L 10
-primOperator PrimLt{}                 = Operator "<"                  Infix  N 4
-primOperator PrimGt{}                 = Operator ">"                  Infix  N 4
-primOperator PrimLtEq{}               = Operator "<="                 Infix  N 4
-primOperator PrimGtEq{}               = Operator ">="                 Infix  N 4
-primOperator PrimEq{}                 = Operator "=="                 Infix  N 4
-primOperator PrimNEq{}                = Operator "/="                 Infix  N 4
+primOperator (PrimCmp _ CmpLt)        = Operator "<"                  Infix  N 4
+primOperator (PrimCmp _ CmpGt)        = Operator ">"                  Infix  N 4
+primOperator (PrimCmp _ CmpLtEq)      = Operator "<="                 Infix  N 4
+primOperator (PrimCmp _ CmpGtEq)      = Operator ">="                 Infix  N 4
+primOperator (PrimCmp _ CmpEq)        = Operator "=="                 Infix  N 4
+primOperator (PrimCmp _ CmpNEq)       = Operator "/="                 Infix  N 4
 primOperator PrimMax{}                = Operator "max"                App    L 10
 primOperator PrimMin{}                = Operator "min"                App    L 10
 primOperator PrimLAnd                 = Operator "&&"                 Infix  R 3

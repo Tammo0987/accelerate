@@ -284,12 +284,7 @@ encodePrimFun (PrimFloor a b)            = intHost $(hashQ "PrimFloor")         
 encodePrimFun (PrimCeiling a b)          = intHost $(hashQ "PrimCeiling")            <> encodeFloatingType a <> encodeIntegralType b
 encodePrimFun (PrimIsNaN a)              = intHost $(hashQ "PrimIsNaN")              <> encodeFloatingType a
 encodePrimFun (PrimIsInfinite a)         = intHost $(hashQ "PrimIsInfinite")         <> encodeFloatingType a
-encodePrimFun (PrimLt a)                 = intHost $(hashQ "PrimLt")                 <> encodeSingleType a
-encodePrimFun (PrimGt a)                 = intHost $(hashQ "PrimGt")                 <> encodeSingleType a
-encodePrimFun (PrimLtEq a)               = intHost $(hashQ "PrimLtEq")               <> encodeSingleType a
-encodePrimFun (PrimGtEq a)               = intHost $(hashQ "PrimGtEq")               <> encodeSingleType a
-encodePrimFun (PrimEq a)                 = intHost $(hashQ "PrimEq")                 <> encodeSingleType a
-encodePrimFun (PrimNEq a)                = intHost $(hashQ "PrimNEq")                <> encodeSingleType a
+encodePrimFun (PrimCmp a c)              = intHost $(hashQ "PrimCmp")                <> encodeSingleType a <> encodeCmp c
 encodePrimFun (PrimMax a)                = intHost $(hashQ "PrimMax")                <> encodeSingleType a
 encodePrimFun (PrimMin a)                = intHost $(hashQ "PrimMin")                <> encodeSingleType a
 encodePrimFun (PrimFromIntegral a b)     = intHost $(hashQ "PrimFromIntegral")       <> encodeIntegralType a <> encodeNumType b
@@ -298,6 +293,13 @@ encodePrimFun PrimLAnd                   = intHost $(hashQ "PrimLAnd")
 encodePrimFun PrimLOr                    = intHost $(hashQ "PrimLOr")
 encodePrimFun PrimLNot                   = intHost $(hashQ "PrimLNot")
 
+encodeCmp :: Cmp -> Builder
+encodeCmp CmpLt   = intHost $(hashQ "CmpLt")
+encodeCmp CmpGt   = intHost $(hashQ "CmpGt")
+encodeCmp CmpLtEq = intHost $(hashQ "CmpLtEq")
+encodeCmp CmpGtEq = intHost $(hashQ "CmpGtEq")
+encodeCmp CmpEq   = intHost $(hashQ "CmpEq")
+encodeCmp CmpNEq  = intHost $(hashQ "CmpNEq")
 
 encodeTypeR :: TypeR t -> Builder
 encodeTypeR TupRunit       = intHost $(hashQ "TupRunit")

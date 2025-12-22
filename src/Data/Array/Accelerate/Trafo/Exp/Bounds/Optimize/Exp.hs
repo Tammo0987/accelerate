@@ -554,23 +554,23 @@ primFunData g pf (TupRpair dx@(TupRsingle x) dy@(TupRsingle y)) =
                             then Just False
                             else Nothing
                         ) (dataToBasic x') (dataToBasic y')
-            (PrimLt    _) -> do
+            (PrimCmp _ CmpLt) -> do
                 always <- alwaysLT x y;
                 never  <- neverLT x y;
                 return $ TupRsingle $ boolData ((True <$ guard always) <|> (False <$ guard never))
-            (PrimGt    _) -> do
+            (PrimCmp _ CmpGt) -> do
                 always <- alwaysGT x y;
                 never  <- neverGT x y;
                 return $ TupRsingle $ boolData ((True <$ guard always) <|> (False <$ guard never))
-            (PrimLtEq  _) -> do
+            (PrimCmp _ CmpLtEq) -> do
                 always <- alwaysLTEQ x y;
                 never  <- neverLTEQ x y;
                 return $ TupRsingle $ boolData ((True <$ guard always) <|> (False <$ guard never))
-            (PrimGtEq  _) -> do
+            (PrimCmp _ CmpGtEq) -> do
                 always <- alwaysGTEQ x y;
                 never  <- neverGTEQ x y;
                 return $ TupRsingle $ boolData ((True <$ guard always) <|> (False <$ guard never))
-            (PrimEq   _) -> return $ TupRsingle (boolData Nothing)
+            (PrimCmp _ CmpEq) -> return $ TupRsingle (boolData Nothing)
             _            -> return $ bccsEmpty g
     -- temporary, will traverse and replace types of ESSA indices
 primFunData _ (PrimFromIntegral tp a) (TupRsingle x) = return $ TupRsingle $ retypeData (NumSingleType $ IntegralNumType tp) (NumSingleType a) x
@@ -694,12 +694,7 @@ primFunControl :: GroundsR t
                -> BCState s op prev '(benv, env) (ControlConstraints t)
 primFunControl g pf d (TupRpair (TupRsingle maps1) (TupRsingle maps2)) =
     case pf of
-        (PrimLt   _) -> interpretControlComparisson pf d
-        (PrimGt   _) -> interpretControlComparisson pf d
-        (PrimLtEq _) -> interpretControlComparisson pf d
-        (PrimGtEq _) -> interpretControlComparisson pf d
-        (PrimEq   _) -> interpretControlComparisson pf d
-        (PrimNEq  _) -> interpretControlComparisson pf d
+        (PrimCmp _ _) -> interpretControlComparisson pf d
         PrimLAnd     -> return $ TupRsingle maps
             where maps    = bccBind maps1 $ \(ControlMaps true1 false1) ->
                             bccBind maps2 $ \(ControlMaps true2 false2) ->
@@ -730,50 +725,50 @@ interpretControlComparisson pf (TupRpair (TupRsingle bcd1) (TupRsingle bcd2)) = 
             -- i1 + w1 < i2 + w2
             -- True branch: i1 <= i2 + (w2 - w1 - 1)
             -- False branch: i2 <= i1 + (w1 - w2)
-            PrimLt _   -> -- Debug.trace (show bd1 ++ "<" ++ show bd2 ++ "?") $
+            PrimCmp _ CmpLt -> -- Debug.trace (show bd1 ++ "<" ++ show bd2 ++ "?") $
                 m (ifI i1 i2 (w2 - w1 - 1)) (ifI i2 i1 (w1 - w2))
 
             -- i1 + w1 > i2 + w2
             -- True branch: i2 <= i1 + (w1 - w2 - 1)
             -- False branch: i1 <= i2 + (w2 - w1)
-            PrimGt _   -> m (ifI i2 i1 (w1 - w2 - 1)) (ifI i1 i2 (w2 - w1))
+            PrimCmp _ CmpGt -> m (ifI i2 i1 (w1 - w2 - 1)) (ifI i1 i2 (w2 - w1))
 
             -- i1 + w1 <= i2 + w2
             -- True branch: i1 <= i2 + (w2 - w1)
             -- False branch: i2 <= i1 + (w1 - w2 - 1)
-            PrimLtEq _ -> m (ifI i1 i2 (w2 - w1))     (ifI i2 i1 (w1 - w2 - 1))
+            PrimCmp _ CmpLtEq -> m (ifI i1 i2 (w2 - w1))     (ifI i2 i1 (w1 - w2 - 1))
 
             -- i1 + w1 >= i2 + w2
             -- True branch: i2 <= i1 + (w1 - w2)
             -- False branch: i1 <= i2 + (w2 - w1 - 1)
-            PrimGtEq _ -> m (ifI i2 i1 (w1 - w2))     (ifI i1 i2 (w2 - w1 - 1))
+            PrimCmp _ CmpGtEq -> m (ifI i2 i1 (w1 - w2))     (ifI i1 i2 (w2 - w1 - 1))
             -- Treat EQ as a LTEQ
-            PrimEq   _ -> m (ifI i1 i2 (w2 - w1))     (ifI i2 i1 (w1 - w2 - 1))
-            _         -> m [] []
+            PrimCmp _ CmpEq -> m (ifI i1 i2 (w2 - w1))     (ifI i2 i1 (w1 - w2 - 1))
+            _ -> m [] []
 
     let lowerF :: IG -> BasicDiff ESSAIdx t -> BasicDiff ESSAIdx t -> ControlMaps t
         lowerF _ (BDiff i1 w1) (BDiff i2 w2) = case pf of
             -- i1 + w1 < i2 + w2
             -- True  : i2 > i1 + (w1 - w2)  =>  i2 >= i1 + (w1 - w2 + 1)
             -- False : i1 >= i2 + (w2 - w1)
-            PrimLt _  -> m (ifI i2 i1 (w1 - w2 + 1)) (ifI i1 i2 (w2 - w1))
+            PrimCmp _ CmpLt -> m (ifI i2 i1 (w1 - w2 + 1)) (ifI i1 i2 (w2 - w1))
 
             -- i1 + w1 > i2 + w2
             -- True  : i1 > i2 + (w2 - w1)  =>  i1 >= i2 + (w2 - w1 + 1)
             -- False : i2 >= i1 + (w1 - w2)
-            PrimGt _  -> m (ifI i1 i2 (w2 - w1 + 1)) (ifI i2 i1 (w1 - w2))
+            PrimCmp _ CmpGt -> m (ifI i1 i2 (w2 - w1 + 1)) (ifI i2 i1 (w1 - w2))
 
             -- i1 + w1 <= i2 + w2
             -- True  : i2 >= i1 + (w1 - w2)
             -- False : i1 > i2 + (w2 - w1)  =>  i1 >= i2 + (w2 - w1 + 1)
-            PrimLtEq _ -> m (ifI i2 i1 (w1 - w2)) (ifI i1 i2 (w2 - w1 + 1))
+            PrimCmp _ CmpLtEq -> m (ifI i2 i1 (w1 - w2)) (ifI i1 i2 (w2 - w1 + 1))
 
             -- i1 + w1 >= i2 + w2
             -- True  : i1 >= i2 + (w2 - w1)
             -- False : i2 > i1 + (w1 - w2)  =>  i2 >= i1 + (w1 - w2 + 1)
-            PrimGtEq _ -> m (ifI i1 i2 (w2 - w1)) (ifI i2 i1 (w1 - w2 + 1))
+            PrimCmp _ CmpGtEq -> m (ifI i1 i2 (w2 - w1)) (ifI i2 i1 (w1 - w2 + 1))
             -- Treat EQ as a GTEQ
-            PrimEq   _ -> m (ifI i1 i2 (w2 - w1)) (ifI i2 i1 (w1 - w2 + 1))
+            PrimCmp _ CmpEq -> m (ifI i1 i2 (w2 - w1)) (ifI i2 i1 (w1 - w2 + 1))
             _         -> m [] []
 
     res <- bindCS2 bcd1 bcd2 lowerF upperF
