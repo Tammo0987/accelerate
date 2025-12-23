@@ -296,16 +296,6 @@ optimizeBoundsExp' (Coerce tp1 tp2 expr) = do
     (expr', _) <- optimizeBoundsExp expr
     return $ identityResult $ Coerce tp1 tp2 expr'
 
-optimizeBoundsExp' (IndexSlice slix shExpr expr) = do
-    (shExpr', _) <- optimizeBoundsExp shExpr
-    (expr'  , _) <- optimizeBoundsExp expr
-    return $ identityResult $ IndexSlice slix shExpr' expr'
-
-optimizeBoundsExp' (IndexFull slix shExpr expr) = do
-    (shExpr', _) <- optimizeBoundsExp shExpr
-    (expr'  , _) <- optimizeBoundsExp expr
-    return $ identityResult $ IndexFull slix shExpr' expr'
-
 optimizeBoundsExp' (ToIndex shr shrExpr expr) = do
     (shrExpr', _) <- optimizeBoundsExp shrExpr
     (expr'   , _) <- optimizeBoundsExp expr

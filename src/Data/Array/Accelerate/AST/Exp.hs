@@ -153,17 +153,6 @@ data PreOpenExp arr env t where
                 -> PreOpenExp arr env (Vec n s)
                 -> PreOpenExp arr env tup
 
-  -- Array indices & shapes
-  IndexSlice    :: SliceIndex slix sl co sh
-                -> PreOpenExp arr env slix
-                -> PreOpenExp arr env sh
-                -> PreOpenExp arr env sl
-
-  IndexFull     :: SliceIndex slix sl co sh
-                -> PreOpenExp arr env slix
-                -> PreOpenExp arr env sl
-                -> PreOpenExp arr env sh
-
   -- Shape and index conversion
   ToIndex       :: ShapeR sh
                 -> PreOpenExp arr env sh           -- shape of the array
@@ -402,8 +391,6 @@ expType = \case
   Nil                          -> TupRunit
   VecPack   vecR _             -> TupRsingle $ VectorScalarType $ vecRvector vecR
   VecUnpack vecR _             -> vecRtuple vecR
-  IndexSlice si _ _            -> shapeType $ sliceShapeR si
-  IndexFull  si _ _            -> shapeType $ sliceDomainR si
   ToIndex{}                    -> TupRsingle scalarTypeInt
   FromIndex shr _ _            -> shapeType shr
   Case _ ((_,e):_) _           -> expType e
@@ -549,8 +536,6 @@ rnfOpenExp topExp =
     Nil                       -> ()
     VecPack   vecr e          -> rnfVecR vecr `seq` rnfE e
     VecUnpack vecr e          -> rnfVecR vecr `seq` rnfE e
-    IndexSlice slice slix sh  -> rnfSliceIndex slice `seq` rnfE slix `seq` rnfE sh
-    IndexFull slice slix sl   -> rnfSliceIndex slice `seq` rnfE slix `seq` rnfE sl
     ToIndex shr sh ix         -> rnfShapeR shr `seq` rnfE sh `seq` rnfE ix
     FromIndex shr sh ix       -> rnfShapeR shr `seq` rnfE sh `seq` rnfE ix
     Case e rhs def            -> rnfE e `seq` rnfList (\(t,c) -> t `seq` rnfE c) rhs `seq` rnfMaybe rnfE def
@@ -681,8 +666,6 @@ liftOpenExp pexp =
     Nil                       -> [|| Nil ||]
     VecPack   vecr e          -> [|| VecPack   $$(liftVecR vecr) $$(liftE e) ||]
     VecUnpack vecr e          -> [|| VecUnpack $$(liftVecR vecr) $$(liftE e) ||]
-    IndexSlice slice slix sh  -> [|| IndexSlice $$(liftSliceIndex slice) $$(liftE slix) $$(liftE sh) ||]
-    IndexFull slice slix sl   -> [|| IndexFull $$(liftSliceIndex slice) $$(liftE slix) $$(liftE sl) ||]
     ToIndex shr sh ix         -> [|| ToIndex $$(liftShapeR shr) $$(liftE sh) $$(liftE ix) ||]
     FromIndex shr sh ix       -> [|| FromIndex $$(liftShapeR shr) $$(liftE sh) $$(liftE ix) ||]
     Case p rhs def            -> [|| Case $$(liftE p) $$(liftList (\(t,c) -> [|| (t, $$(liftE c)) ||]) rhs) $$(liftMaybe liftE def) ||]
@@ -807,8 +790,6 @@ formatExpOp = later $ \case
   Nil{}           -> "Nil"
   VecPack{}       -> "VecPack"
   VecUnpack{}     -> "VecUnpack"
-  IndexSlice{}    -> "IndexSlice"
-  IndexFull{}     -> "IndexFull"
   ToIndex{}       -> "ToIndex"
   FromIndex{}     -> "FromIndex"
   Case{}          -> "Case"
@@ -832,8 +813,6 @@ expIsTrivial arrayInstr = \case
   Nil                     -> True
   VecPack _ e             -> trav e
   VecUnpack _ e           -> trav e
-  IndexSlice _ a b        -> trav a && trav b
-  IndexFull _ a b         -> trav a && trav b
   ToIndex _ a b           -> trav a && trav b
   FromIndex _ a b         -> trav a && trav b
   Case scrutinee alts def -> trav scrutinee && all (trav . snd) alts && all trav def
@@ -865,8 +844,6 @@ expHasAssert = \case
   Nil                     -> False
   VecPack _ e             -> expHasAssert e
   VecUnpack _ e           -> expHasAssert e
-  IndexSlice _ a b        -> expHasAssert a || expHasAssert b
-  IndexFull _ a b         -> expHasAssert a || expHasAssert b
   ToIndex _ a b           -> expHasAssert a || expHasAssert b
   FromIndex _ a b         -> expHasAssert a || expHasAssert b
   Case scrutinee alts def -> expHasAssert scrutinee || any (expHasAssert . snd) alts || any expHasAssert def

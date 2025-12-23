@@ -503,18 +503,6 @@ matchOpenExp (VecUnpack r1 e1) (VecUnpack r2 e2)
   , Just Refl <- matchOpenExp e1 e2
   = Just Refl
 
-matchOpenExp (IndexSlice sliceIndex1 ix1 sh1) (IndexSlice sliceIndex2 ix2 sh2)
-  | Just Refl <- matchOpenExp ix1 ix2
-  , Just Refl <- matchOpenExp sh1 sh2
-  , Just Refl <- matchSliceIndex sliceIndex1 sliceIndex2
-  = Just Refl
-
-matchOpenExp (IndexFull sliceIndex1 ix1 sl1) (IndexFull sliceIndex2 ix2 sl2)
-  | Just Refl <- matchOpenExp ix1 ix2
-  , Just Refl <- matchOpenExp sl1 sl2
-  , Just Refl <- matchSliceIndex sliceIndex1 sliceIndex2
-  = Just Refl
-
 matchOpenExp (ToIndex _ sh1 i1) (ToIndex _ sh2 i2)
   | Just Refl <- matchOpenExp sh1 sh2
   , Just Refl <- matchOpenExp i1  i2

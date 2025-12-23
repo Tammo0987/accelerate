@@ -158,11 +158,10 @@ class NFData' op => DesugarAcc (op :: Type -> Type) where
 
 
   mkReplicate   :: SliceIndex slix sl co sh
-                -> Arg env (Var' slix)
                 -> Arg env (In  sl e)
                 -> Arg env (Out sh e)
                 -> OperationAcc op env ()
-  mkReplicate sliceIx slix = mkBackpermute (ArgFun $ extend sliceIx slix)
+  mkReplicate slix = mkBackpermute (ArgFun $ extend slix)
 
   mkSlice       :: SliceIndex slix sl co sh
                 -> Arg env (Var' slix)
@@ -684,7 +683,7 @@ desugarOpenAcc env = travA
           in
             alet lhs (travA a)
               $ alet (mapLeftHandSide GroundRscalar lhsSlix) (Compute slix')
-              $ alet (mapLeftHandSide GroundRscalar lhsSl)   (Compute $ IndexSlice sliceIx (paramsIn' $ valueSlix weakenId) (paramsIn' $ valueSh $ kSlix .> kIn))
+              $ alet (mapLeftHandSide GroundRscalar lhsSl)   (Compute $ indexSlice sliceIx (paramsIn' $ valueSh $ kSlix .> kIn))
               $ aletUnique lhsOut (desugarAlloc (ArrayR slr tp) (valueSl weakenId))
               $ alet (LeftHandSideWildcard TupRunit) (mkSlice sliceIx argSlix argIn argOut)
               $ Return (sl `TupRpair` valueOut weakenId)
@@ -702,15 +701,14 @@ desugarOpenAcc env = travA
             slix'   = desugarExp (weakenBEnv (kIn .> kSl) env) slix
             sl      = mapVars GroundRscalar $ valueSl $ kOut .> kSh .> kSlix .> kIn
             sh      = mapVars GroundRscalar $ valueSh kOut
-            argSlix = ArgVar $ valueSlix $ kOut .> kSh
             argIn   = ArgArray In  (ArrayR slr tp) sl (valueIn $ kOut .> kSh .> kSlix)
             argOut  = ArgArray Out (ArrayR shr tp) sh (valueOut weakenId)
           in
             alet lhs (travA a)
               $ alet (mapLeftHandSide GroundRscalar lhsSlix) (Compute slix')
-              $ alet (mapLeftHandSide GroundRscalar lhsSh)   (Compute $ IndexFull sliceIx (paramsIn' $ valueSlix weakenId) (paramsIn' $ valueSl $ kSlix .> kIn))
+              $ alet (mapLeftHandSide GroundRscalar lhsSh)   (Compute $ indexFull sliceIx (paramsIn' $ valueSlix weakenId) (paramsIn' $ valueSl $ kSlix .> kIn))
               $ aletUnique lhsOut (desugarAlloc (ArrayR shr tp) (valueSh weakenId))
-              $ alet (LeftHandSideWildcard TupRunit) (mkReplicate sliceIx argSlix argIn argOut)
+              $ alet (LeftHandSideWildcard TupRunit) (mkReplicate sliceIx argIn argOut)
               $ Return (sh `TupRpair` valueOut weakenId)
 
       Named.Fold f def a
@@ -1078,18 +1076,17 @@ linearIndex (TupRsingle t)   (TupRsingle var@(Var (GroundRbuffer _) _)) ix
 linearIndex _                _                _   = internalError "Tuple mismatch"
 
 extend :: SliceIndex slix sl co sh
-       -> Arg env (Var' slix)
        -> Fun env (sh -> sl)
-extend sliceIx (ArgVar slix)
+extend sliceIx
   | DeclareVars lhs _ value <- declareVars $ shapeType $ sliceDomainR sliceIx
-  = Lam lhs $ Body $ IndexSlice sliceIx (paramsIn' slix) $ expVars $ value weakenId
+  = Lam lhs $ Body $ indexSlice sliceIx $ expVars $ value weakenId
 
 restrict :: SliceIndex slix sl co sh
          -> Arg env (Var' slix)
          -> Fun env (sl -> sh)
 restrict sliceIx (ArgVar slix)
   | DeclareVars lhs _ value <- declareVars $ shapeType $ sliceShapeR sliceIx
-  = Lam lhs $ Body $ IndexFull sliceIx (paramsIn' slix) $ expVars $ value weakenId
+  = Lam lhs $ Body $ indexFull sliceIx (paramsIn' slix) $ expVars $ value weakenId
 
 -- Utility function to reduce the dimension by one. Defined as a function,
 -- as doing pattern matching in the guards in desugarOpenAcc will cause
@@ -1432,6 +1429,51 @@ mkDefaultFoldSegFunction itp (ArgFun f) def (ArgArray _ (ArrayR shr tp) sh input
         $ Let (lhsE `LeftHandSidePair` LeftHandSideWildcard (TupRsingle scalarTypeInt)) (While cond step initial)
         $ expVars $ valueE weakenId
 
+-- indexSlice and indexFull, as used by Slice and Replicate.
+-- Note that these two functions used to be constructors in PreOpenExp.
+-- Since they just restructure two tuples, we removed these constructors.
+-- We can better track and analyse the program by just using the tuple
+-- constructors (Pair and Nil).
+indexSlice
+  :: SliceIndex slix sl co sh
+  -- Original IndexSlice constructor took another argument, but that was not used:
+  -- -> PreOpenExp arr env slix
+  -> PreOpenExp arr env sh
+  -> PreOpenExp arr env sl
+indexSlice SliceNil _ = Nil
+indexSlice (SliceAll sliceIdx) (Pair sl sz) =
+  Pair (indexSlice sliceIdx sl) sz
+indexSlice (SliceFixed sliceIdx) (Pair sl _) =
+  indexSlice sliceIdx sl
+-- If 'expr' is not a Pair, bind it in a let and then recurse
+indexSlice sliceIdx expr
+  | tp <- shapeType $ sliceDomainR sliceIdx
+  , DeclareVars lhs _ value <- declareVars tp
+  = Let lhs expr
+  $ indexSlice sliceIdx $ expVars $ value weakenId
+
+indexFull
+  :: SliceIndex slix sl co t
+  -> PreOpenExp arr env slix
+  -> PreOpenExp arr env sl
+  -> PreOpenExp arr env t
+indexFull SliceNil _ _ = Nil
+indexFull (SliceAll sliceIdx) (Pair slx _) (Pair sh sz) =
+  Pair (indexFull sliceIdx slx sh) sz
+indexFull (SliceFixed sliceIdx) (Pair slx sz) sh =
+  Pair (indexFull sliceIdx slx sh) sz
+-- If 'sh' is not a Pair, bind it in a let and then recurse
+indexFull sliceIdx@SliceAll{} slx@Pair{} sh 
+  | tp <- shapeType $ sliceShapeR sliceIdx
+  , DeclareVars lhs k value <- declareVars tp
+  = Let lhs sh
+  $ indexFull sliceIdx (weakenE k slx) (expVars $ value weakenId)
+-- If 'slx' is not a Pair, bind it in a let and then recurse
+indexFull sliceIdx slx sh
+  | tp <- sliceEltR sliceIdx
+  , DeclareVars lhs k value <- declareVars tp
+  = Let lhs slx
+  $ indexFull sliceIdx (expVars $ value weakenId) (weakenE k sh)
 
 uncurry' :: Fun env (a -> b -> c) -> Fun env ((a, b) -> c)
 uncurry' (Lam lhs1 (Lam lhs2 f)) = Lam (LeftHandSidePair lhs1 lhs2) f

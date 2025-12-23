@@ -836,33 +836,6 @@ evalOpenExp pexp env arr@(EvalArrayInstr runArrayInstr) =
     VecUnpack vecR e -> do
       !v <- evalE e
       return $ unpack vecR v
-    IndexSlice slice slix sh -> do
-      !slix' <- evalE slix
-      !sh' <- evalE sh
-      return $ restrict slice slix' sh'
-      where
-        restrict :: SliceIndex slix sl co sh -> slix -> sh -> sl
-        restrict SliceNil              ()        ()         = ()
-        restrict (SliceAll sliceIdx)   (slx, ()) (sl, sz)   =
-          let sl' = restrict sliceIdx slx sl
-          in  (sl', sz)
-        restrict (SliceFixed sliceIdx) (slx, _i)  (sl, _sz) =
-          restrict sliceIdx slx sl
-
-    IndexFull slice slix sh -> do
-      !slix' <- evalE slix
-      !sh' <- evalE sh
-      return $ extend slice slix' sh'
-      where
-        extend :: SliceIndex slix sl co sh -> slix -> sl -> sh
-        extend SliceNil              ()        ()       = ()
-        extend (SliceAll sliceIdx)   (slx, ()) (sl, sz) =
-          let sh' = extend sliceIdx slx sl
-          in  (sh', sz)
-        extend (SliceFixed sliceIdx) (slx, sz) sl       =
-          let sh' = extend sliceIdx slx sl
-          in  (sh', sz)
-
     ToIndex shr sh ix -> do
       !sh' <- evalE sh
       !ix' <- evalE ix

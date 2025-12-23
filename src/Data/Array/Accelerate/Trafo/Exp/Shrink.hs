@@ -295,8 +295,6 @@ shrinkExp = Stats.substitution "shrinkE" . first getAny . shrinkE
       Pair x y                  -> Pair <$> shrinkE x <*> shrinkE y
       VecPack   vec e           -> VecPack   vec <$> shrinkE e
       VecUnpack vec e           -> VecUnpack vec <$> shrinkE e
-      IndexSlice x ix sh        -> IndexSlice x <$> shrinkE ix <*> shrinkE sh
-      IndexFull x ix sl         -> IndexFull x <$> shrinkE ix <*> shrinkE sl
       ToIndex shr sh ix         -> ToIndex shr <$> shrinkE sh <*> shrinkE ix
       FromIndex shr sh i        -> FromIndex shr <$> shrinkE sh <*> shrinkE i
       Case e rhs def            -> Case <$> shrinkE e <*> sequenceA [ (t,) <$> shrinkE c | (t,c) <- rhs ] <*> shrinkMaybeE def
@@ -367,8 +365,6 @@ usesOfExp range = countE
       Pair e1 e2                -> countE e1 <> countE e2
       VecPack   _ e             -> countE e
       VecUnpack _ e             -> countE e
-      IndexSlice _ ix sh        -> countE ix <> countE sh
-      IndexFull _ ix sl         -> countE ix <> countE sl
       FromIndex _ sh i          -> countE sh <> countE i
       ToIndex _ sh e            -> countE sh <> countE e
       Case e rhs def            -> countE e  <> mconcat [ countE c | (_,c) <- rhs ] <> maybe (Finite 0) countE def
@@ -400,8 +396,6 @@ arrayInstrsInExp = (`travE` [])
       Pair x y                   -> travE x $ travE y acc
       VecPack   _ e              -> travE e acc
       VecUnpack _ e              -> travE e acc
-      IndexSlice _ ix sh         -> travE ix $ travE sh acc
-      IndexFull _ ix sl          -> travE ix $ travE sl acc
       ToIndex _ sh ix            -> travE sh $ travE ix acc
       FromIndex _ sh i           -> travE sh $ travE i acc
       Case e rhs def             -> travE e $ travAE rhs $ travME def acc

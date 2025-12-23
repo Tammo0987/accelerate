@@ -233,8 +233,6 @@ simplifyOpenExp env = first getAny . cvtE
       Pair e1 e2                -> hoist2 (\a b -> pure $ Pair a b) (cvtE e1) (cvtE e2)
       VecPack   vec e           -> hoist (vecPack   vec) (cvtE e)
       VecUnpack vec e           -> hoist (vecUnpack vec) (cvtE e)
-      IndexSlice x ix sh        -> hoist2 (indexSlice x) (cvtE ix) (cvtE sh)
-      IndexFull x ix sl         -> hoist2 (indexFull  x) (cvtE ix) (cvtE sl)
       ToIndex shr sh ix         -> hoist2 (toIndex shr) (cvtE sh) (cvtE ix)
       FromIndex shr sh ix       -> hoist2 (fromIndex shr) (cvtE sh) (cvtE ix)
       Case e rhs def            -> hoist (\e' -> caseof e' (sequenceA [ (t,) <$> cvtE c | (t,c) <- rhs ]) (cvtMaybeE def)) (cvtE e)
@@ -402,38 +400,6 @@ simplifyOpenExp env = first getAny . cvtE
     fromIndex (ShapeRsnoc ShapeRz) _ ix
                                          = Stats.ruleFired "fromIndex DIM1" $ yes $ Pair Nil ix
     fromIndex shr sh ix                  = pure $ FromIndex shr sh ix
-
-    indexFull
-      :: SliceIndex slix sl co t
-      -> PreOpenExp arr env slix
-      -> PreOpenExp arr env sl
-      -> (Any, PreOpenExp arr env t)
-    indexFull SliceNil _ _ = yes Nil
-    indexFull (SliceAll sliceIdx)   (Pair slx _) (Pair sh sz)
-      = yes $ Pair (snd $ indexFull sliceIdx slx sh) sz
-    indexFull (SliceFixed sliceIdx) (Pair slx sz) sh
-      = yes $ Pair (snd $ indexFull sliceIdx slx sh) sz
-    indexFull sliceIdx slx sh
-      -- Expression slx or sh isn't a pair.
-      -- TODO: We could bind them in a Let, which may allow further reasoning
-      -- by the simplifier.
-      = pure $ IndexFull sliceIdx slx sh
-
-    indexSlice
-      :: SliceIndex slix t co sh
-      -> PreOpenExp arr env slix
-      -> PreOpenExp arr env sh
-      -> (Any, PreOpenExp arr env t)
-    indexSlice SliceNil _ _ = yes Nil
-    indexSlice (SliceAll sliceIdx)   (Pair slx _) (Pair sl sz)
-      = yes $ Pair (snd $ indexSlice sliceIdx slx sl) sz
-    indexSlice (SliceFixed sliceIdx) (Pair slx _) (Pair sl _)
-      = yes $ snd $ indexSlice sliceIdx slx sl
-    indexSlice sliceIdx slx sh
-      -- Expression slx or sh isn't a pair.
-      -- TODO: We could bind them in a Let, which may allow further reasoning
-      -- by the simplifier.
-      = pure $ IndexSlice sliceIdx slx sh
 
     vecPack :: KnownNat n => VecR n s tup -> PreOpenExp arr env tup -> (Any, PreOpenExp arr env (Vec n s))
     vecPack vecR (VecUnpack vecR' v)
@@ -688,8 +654,6 @@ summariseOpenExp = (terms +~ 1) . goE
         Pair e1 e2            -> travE e1 +++ travE e2 & terms +~ 1
         VecPack   _ e         -> travE e
         VecUnpack _ e         -> travE e
-        IndexSlice _ slix sh  -> travE slix +++ travE sh & terms +~ 1 -- +1 for sliceIndex
-        IndexFull _ slix sl   -> travE slix +++ travE sl & terms +~ 1 -- +1 for sliceIndex
         ToIndex _ sh ix       -> travE sh +++ travE ix
         FromIndex _ sh ix     -> travE sh +++ travE ix
         Case e rhs def        -> travE e +++ mconcat [ travE c | (_,c) <- rhs ] +++ maybe zero travE def

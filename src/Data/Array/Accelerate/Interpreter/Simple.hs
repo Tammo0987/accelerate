@@ -920,29 +920,6 @@ evalOpenExp pexp runarr env =
                                    in  (x1, x2)
     VecPack   vecR e            -> pack   vecR $! evalE e
     VecUnpack vecR e            -> unpack vecR $! evalE e
-    IndexSlice slice slix sh    -> restrict slice (evalE slix)
-                                                  (evalE sh)
-      where
-        restrict :: SliceIndex slix sl co sh -> slix -> sh -> sl
-        restrict SliceNil              ()        ()         = ()
-        restrict (SliceAll sliceIdx)   (slx, ()) (sl, sz)   =
-          let sl' = restrict sliceIdx slx sl
-          in  (sl', sz)
-        restrict (SliceFixed sliceIdx) (slx, _i)  (sl, _sz) =
-          restrict sliceIdx slx sl
-
-    IndexFull slice slix sh     -> extend slice (evalE slix)
-                                                (evalE sh)
-      where
-        extend :: SliceIndex slix sl co sh -> slix -> sl -> sh
-        extend SliceNil              ()        ()       = ()
-        extend (SliceAll sliceIdx)   (slx, ()) (sl, sz) =
-          let sh' = extend sliceIdx slx sl
-          in  (sh', sz)
-        extend (SliceFixed sliceIdx) (slx, sz) sl       =
-          let sh' = extend sliceIdx slx sl
-          in  (sh', sz)
-
     ToIndex shr sh ix           -> toIndex shr (evalE sh) (evalE ix)
     FromIndex shr sh ix         -> fromIndex shr (evalE sh) (evalE ix)
     Case e rhs def              -> evalE (caseof (evalE e) rhs)

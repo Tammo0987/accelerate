@@ -163,8 +163,6 @@ inlineVars lhsBound expr bound
       Nil                 -> Just Nil
       VecPack   vec e1    -> VecPack   vec <$> travE e1
       VecUnpack vec e1    -> VecUnpack vec <$> travE e1
-      IndexSlice si e1 e2 -> IndexSlice si <$> travE e1 <*> travE e2
-      IndexFull  si e1 e2 -> IndexFull  si <$> travE e1 <*> travE e2
       ToIndex   shr e1 e2 -> ToIndex   shr <$> travE e1 <*> travE e2
       FromIndex shr e1 e2 -> FromIndex shr <$> travE e1 <*> travE e2
       Case e1 rhs def     -> Case <$> travE e1 <*> mapM (\(t,c) -> (t,) <$> travE c) rhs <*> travMaybeE def
@@ -460,8 +458,6 @@ rebuildOpenExp v exp =
     Nil                 -> pure Nil
     VecPack   vec e     -> VecPack   vec   <$> rebuildOpenExp v e
     VecUnpack vec e     -> VecUnpack vec   <$> rebuildOpenExp v e
-    IndexSlice x ix sh  -> IndexSlice x    <$> rebuildOpenExp v ix <*> rebuildOpenExp v sh
-    IndexFull x ix sl   -> IndexFull x     <$> rebuildOpenExp v ix <*> rebuildOpenExp v sl
     ToIndex shr sh ix   -> ToIndex shr     <$> rebuildOpenExp v sh <*> rebuildOpenExp v ix
     FromIndex shr sh ix -> FromIndex shr   <$> rebuildOpenExp v sh <*> rebuildOpenExp v ix
     Case e rhs def      -> Case            <$> rebuildOpenExp v e  <*> sequenceA [ (t,) <$> rebuildOpenExp v c | (t,c) <- rhs ] <*> rebuildMaybeExp v def
@@ -536,8 +532,6 @@ rebuildArrayInstrOpenExp v = \case
     Nil                      -> pure Nil
     VecPack   vecr e         -> VecPack   vecr <$> travE e
     VecUnpack vecr e         -> VecUnpack vecr <$> travE e
-    IndexSlice slice slix sh -> IndexSlice slice <$> travE slix <*> travE sh
-    IndexFull  slice slix sl -> IndexFull  slice <$> travE slix <*> travE sl
     ToIndex   shr sh ix      -> ToIndex   shr <$> travE sh <*> travE ix
     FromIndex shr sh ix      -> FromIndex shr <$> travE sh <*> travE ix
     Case e rhs def           -> Case <$> travE e <*> sequenceA [ (t,) <$> travE c | (t,c) <- rhs ] <*> travME def

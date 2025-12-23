@@ -171,8 +171,6 @@ encodeOpenExp exp =
     VecUnpack _ e               -> intHost $(hashQ "VecUnpack")   <> travE e
     Const tp c                  -> intHost $(hashQ "Const")       <> encodeScalarConst tp c
     Undef tp                    -> intHost $(hashQ "Undef")       <> encodeScalarType tp
-    IndexSlice spec ix sh       -> intHost $(hashQ "IndexSlice")  <> travE ix <> travE sh <> encodeSliceIndex spec
-    IndexFull  spec ix sl       -> intHost $(hashQ "IndexFull")   <> travE ix <> travE sl <> encodeSliceIndex spec
     ToIndex _ sh i              -> intHost $(hashQ "ToIndex")     <> travE sh <> travE i
     FromIndex _ sh i            -> intHost $(hashQ "FromIndex")   <> travE sh <> travE i
     Case e rhs def              -> intHost $(hashQ "Case")        <> travE e  <> mconcat [ word8 t <> travE c | (t,c) <- rhs ] <> encodeMaybe travE def
