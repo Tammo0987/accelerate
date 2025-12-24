@@ -819,8 +819,6 @@ evalOpenExp pexp env arr@(EvalArrayInstr runArrayInstr) =
       return c
     Undef tp ->
       return $ undefElt (TupRsingle tp)
-    PrimConst c ->
-      return $ evalPrimConst c
     PrimApp f x -> do
       !v <- evalE x
       return $ evalPrim f v
@@ -970,11 +968,6 @@ evalCoerceScalar VectorScalarType{} (SingleScalarType tb) a = scalar tb a
 
 -- Scalar primitives
 -- -----------------
-
-evalPrimConst :: PrimConst a -> a
-evalPrimConst (PrimMinBound ty) = evalMinBound ty
-evalPrimConst (PrimMaxBound ty) = evalMaxBound ty
-evalPrimConst (PrimPi       ty) = evalPi ty
 
 evalPrim :: PrimFun (a -> r) -> (a -> r)
 evalPrim (PrimAdd                ty) = evalAdd ty

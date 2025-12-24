@@ -89,13 +89,12 @@ module Data.Array.Accelerate.AST (
   Exp, OpenExp, PreOpenExp(..),
   ArrayInstr(..), IsArrayInstr(..), NoArrayInstr,
   Boundary(..),
-  PrimConst(..), PrimFun(..), Cmp(..),
+  PrimFun(..), Cmp(..),
   PrimBool, PrimMaybe,
 
   -- ** Extracting type information
   HasArraysR(..), arrayR,
   expType,
-  primConstType,
   primFunType,
 
   -- ** Normal-form
@@ -110,7 +109,6 @@ module Data.Array.Accelerate.AST (
   rnfExpVar,
   rnfBoundary,
   rnfConst,
-  rnfPrimConst,
   rnfPrimFun,
 
   -- ** Template Haskell
@@ -124,7 +122,6 @@ module Data.Array.Accelerate.AST (
   liftELeftHandSide,
   liftExpVar,
   liftBoundary,
-  liftPrimConst,
   liftPrimFun,
   liftMessage,
 

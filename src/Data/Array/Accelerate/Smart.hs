@@ -105,8 +105,7 @@ import qualified Data.Array.Accelerate.Sugar.Shape                  as Sugar
 
 import Data.Array.Accelerate.AST                                    ( Direction(..), Message(..)
                                                                     , PrimBool, PrimMaybe
-                                                                    , PrimFun(..), Cmp(..), primFunType
-                                                                    , PrimConst(..), primConstType )
+                                                                    , PrimFun(..), Cmp(..), primFunType  )
 import Data.Primitive.Vec
 
 import Data.Kind
@@ -548,9 +547,6 @@ data PreSmartExp acc exp t where
                 -> exp t
                 -> PreSmartExp acc exp t
 
-  PrimConst     :: PrimConst t
-                -> PreSmartExp acc exp t
-
   PrimApp       :: PrimFun (a -> r)
                 -> exp a
                 -> PreSmartExp acc exp r
@@ -903,7 +899,6 @@ instance HasTypeR exp => HasTypeR (PreSmartExp acc exp) where
     Case{}                          -> internalError "encountered empty case"
     Cond _ e _                      -> typeR e
     While t _ _ _                   -> t
-    PrimConst c                     -> TupRsingle $ SingleScalarType $ primConstType c
     PrimApp f _                     -> snd $ primFunType f
     Index tp _ _                    -> tp
     LinearIndex tp _ _              -> tp
@@ -992,15 +987,23 @@ indexTail (Exp x) = mkExp $ Prj PairIdxLeft x
 -- Smart constructor for constants
 --
 
-mkMinBound :: (Elt t, IsBounded (EltR t)) => Exp t
-mkMinBound = mkExp $ PrimConst (PrimMinBound boundedType)
+mkMinBound :: forall t. (Elt t, IsBounded (EltR t)) => Exp t
+mkMinBound
+  | IntegralBoundedType tp <- boundedType @(EltR t)
+  , IntegralDict <- integralDict tp
+  = Exp $ SmartExp $ Const (SingleScalarType $ NumSingleType $ IntegralNumType tp) minBound
 
-mkMaxBound :: (Elt t, IsBounded (EltR t)) => Exp t
-mkMaxBound = mkExp $ PrimConst (PrimMaxBound boundedType)
+mkMaxBound :: forall t. (Elt t, IsBounded (EltR t)) => Exp t
+mkMaxBound
+  | IntegralBoundedType tp <- boundedType @(EltR t)
+  , IntegralDict <- integralDict tp
+  = Exp $ SmartExp $ Const (SingleScalarType $ NumSingleType $ IntegralNumType tp) maxBound
 
-mkPi :: (Elt r, IsFloating (EltR r)) => Exp r
-mkPi = mkExp $ PrimConst (PrimPi floatingType)
-
+mkPi :: forall r. (Elt r, IsFloating (EltR r)) => Exp r
+mkPi
+  | tp <- floatingType @(EltR r)
+  , FloatingDict <- floatingDict tp
+  = Exp $ SmartExp $ Const (SingleScalarType $ NumSingleType $ FloatingNumType tp) pi
 
 -- Smart constructors for primitive applications
 --
@@ -1404,7 +1407,6 @@ formatPreExpOp = later $ \case
   Case{}        -> "Case"
   Cond{}        -> "Cond"
   While{}       -> "While"
-  PrimConst{}   -> "PrimConst"
   PrimApp{}     -> "PrimApp"
   Index{}       -> "Index"
   LinearIndex{} -> "LinearIndex"

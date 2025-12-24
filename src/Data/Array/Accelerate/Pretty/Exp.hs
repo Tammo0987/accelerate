@@ -120,7 +120,6 @@ prettyPreOpenExp ctx prettyArrayInstr env exp =
         op  = primOperator f
         op' = isInfix op ? (Operator (parens (opName op)) App L 10, op)
     --
-    PrimConst c           -> prettyPrimConst c
     Const tp c            -> prettyConst (TupRsingle tp) c
     Pair{}                -> prettyTuple ctx prettyArrayInstr env exp
     Nil                   -> "()"
@@ -275,11 +274,6 @@ prettyConst :: TypeR e -> e -> Adoc
 prettyConst tp x =
   let y = showElt tp x
   in  parensIf (any isSpace y) (pretty y)
-
-prettyPrimConst :: PrimConst a -> Adoc
-prettyPrimConst PrimMinBound{} = "minBound"
-prettyPrimConst PrimMaxBound{} = "maxBound"
-prettyPrimConst PrimPi{}       = "pi"
 
 data Operator = Operator
   { opName            :: Adoc

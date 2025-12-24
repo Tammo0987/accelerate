@@ -169,7 +169,6 @@ inlineVars lhsBound expr bound
       Cond e1 e2 e3       -> Cond <$> travE e1 <*> travE e2 <*> travE e3
       While f1 f2 e1      -> While <$> travF f1 <*> travF f2 <*> travE e1
       Const t c           -> Just $ Const t c
-      PrimConst c         -> Just $ PrimConst c
       PrimApp p e1        -> PrimApp p <$> travE e1
       ArrayInstr arr e1   -> ArrayInstr arr <$> travE e1
       ShapeSize shr e1    -> ShapeSize shr <$> travE e1
@@ -448,7 +447,6 @@ rebuildOpenExp
 rebuildOpenExp v exp =
   case exp of
     Const t c           -> pure $ Const t c
-    PrimConst c         -> pure $ PrimConst c
     Undef t             -> pure $ Undef t
     Evar var            -> expOut          <$> v var
     Let lhs a b
@@ -538,7 +536,6 @@ rebuildArrayInstrOpenExp v = \case
     Cond e1 e2 e3            -> Cond <$> travE e1 <*> travE e2 <*> travE e3
     While c f x              -> While <$> travF c <*> travF f <*> travE x
     Const tp c               -> pure $ Const tp c
-    PrimConst prim           -> pure $ PrimConst prim
     PrimApp f x              -> PrimApp f <$> travE x
     ArrayInstr arr x         -> v arr <*> travE x
     ShapeSize shr sh         -> ShapeSize shr <$> travE sh

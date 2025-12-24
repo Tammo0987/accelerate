@@ -62,11 +62,6 @@ instance BCIsSingle FloatingType where
     reprBCSingle TypeFloat  = BCSingleDict
     reprBCSingle TypeDouble = BCSingleDict
 
-instance BCIsSingle PrimConst where
-    reprBCSingle (PrimMinBound (IntegralBoundedType int)) = reprBCSingle int
-    reprBCSingle (PrimMaxBound (IntegralBoundedType int)) = reprBCSingle int
-    reprBCSingle (PrimPi float)                           = reprBCSingle float
-
 absurdScalarBuffer :: ScalarType (Buffer t) -> Void
 absurdScalarBuffer (SingleScalarType (NumSingleType (IntegralNumType int  ))) = case int   of {}
 absurdScalarBuffer (SingleScalarType (NumSingleType (FloatingNumType float))) = case float of {}

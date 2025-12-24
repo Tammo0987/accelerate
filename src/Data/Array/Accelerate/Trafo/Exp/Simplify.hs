@@ -237,7 +237,6 @@ simplifyOpenExp env = first getAny . cvtE
       FromIndex shr sh ix       -> hoist2 (fromIndex shr) (cvtE sh) (cvtE ix)
       Case e rhs def            -> hoist (\e' -> caseof e' (sequenceA [ (t,) <$> cvtE c | (t,c) <- rhs ]) (cvtMaybeE def)) (cvtE e)
       Cond p t e                -> hoist (\p' -> cond p' (cvtE t) (cvtE e)) (cvtE p)
-      PrimConst c               -> pure $ PrimConst c
       PrimApp f x               -> hoist (evalPrimApp env f) (cvtE x)
       ArrayInstr arr e          -> hoist (arrayInstr arr) (cvtE e)
       ShapeSize shr sh          -> hoist (shapeSize shr) (cvtE sh)
@@ -304,7 +303,6 @@ simplifyOpenExp env = first getAny . cvtE
     shouldInline Evar{} = True
     shouldInline (ArrayInstr arr Nil) = inlineArrayInstr arr
     shouldInline Const{} = True
-    shouldInline PrimConst{} = True
     shouldInline _ = False
 
     -- Simplify conditional expressions, in particular by eliminating branches
@@ -609,11 +607,6 @@ summariseOpenExp = (terms +~ 1) . goE
     travA :: arr t -> Stats
     travA _ = zero & vars +~ 1  -- assume an array index, else we should have failed elsewhere
 
-    travC :: PrimConst c -> Stats
-    travC (PrimMinBound t) = travBoundedType t & terms +~ 1
-    travC (PrimMaxBound t) = travBoundedType t & terms +~ 1
-    travC (PrimPi t)       = travFloatingType t & terms +~ 1
-
     travIntegralType :: IntegralType t -> Stats
     travIntegralType _ = zero & types +~ 1
 
@@ -659,7 +652,6 @@ summariseOpenExp = (terms +~ 1) . goE
         Case e rhs def        -> travE e +++ mconcat [ travE c | (_,c) <- rhs ] +++ maybe zero travE def
         Cond p t e            -> travE p +++ travE t +++ travE e
         While p f x           -> travF p +++ travF f +++ travE x
-        PrimConst c           -> travC c
         ArrayInstr a e        -> travA a +++ travE e
         ShapeSize _ sh        -> travE sh
         PrimApp f x           -> travPrimFun f +++ travE x

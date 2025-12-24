@@ -245,7 +245,6 @@ shrinkExp = Stats.substitution "shrinkE" . first getAny . shrinkE
     cheap (Pair e1 e2)   = cheap e1 && cheap e2
     cheap Nil            = True
     cheap Const{}        = True
-    cheap PrimConst{}    = True
     cheap Undef{}        = True
     cheap (Coerce _ _ e) = cheap e
     cheap (ArrayInstr arr Nil) = inlineArrayInstr arr
@@ -300,7 +299,6 @@ shrinkExp = Stats.substitution "shrinkE" . first getAny . shrinkE
       Case e rhs def            -> Case <$> shrinkE e <*> sequenceA [ (t,) <$> shrinkE c | (t,c) <- rhs ] <*> shrinkMaybeE def
       Cond p t e                -> Cond <$> shrinkE p <*> shrinkE t <*> shrinkE e
       While p f x               -> While <$> shrinkF p <*> shrinkF f <*> shrinkE x
-      PrimConst c               -> pure (PrimConst c)
       PrimApp f x               -> PrimApp f <$> shrinkE x
       ArrayInstr arr e          -> ArrayInstr arr <$> shrinkE e
       ShapeSize shr sh          -> ShapeSize shr <$> shrinkE sh
@@ -370,7 +368,6 @@ usesOfExp range = countE
       Case e rhs def            -> countE e  <> mconcat [ countE c | (_,c) <- rhs ] <> maybe (Finite 0) countE def
       Cond p t e                -> countE p  <> countE t <> countE e
       While p f x               -> countE x  <> loopCount (usesOfFun range p) <> loopCount (usesOfFun range f)
-      PrimConst _               -> Finite 0
       PrimApp _ x               -> countE x
       ArrayInstr _ e            -> countE e
       ShapeSize _ sh            -> countE sh
@@ -401,7 +398,6 @@ arrayInstrsInExp = (`travE` [])
       Case e rhs def             -> travE e $ travAE rhs $ travME def acc
       Cond p t e                 -> travE p $ travE t $ travE e acc
       While p f x                -> travF p $ travF f $ travE x acc
-      PrimConst _                -> acc
       PrimApp _ x                -> travE x acc
       ArrayInstr arr e           -> Exists arr : travE e acc
       ShapeSize _ sh             -> travE sh acc

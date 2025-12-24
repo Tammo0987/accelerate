@@ -177,7 +177,6 @@ encodeOpenExp exp =
     Cond c t e                  -> intHost $(hashQ "Cond")        <> travE c  <> travE t  <> travE e
     While p f x                 -> intHost $(hashQ "While")       <> travF p  <> travF f  <> travE x
     PrimApp f x                 -> intHost $(hashQ "PrimApp")     <> encodePrimFun f <> travE x
-    PrimConst c                 -> intHost $(hashQ "PrimConst")   <> encodePrimConst c
     ArrayInstr arr e            -> intHost $(hashQ "ArrayInstr")  <> encodeArrayInstr arr <> travE e
     ShapeSize _ sh              -> intHost $(hashQ "ShapeSize")   <> travE sh
     Foreign _ _ f e             -> intHost $(hashQ "Foreign")     <> encodeOpenFun f <> travE e
@@ -226,11 +225,6 @@ encodeFloatingConst :: FloatingType t -> t -> Builder
 encodeFloatingConst TypeHalf{}    (Half (CUShort x)) = intHost $(hashQ "Half")    <> word16Host x
 encodeFloatingConst TypeFloat{}   x                  = intHost $(hashQ "Float")   <> floatHost x
 encodeFloatingConst TypeDouble{}  x                  = intHost $(hashQ "Double")  <> doubleHost x
-
-encodePrimConst :: PrimConst c -> Builder
-encodePrimConst (PrimMinBound t)  = intHost $(hashQ "PrimMinBound") <> encodeBoundedType t
-encodePrimConst (PrimMaxBound t)  = intHost $(hashQ "PrimMaxBound") <> encodeBoundedType t
-encodePrimConst (PrimPi t)        = intHost $(hashQ "PrimPi")       <> encodeFloatingType t
 
 encodePrimFun :: PrimFun f -> Builder
 encodePrimFun (PrimAdd a)                = intHost $(hashQ "PrimAdd")                <> encodeNumType a
@@ -317,9 +311,6 @@ encodeSingleType (NumSingleType t) = intHost $(hashQ "NumSingleType")    <> enco
 
 encodeVectorType :: VectorType (Vec n t) -> Builder
 encodeVectorType (VectorType n t) = intHost $(hashQ "VectorType") <> intHost n <> encodeSingleType t
-
-encodeBoundedType :: BoundedType t -> Builder
-encodeBoundedType (IntegralBoundedType t) = intHost $(hashQ "IntegralBoundedType") <> encodeIntegralType t
 
 encodeNumType :: NumType t -> Builder
 encodeNumType (IntegralNumType t) = intHost $(hashQ "IntegralNumType") <> encodeIntegralType t

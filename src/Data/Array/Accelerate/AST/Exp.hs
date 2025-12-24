@@ -27,7 +27,6 @@ module Data.Array.Accelerate.AST.Exp (
   ELeftHandSide, ExpVar, ExpVars, expVars, undefs,
   PreOpenFun(..),
   PreOpenExp(..),
-  PrimConst(..),
   PrimFun(..),
   Cmp(..),
   PrimBool,
@@ -38,14 +37,12 @@ module Data.Array.Accelerate.AST.Exp (
 
   -- ** Extracting type information
   expType,
-  primConstType,
   primFunType,
 
   -- ** Normal-form
   rnfOpenFun,
   rnfOpenExp,
   rnfConst,
-  rnfPrimConst,
   rnfPrimFun,
   rnfMaybe,
   rnfELeftHandSide,
@@ -57,7 +54,6 @@ module Data.Array.Accelerate.AST.Exp (
   liftMaybe,
   liftELeftHandSide,
   liftExpVar,
-  liftPrimConst,
   liftPrimFun,
 
   -- ** Miscellaneous
@@ -74,7 +70,6 @@ import Data.Array.Accelerate.AST.Var
 import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.Representation.Elt
 import Data.Array.Accelerate.Representation.Shape
-import Data.Array.Accelerate.Representation.Slice
 import Data.Array.Accelerate.Representation.Tag
 import Data.Array.Accelerate.Representation.Type
 import Data.Array.Accelerate.Representation.Vec
@@ -195,9 +190,6 @@ data PreOpenExp arr env t where
                 -> t
                 -> PreOpenExp arr env t
 
-  PrimConst     :: PrimConst t
-                -> PreOpenExp arr env t
-
   -- Primitive scalar operations
   PrimApp       :: PrimFun (a -> r)
                 -> PreOpenExp arr env a
@@ -270,17 +262,6 @@ instance IsArrayInstr NoArrayInstr where
 
 data Direction = LeftToRight | RightToLeft
   deriving Eq
-
--- |Primitive constant values
---
-data PrimConst ty where
-
-  -- constants from Bounded
-  PrimMinBound  :: BoundedType a -> PrimConst a
-  PrimMaxBound  :: BoundedType a -> PrimConst a
-
-  -- constant from Floating
-  PrimPi        :: FloatingType a -> PrimConst a
 
 
 -- |Primitive scalar operations
@@ -400,7 +381,6 @@ expType = \case
   While _ (Lam lhs _) _        -> lhsToTupR lhs
   While{}                      -> internalError "What's the matter, you're running in the shadows"
   Const tR _                   -> TupRsingle tR
-  PrimConst c                  -> TupRsingle $ SingleScalarType $ primConstType c
   PrimApp f _                  -> snd $ primFunType f
   ArrayInstr arr _             -> arrayInstrType arr
   ShapeSize{}                  -> TupRsingle scalarTypeInt
@@ -408,18 +388,6 @@ expType = \case
   Coerce _ tR _                -> TupRsingle tR
   Assert _ e2                  -> expType e2
   Assume _ e2                  -> expType e2
-
-primConstType :: PrimConst a -> SingleType a
-primConstType = \case
-  PrimMinBound t -> bounded t
-  PrimMaxBound t -> bounded t
-  PrimPi       t -> floating t
-  where
-    bounded :: BoundedType a -> SingleType a
-    bounded (IntegralBoundedType t) = NumSingleType $ IntegralNumType t
-
-    floating :: FloatingType t -> SingleType t
-    floating = NumSingleType . FloatingNumType
 
 primFunType :: PrimFun (a -> b) -> (TypeR a, TypeR b)
 primFunType = \case
@@ -541,7 +509,6 @@ rnfOpenExp topExp =
     Case e rhs def            -> rnfE e `seq` rnfList (\(t,c) -> t `seq` rnfE c) rhs `seq` rnfMaybe rnfE def
     Cond p e1 e2              -> rnfE p `seq` rnfE e1 `seq` rnfE e2
     While p f x               -> rnfF p `seq` rnfF f `seq` rnfE x
-    PrimConst c               -> rnfPrimConst c
     PrimApp f x               -> rnfPrimFun f `seq` rnfE x
     ArrayInstr arr e          -> rnfArrayInstr arr `seq` rnfE e
     ShapeSize shr sh          -> rnfShapeR shr `seq` rnfE sh
@@ -559,11 +526,6 @@ rnfConst :: TypeR t -> t -> ()
 rnfConst TupRunit          ()    = ()
 rnfConst (TupRsingle t)    !_    = rnfScalarType t  -- scalars should have (nf == whnf)
 rnfConst (TupRpair ta tb)  (a,b) = rnfConst ta a `seq` rnfConst tb b
-
-rnfPrimConst :: PrimConst c -> ()
-rnfPrimConst (PrimMinBound t) = rnfBoundedType t
-rnfPrimConst (PrimMaxBound t) = rnfBoundedType t
-rnfPrimConst (PrimPi t)       = rnfFloatingType t
 
 rnfPrimFun :: PrimFun f -> ()
 rnfPrimFun (PrimAdd t)                = rnfNumType t
@@ -671,18 +633,12 @@ liftOpenExp pexp =
     Case p rhs def            -> [|| Case $$(liftE p) $$(liftList (\(t,c) -> [|| (t, $$(liftE c)) ||]) rhs) $$(liftMaybe liftE def) ||]
     Cond p t e                -> [|| Cond $$(liftE p) $$(liftE t) $$(liftE e) ||]
     While p f x               -> [|| While $$(liftF p) $$(liftF f) $$(liftE x) ||]
-    PrimConst t               -> [|| PrimConst $$(liftPrimConst t) ||]
     PrimApp f x               -> [|| PrimApp $$(liftPrimFun f) $$(liftE x) ||]
     ArrayInstr arr x          -> [|| ArrayInstr $$(liftArrayInstr arr) $$(liftE x) ||]
     ShapeSize shr ix          -> [|| ShapeSize $$(liftShapeR shr) $$(liftE ix) ||]
     Coerce t1 t2 e            -> [|| Coerce $$(liftScalarType t1) $$(liftScalarType t2) $$(liftE e) ||]
     Assert e1 e2              -> [|| Assert $$(liftE e1) $$(liftE e2) ||]
     Assume e1 e2              -> [|| Assume $$(liftE e1) $$(liftE e2) ||]
-
-liftPrimConst :: PrimConst c -> CodeQ (PrimConst c)
-liftPrimConst (PrimMinBound t) = [|| PrimMinBound $$(liftBoundedType t) ||]
-liftPrimConst (PrimMaxBound t) = [|| PrimMaxBound $$(liftBoundedType t) ||]
-liftPrimConst (PrimPi t)       = [|| PrimPi $$(liftFloatingType t) ||]
 
 liftPrimFun :: PrimFun f -> CodeQ (PrimFun f)
 liftPrimFun (PrimAdd t)                = [|| PrimAdd $$(liftNumType t) ||]
@@ -795,7 +751,6 @@ formatExpOp = later $ \case
   Case{}          -> "Case"
   Cond{}          -> "Cond"
   While{}         -> "While"
-  PrimConst{}     -> "PrimConst"
   PrimApp{}       -> "PrimApp"
   ArrayInstr ar _ -> fromString $ showArrayInstrOp ar
   ShapeSize{}     -> "ShapeSize"
@@ -817,7 +772,6 @@ expIsTrivial arrayInstr = \case
   FromIndex _ a b         -> trav a && trav b
   Case scrutinee alts def -> trav scrutinee && all (trav . snd) alts && all trav def
   Cond c t f              -> trav c && trav t && trav f
-  PrimConst{}             -> True
   PrimApp _ a             -> trav a
   ArrayInstr ar a         -> arrayInstr ar && trav a
   ShapeSize _ a           -> trav a
@@ -849,7 +803,6 @@ expHasAssert = \case
   Case scrutinee alts def -> expHasAssert scrutinee || any (expHasAssert . snd) alts || any expHasAssert def
   Cond c t f              -> expHasAssert c || expHasAssert t || expHasAssert f
   While c s i             -> funHasAssert c || funHasAssert s || expHasAssert i
-  PrimConst{}             -> False
   PrimApp _ a             -> expHasAssert a
   ArrayInstr _ a          -> expHasAssert a
   ShapeSize _ a           -> expHasAssert a

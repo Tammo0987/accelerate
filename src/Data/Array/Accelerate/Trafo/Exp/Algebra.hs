@@ -60,7 +60,6 @@ propagate = cvtE
     cvtE :: PreOpenExp arr env e -> Maybe e
     cvtE exp = case exp of
       Const _ c                                 -> Just c
-      PrimConst c                               -> Just (evalPrimConst c)
       Nil                                       -> Just ()
       Pair e1 e2                                -> (,) <$> cvtE e1 <*> cvtE e2
       -- Evar is already inlined if it has a constant value
@@ -768,22 +767,3 @@ evalToFloating (FloatingNumType ta) tb x env
 
   | FloatingDict <- floatingDict ta
   , FloatingDict <- floatingDict tb = eval1 (NumSingleType $ FloatingNumType tb) realToFrac x env
-
-
--- Scalar primitives
--- -----------------
-
-evalPrimConst :: PrimConst a -> a
-evalPrimConst (PrimMinBound ty) = evalMinBound ty
-evalPrimConst (PrimMaxBound ty) = evalMaxBound ty
-evalPrimConst (PrimPi       ty) = evalPi ty
-
-evalMinBound :: BoundedType a -> a
-evalMinBound (IntegralBoundedType ty) | IntegralDict <- integralDict ty = minBound
-
-evalMaxBound :: BoundedType a -> a
-evalMaxBound (IntegralBoundedType ty) | IntegralDict <- integralDict ty = maxBound
-
-evalPi :: FloatingType a -> a
-evalPi ty | FloatingDict <- floatingDict ty = pi
-

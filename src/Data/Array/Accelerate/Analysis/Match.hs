@@ -540,9 +540,6 @@ matchOpenExp (Assume g1 e1) (Assume g2 e2)
   | Just Refl <- matchOpenExp g1 g2
   = matchOpenExp e1 e2
 
-matchOpenExp (PrimConst c1) (PrimConst c2)
-  = matchPrimConst c1 c2
-
 matchOpenExp (PrimApp f1 x1) (PrimApp f2 x2)
   | Just x1'  <- commutes f1 x1
   , Just x2'  <- commutes f2 x2
@@ -646,14 +643,6 @@ matchSliceIndex (SliceFixed sl1) (SliceFixed sl2)
 
 matchSliceIndex _ _
   = Nothing
-
--- Primitive constants and functions
---
-matchPrimConst :: PrimConst s -> PrimConst t -> Maybe (s :~: t)
-matchPrimConst (PrimMinBound s) (PrimMinBound t) = matchBoundedType s t
-matchPrimConst (PrimMaxBound s) (PrimMaxBound t) = matchBoundedType s t
-matchPrimConst (PrimPi s)       (PrimPi t)       = matchFloatingType s t
-matchPrimConst _                _                = Nothing
 
 
 -- Covariant function matching

@@ -33,7 +33,7 @@ module Data.Array.Accelerate.Interpreter.Simple (
   run, run1, runN,
 
   -- Internal (hidden)
-  evalPrim, evalPrimConst, evalCoerceScalar, atraceOp,
+  evalPrim, evalCoerceScalar, atraceOp,
 
 ) where
 
@@ -912,7 +912,6 @@ evalOpenExp pexp runarr env =
     Evar (Var _ ix)             -> prj ix env
     Const _ c                   -> c
     Undef tp                    -> undefElt (TupRsingle tp)
-    PrimConst c                 -> evalPrimConst c
     PrimApp f x                 -> evalPrim f (evalE x)
     Nil                         -> ()
     Pair e1 e2                  -> let !x1 = evalE e1
@@ -1048,11 +1047,6 @@ evalCoerceScalar VectorScalarType{} (SingleScalarType tb) a = scalar tb a
 -- Scalar primitives
 -- -----------------
 
-evalPrimConst :: PrimConst a -> a
-evalPrimConst (PrimMinBound ty) = evalMinBound ty
-evalPrimConst (PrimMaxBound ty) = evalMaxBound ty
-evalPrimConst (PrimPi       ty) = evalPi ty
-
 evalPrim :: PrimFun (a -> r) -> (a -> r)
 evalPrim (PrimAdd                ty) = evalAdd ty
 evalPrim (PrimSub                ty) = evalSub ty
@@ -1162,24 +1156,8 @@ evalToFloating (FloatingNumType ta) tb
 -- Extract methods from reified dictionaries
 --
 
--- Constant methods of Bounded
---
-
-evalMinBound :: BoundedType a -> a
-evalMinBound (IntegralBoundedType ty)
-  | IntegralDict <- integralDict ty
-  = minBound
-
-evalMaxBound :: BoundedType a -> a
-evalMaxBound (IntegralBoundedType ty)
-  | IntegralDict <- integralDict ty
-  = maxBound
-
 -- Constant method of floating
 --
-
-evalPi :: FloatingType a -> a
-evalPi ty | FloatingDict <- floatingDict ty = pi
 
 evalSin :: FloatingType a -> (a -> a)
 evalSin ty | FloatingDict <- floatingDict ty = sin

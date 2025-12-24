@@ -552,7 +552,6 @@ getExpDeps (While pof1 pof2 poe)            env = getFunDeps pof1 env <>
                                                   getFunDeps pof2 env <>
                                                   getExpDeps poe  env
 getExpDeps (Const _ _)                      _   = mempty
-getExpDeps (PrimConst _)                    _   = mempty
 getExpDeps (PrimApp   _ poe)                env = getExpDeps poe  env
 getExpDeps (ShapeSize _ poe)                env = getExpDeps poe  env
 getExpDeps (Undef _)                        _   = mempty

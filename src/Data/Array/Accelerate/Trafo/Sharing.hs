@@ -762,7 +762,6 @@ convertSharingExp config lyt alyt env aenv exp@(ScopedExp lams _) = cvt exp
           Case e rhs            -> cvtCase (cvt e) (over (mapped . _2) cvt rhs)
           Cond e1 e2 e3         -> AST.Cond (cvt e1) (cvt e2) (cvt e3)
           While tp p it i       -> AST.While (cvtFun1 tp p) (cvtFun1 tp it) (cvt i)
-          PrimConst c           -> AST.PrimConst c
           PrimApp f e           -> cvtPrimFun f (cvt e)
           Index _ a e           -> AST.ArrayInstr (AST.Index $ cvtAvar a) (cvt e)
           LinearIndex _ a i     -> AST.ArrayInstr (AST.LinearIndex $ cvtAvar a) (cvt i)
@@ -1874,7 +1873,6 @@ makeOccMapSharingExp config accOccMap expOccMap = travE
                                      (iter', h2) <- traverseFun1 lvl t iter
                                      (init', h3) <- travE lvl init
                                      return (While t p' iter' init', h1 `max` h2 `max` h3 + 1)
-            PrimConst c         -> return (PrimConst c, 1)
             PrimApp p e         -> travE1 (PrimApp p) e
             Index tp a e        -> travAE (Index tp) a e
             LinearIndex tp a i  -> travAE (LinearIndex tp) a i
@@ -2791,7 +2789,6 @@ determineScopesSharingExp config accOccMap expOccMap = scopesExp
                                        (it', accCount2) = scopesFun1 it
                                        (i' , accCount3) = scopesExp i
                                     in reconstruct (While tp p' it' i') (accCount1 +++ accCount2 +++ accCount3)
-          PrimConst c           -> reconstruct (PrimConst c) noNodeCounts
           PrimApp p e           -> travE1 (PrimApp p) e
           Index tp a e          -> travAE (Index tp) a e
           LinearIndex tp a e    -> travAE (LinearIndex tp) a e

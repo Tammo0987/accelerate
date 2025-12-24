@@ -228,19 +228,6 @@ optimizeBoundsExp' instr@(Const tp val) | BCScalarDict <- reprBCScalar tp = do
             _ -> (bccsEmpty instr, bccsEmpty instr)
         in return (Const tp val, analysisResult d (bccsEmpty instr) s)
 
-optimizeBoundsExp' instr@(PrimConst tp) = do
-    let (d, s) = case tp of
-            (PrimMinBound (IntegralBoundedType TypeInt)) ->
-                let d' = TupRsingle . bccPut (cgTypeScalar $ SingleScalarType $ NumSingleType $ IntegralNumType TypeInt) $ pure $ fromConst (minBound :: t)
-                    s' = TupRsingle . bccPut (cgTypeScalar $ SingleScalarType $ NumSingleType $ IntegralNumType TypeInt) $ pure $ fromConst (minBound :: t)
-                    in (d', s')
-            (PrimMaxBound (IntegralBoundedType TypeInt)) ->
-                let d' = TupRsingle . bccPut (cgTypeScalar $ SingleScalarType $ NumSingleType $ IntegralNumType TypeInt) $ pure $ fromConst (maxBound :: t)
-                    s' = TupRsingle . bccPut (cgTypeScalar $ SingleScalarType $ NumSingleType $ IntegralNumType TypeInt) $ pure $ fromConst (maxBound :: t)
-                    in (d', s')
-            _ -> (bccsEmpty instr, bccsEmpty instr)
-        in return (PrimConst tp, analysisResult d (bccsEmpty instr) s)
-
 optimizeBoundsExp' (ArrayInstr instr@(Parameter v) n) = do
     a <- get
     let env = a ^. essaEnvs.essaEnvArr
