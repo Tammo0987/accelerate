@@ -5,6 +5,7 @@
 {-# LANGUAGE RankNTypes          #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications    #-}
+{-# LANGUAGE TypeFamilies        #-}
 {-# LANGUAGE TypeOperators       #-}
 {-# OPTIONS_HADDOCK hide #-}
 {-# LANGUAGE PatternSynonyms #-}
@@ -25,7 +26,8 @@ module Data.Array.Accelerate.AST.Environment (
   unionPartialEnv, EnvBinding(..), partialEnvFromList, mapPartialEnv,
   mapMaybePartialEnv, partialEnvValues, diffPartialEnv, diffPartialEnvWith,
   intersectPartialEnv, partialEnvTail, partialEnvLast, partialEnvSkip,
-  partialUpdate, partialRemove, partialEnvToList, partialEnvSingleton, partialEnvPush,
+  partialUpdate, partialUpdateWith,
+  partialRemove, partialEnvToList, partialEnvSingleton, partialEnvPush,
   partialEnvPushLHS, partialEnvSameKeys, partialEnvSub, partialEnvSkipLHS,
   envToPartial, envFromPartialLazy,
 
@@ -34,7 +36,10 @@ module Data.Array.Accelerate.AST.Environment (
   prjUpdate', prjReplace', update', updates', mapEnv,
   (:>)(..), weakenId, weakenSucc, weakenSucc', weakenEmpty, weakenReplace,
   sink, (.>), sinkWithLHS, weakenWithLHS, substituteLHS,
-  varsGet, varsGetVal, stripWithLhs,weakenKeep) where
+  varsGet, varsGetVal, stripWithLhs, weakenKeep,
+  
+  Append
+) where
 
 import Data.Array.Accelerate.AST.Idx
 import Data.Array.Accelerate.AST.Var
@@ -149,7 +154,7 @@ partialEnvSkipLHS (LeftHandSideWildcard _) = id
 partialEnvSkipLHS (LeftHandSidePair l1 l2) = partialEnvSkipLHS l2 . partialEnvSkipLHS l1
 
 partialEnvPush :: PartialEnv f env -> Maybe (f t) -> PartialEnv f (env, t)
-partialEnvPush e Nothing  = PNone e
+partialEnvPush e Nothing  = partialEnvSkip e
 partialEnvPush e (Just a) = PPush e a
 
 partialEnvPushLHS :: LeftHandSide s t env env' -> TupR f t -> PartialEnv f env -> PartialEnv f env'
@@ -160,10 +165,17 @@ partialEnvPushLHS (LeftHandSidePair l1 l2) (TupRpair a1 a2) env =
 partialEnvPushLHS _ _ _ = internalError "Tuple mismatch"
 
 partialUpdate :: f t -> Idx env t -> PartialEnv f env -> PartialEnv f env
-partialUpdate v ZeroIdx       env         = PPush (partialEnvTail env) v
-partialUpdate v (SuccIdx idx) (PPush e a) = PPush (partialUpdate v idx e) a
-partialUpdate v (SuccIdx idx) (PNone e  ) = PNone (partialUpdate v idx e)
-partialUpdate v (SuccIdx idx) PEnd        = PNone (partialUpdate v idx PEnd)
+partialUpdate = partialUpdateWith const
+
+partialUpdateWith :: (f t -> f t -> f t) -> f t -> Idx env t -> PartialEnv f env -> PartialEnv f env
+partialUpdateWith g v ZeroIdx = \case
+  PEnd        -> PPush PEnd v
+  PNone e     -> PPush e v
+  PPush e old -> PPush e (g v old)
+partialUpdateWith g v (SuccIdx idx) = \case
+  PEnd        -> PNone (partialUpdateWith g v idx PEnd)
+  PNone e     -> PNone (partialUpdateWith g v idx e)
+  PPush e a   -> PPush (partialUpdateWith g v idx e) a
 
 partialRemove :: Idx env t -> PartialEnv f env -> PartialEnv f env
 partialRemove ZeroIdx       env         = partialEnvSkip $ partialEnvTail env
@@ -427,5 +439,6 @@ stripWithLhs (LeftHandSideSingle _) (Push env _) = env
 stripWithLhs (LeftHandSideWildcard _) env = env
 stripWithLhs (LeftHandSidePair lhs1 lhs2) env = stripWithLhs lhs1 $ stripWithLhs lhs2 env
 
-
-
+type family Append env1 env2 where
+  Append env1 () = env1
+  Append env1 (env2, t) = (Append env1 env2, t)

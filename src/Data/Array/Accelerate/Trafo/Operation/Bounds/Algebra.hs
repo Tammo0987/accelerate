@@ -1,0 +1,340 @@
+{-# LANGUAGE AllowAmbiguousTypes #-}
+{-# LANGUAGE EmptyCase           #-}
+{-# LANGUAGE FlexibleInstances   #-}
+{-# LANGUAGE GADTs               #-}
+{-# LANGUAGE LambdaCase          #-}
+{-# LANGUAGE MultiWayIf          #-}
+{-# LANGUAGE OverloadedStrings   #-}
+{-# LANGUAGE PatternGuards       #-}
+{-# LANGUAGE RankNTypes          #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications    #-}
+{-# LANGUAGE TypeFamilies        #-}
+{-# LANGUAGE TypeOperators       #-}
+{-# OPTIONS_HADDOCK hide #-}
+-- |
+-- Module      : Data.Array.Accelerate.Trafo.Operation.Bounds.Algebra
+-- Copyright   : [2012..2020] The Accelerate Team
+-- License     : BSD3
+--
+-- Maintainer  : Trevor L. McDonell <trevor.mcdonell@gmail.com>
+-- Stability   : experimental
+-- Portability : non-portable (GHC extensions)
+--
+
+module Data.Array.Accelerate.Trafo.Operation.Bounds.Algebra where
+
+import Data.Array.Accelerate.AST.Environment
+import Data.Array.Accelerate.AST.Idx
+import Data.Array.Accelerate.AST.Graph (InEdge(..))
+import Data.Array.Accelerate.AST.LeftHandSide
+import Data.Array.Accelerate.AST.Operation
+import Data.Array.Accelerate.Trafo.Substitution
+import Data.Array.Accelerate.Representation.Type
+import Data.Array.Accelerate.Representation.Shape hiding (union)
+import Data.Array.Accelerate.Type
+import Data.Array.Accelerate.Error
+
+-- x <= y becomes an edge from x to y with distance 0.
+-- x <  y becomes an edge from x to y with distance -1.
+--
+-- x <= y + c could become an edge from x to y with distance c.
+-- We however do not track them yet, as integer overflow may happen, which is
+-- difficult to track. To keep the analysis sound without making it too
+-- difficult, we thus ignore that (for now).
+--
+data Edge s t = Edge { distance :: Integer } deriving (Eq, Ord)
+
+-- We use bound (singular) to refer to the combination of a lowerbound and an upperbound.
+-- Bounds (plural) refers to a tuple where each value is a bound.
+--
+-- t should be an IntegralType or a Buffer of an IntegralType
+data TermBound env t = TermBound
+  -- An edge from a variable x with distance c means:
+  -- x <= this + c
+  { lower :: PartialEnv (InEdge Edge t) env
+  -- An edge to a variable y with distance c means:
+  -- this <= y + c
+  , upper :: PartialEnv (Edge t) env
+  }
+
+type TermBounds env = TupR (TermBound env)
+
+bottom :: forall t env. Idx env Int -> ScalarType t -> TermBound env t
+bottom zero (SingleScalarType (NumSingleType (IntegralNumType tp)))
+  | IntegralDict <- integralDict tp
+  = boundRange zero (fromIntegral (minBound :: t)) (fromIntegral (maxBound :: t))
+bottom _ _
+  = TermBound PEnd PEnd
+
+bottomGround :: Idx env Int -> GroundR t -> TermBound env t
+bottomGround zero (GroundRscalar tp) = bottom zero tp
+bottomGround zero (GroundRbuffer tp) = castTermBound $ bottom zero tp
+
+nonNegative :: forall t env. Idx env Int -> ScalarType t -> TermBound env t
+nonNegative zero (SingleScalarType (NumSingleType (IntegralNumType tp)))
+  | IntegralDict <- integralDict tp
+  = boundRange zero 0 (fromIntegral (maxBound :: t))
+nonNegative _ _
+  = TermBound PEnd PEnd
+
+undefBound :: Idx env Int -> ScalarType t -> TermBound env t
+-- Not sure if the range maxBound .. minBound would work in the entire
+-- analysis. 0 .. 0 should definitely be safe, so we use that.
+undefBound zero _ = boundConst zero 0
+
+bottoms :: Idx env Int -> TypeR t -> TermBounds env t
+bottoms zero = mapTupR (bottom zero)
+
+bottomsGround :: Idx env Int -> GroundsR t -> TermBounds env t
+bottomsGround zero = mapTupR (bottomGround zero)
+
+boundRange :: Idx env Int -> Integer -> Integer -> TermBound env t
+boundRange zero lowerB upperB = TermBound
+  -- zero <= this - lowerB
+  -- which (for infinite-precision Integers) is equal to
+  -- lowerB <= this
+  (partialEnvSingleton zero $ InEdge $ Edge $ negate lowerB)
+  -- this <= zero + upperB
+  (partialEnvSingleton zero $ Edge upperB)
+
+boundConst :: Idx env Int -> Integer -> TermBound env t
+boundConst zero value = boundRange zero value value
+
+boundVar :: Idx env Int -> Idx env t -> TermBound env t
+boundVar zero ix = TermBound
+  (partialEnvSingleton ix $ InEdge $ Edge 0)
+  (partialEnvSingleton ix $ Edge 0)
+
+-- Casts the bounds for a type 's' to be used for a term of type 't'.
+-- This does not protect for underflow or overflow; casting from Int64 to Word8
+-- is thus not always safe. It is definitely safe to cast from 't' to
+-- 'Buffer t' however.
+castTermBound :: TermBound env s -> TermBound env t
+castTermBound (TermBound l u) = TermBound
+  (mapPartialEnv (\(InEdge (Edge d)) -> InEdge $ Edge d) l)
+  (mapPartialEnv (\(Edge d) -> Edge d) u)
+
+-- | Returns bounds that are valid for both arguments.
+-- Some accuracy may be lost. 'makeTransitive' should be called to prevent most of that.
+union :: TermBound env t -> TermBound env t -> TermBound env t
+union a b = TermBound
+  -- Note that we use 'max' instead of 'min' here as InEdge swaps the edge around, see the comments in TermBound.
+  (intersectPartialEnv (\(InEdge x) (InEdge y) -> InEdge $ max x y) (lower a) (lower b))
+  (intersectPartialEnv max (upper a) (upper b))
+
+unions :: TermBounds env t -> TermBounds env t -> TermBounds env t
+unions (TupRsingle a) (TupRsingle b) = TupRsingle $ union a b
+unions (TupRpair a1 a2) (TupRpair b1 b2) = unions a1 b1 `TupRpair` unions a2 b2
+unions TupRunit TupRunit = TupRunit
+unions _ _ = internalError "Tuple mismatch"
+
+app
+  :: Idx env Int -- Index of the zero node in the bounds graph
+  -> PrimFun (s -> t)
+  -> OpenExp env' benv s
+  -> TermBounds env s -- ^ Bounds of the argument
+  -- | Transitively closed bounds of the argument. Consumed lazily (only when
+  -- needed for a specific PrimFun), due to the time to make the bounds
+  -- transitively closed.
+  -> TermBounds env s
+  -> (TermBounds env t, OpenExp env' benv t)
+app zero f arg (TupRsingle bound) (TupRsingle closed) = app1 zero f arg bound closed
+app zero f (Pair e1 e2) (TupRpair (TupRsingle b1) (TupRsingle b2)) (TupRpair (TupRsingle c1) (TupRsingle c2)) = app2 zero f e1 e2 b1 b2 c1 c2
+app zero f arg _ _ = (bottoms zero $ snd $ primFunType f, PrimApp f arg)
+
+app1
+  :: forall env env' benv s t.
+     Idx env Int
+  -> PrimFun (s -> t)
+  -> OpenExp env' benv s
+  -> TermBound env s
+  -> TermBound env s
+  -> (TermBounds env t, OpenExp env' benv t)
+app1 zero f arg bound closed = case f of
+  PrimAbs tp@(IntegralNumType _)
+    | closed `greaterThanEqual` boundConst zero 0 ->
+      -- if arg >= 0, then abs arg == arg
+      (TupRsingle bound, arg)
+    | boundConst zero 0 `greaterThanEqual` closed ->
+      (TupRsingle $ bottom zero $ SingleScalarType $ NumSingleType tp, PrimApp (PrimNeg tp) arg)
+    | otherwise ->
+      (TupRsingle $ nonNegative zero $ SingleScalarType $ NumSingleType tp, PrimApp (PrimAbs tp) arg)
+  -- TODO: PrimSig
+  _ -> withBounds $ bottoms zero $ snd $ primFunType f
+  where
+    withBounds :: TermBounds env t -> (TermBounds env t, OpenExp env' benv t)
+    withBounds retBounds = (retBounds, PrimApp f arg)
+
+app2
+  :: forall env env' benv a b t.
+     Idx env Int
+  -> PrimFun ((a, b) -> t)
+  -> OpenExp env' benv a
+  -> OpenExp env' benv b
+  -> TermBound env a
+  -> TermBound env b
+  -> TermBound env a -- Transitively closed bound of first argument, see comment in type signature of 'app'
+  -> TermBound env b -- Transitively closed bound of second argument
+  -> (TermBounds env t, OpenExp env' benv t)
+app2 zero f arg1 arg2 bound1 bound2 closed1 closed2 = case f of
+  -- Min & max
+  PrimMin (NumSingleType (IntegralNumType _))
+    | bound1 `greaterThanEqual` closed2 ->
+      (TupRsingle bound2, arg2)
+    | bound2 `greaterThanEqual` closed1 ->
+      (TupRsingle bound1, arg1)
+    | otherwise ->
+      withBounds $ TupRsingle $ TermBound
+        -- Note that we use 'max' instead of 'min' here as InEdge swaps the edge around, see the comments in TermBound.
+        (intersectPartialEnv (\(InEdge x) (InEdge y) -> InEdge $ max x y) (lower closed1) (lower closed2))
+        (unionPartialEnv min (upper bound1) (upper bound2))
+  PrimMax (NumSingleType (IntegralNumType _))
+    | closed2 `greaterThanEqual` bound1 ->
+      (TupRsingle bound2, arg2)
+    | closed1 `greaterThanEqual` bound2 ->
+      (TupRsingle bound1, arg1)
+    | otherwise ->
+      withBounds $ TupRsingle $ TermBound
+        -- Note that we use 'min' instead of 'max' here as InEdge swaps the edge around, see the comments in TermBound.
+        (unionPartialEnv (\(InEdge x) (InEdge y) -> InEdge $ min x y) (lower bound1) (lower bound2))
+        (intersectPartialEnv max (upper closed1) (upper closed2))
+  -- Comparisons
+  PrimCmp _ CmpEq
+    | closed1 `equal` bound2 -> true zero
+    | closed1 `notEqual` bound2 -> false zero
+  PrimCmp _ CmpNEq
+    | closed1 `equal` bound2 -> false zero
+    | closed1 `notEqual` bound2 -> true zero
+  PrimCmp _ CmpLt
+    | closed1 `lessThan` bound2 -> true zero
+    | closed1 `greaterThanEqual` bound2 -> false zero
+  PrimCmp _ CmpGtEq
+    | closed1 `lessThan` bound2 -> false zero
+    | closed1 `greaterThanEqual` bound2 -> true zero
+  -- Div, Mod, Quot and rem
+  PrimIDiv tp
+    | Just (divBounds, _, divExpr, _, _) <- divModOrQuotRem tp
+      -> (divBounds, divExpr)
+  PrimQuot tp
+    | Just (divBounds, _, divExpr, _, _) <- divModOrQuotRem tp
+      -> (divBounds, divExpr)
+  PrimMod tp
+    | Just (_, modBounds, _, modExpr, _) <- divModOrQuotRem tp
+      -> (modBounds, modExpr)
+  PrimRem tp
+    | Just (_, modBounds, _, modExpr, _) <- divModOrQuotRem tp
+      -> (modBounds, modExpr)
+  PrimDivMod tp
+    | Just (divBounds, modBounds, _, _, divModExpr) <- divModOrQuotRem tp
+      -> (TupRpair divBounds modBounds, divModExpr)
+  PrimQuotRem tp
+    | Just (divBounds, modBounds, _, _, divModExpr) <- divModOrQuotRem tp
+      -> (TupRpair divBounds modBounds, divModExpr)
+
+  -- Default fallback
+  _ -> withBounds $ bottoms zero $ snd $ primFunType f
+  where
+    withBounds :: TermBounds env t -> (TermBounds env t, OpenExp env' benv t)
+    withBounds retBounds = (retBounds, PrimApp f $ Pair arg1 arg2)
+
+    -- TODO: For rem, always set bounds, also if we only know that arg2 is positive?
+    divModOrQuotRem :: a ~ b => IntegralType a -> Maybe (TermBounds env a, TermBounds env a, OpenExp env' benv a, OpenExp env' benv a, OpenExp env' benv (a, a))
+    divModOrQuotRem tp
+      -- If arg1 >= 0 and arg2 > 0, then divMod and quotRem behave the same way.
+      -- Since the hardware natively supports quot and rem, not div and mod, we
+      -- convert div and mod to quot and rem.
+      | closed1 `greaterThanEqual` boundConst zero 0
+      , boundConst zero 0 `lessThan` closed2 =
+        if bound1 `lessThan` closed2 then
+          let
+            divExpr = case integralDict tp of
+              IntegralDict -> Const (SingleScalarType $ NumSingleType $ IntegralNumType tp) 0
+            modExpr = arg1
+          in Just
+            -- If the above, and arg1 < arg2, then
+            -- arg1 `divMod` arg2 = arg1 `quotRem` arg2 = (0, arg1)
+            ( TupRsingle $ boundConst zero 0
+            , TupRsingle bound1
+            , divExpr
+            , modExpr
+            , Pair divExpr modExpr
+            )
+        else Just
+          -- Bounds of div or quot
+          ( TupRsingle $ nonNegative zero $ SingleScalarType $ NumSingleType $ IntegralNumType tp
+          -- Bounds of mod or rem
+          , TupRsingle $ TermBound
+            (partialEnvSingleton zero $ InEdge $ Edge 0)
+            (upper bound2)
+          , PrimApp (PrimQuot tp) $ Pair arg1 arg2
+          , PrimApp (PrimRem tp) $ Pair arg1 arg2
+          , PrimApp (PrimQuotRem tp) $ Pair arg1 arg2
+          )
+      | otherwise = Nothing
+
+true :: Idx env Int -> (TermBounds env PrimBool, OpenExp env' benv PrimBool)
+true zero = (TupRsingle $ boundConst zero 1, Const scalarType 1)
+
+false :: Idx env Int -> (TermBounds env PrimBool, OpenExp env' benv PrimBool)
+false zero = (TupRsingle $ boundConst zero 0, Const scalarType 0)
+
+fromIndex :: forall env sh. Idx env Int -> ShapeR sh -> TermBounds env sh -> TermBound env Int -> TermBounds env sh
+-- TODO: We could make this more sophisticated by using the constant bounds on the Int argument.
+fromIndex zero _ sz _ = mapTupR f sz
+  where
+    f :: TermBound env t -> TermBound env t
+    f (TermBound _ u) = TermBound
+      (partialEnvSingleton zero $ InEdge $ Edge 0)
+      (mapPartialEnv (\(Edge d) -> Edge $ d - 1) u)
+
+-- Returns true if we can already proof that the first argument is greater than
+-- or equal to the second argument
+greaterThanEqual :: TermBound env a -> TermBound env a -> Bool
+-- Search for a node that is a lower bound of the first argument,
+-- and an upper bound of the second argument.
+-- If we find such a node x, then
+-- x <= arg1 + a
+-- and
+-- arg2 <= x + b
+-- Thus if b <= a, then arg2 <= arg1
+greaterThanEqual (TermBound low _) (TermBound _ up) =
+  or
+  $ partialEnvValues
+  $ intersectPartialEnv
+    (\(InEdge (Edge a)) (Edge b) -> IdentityF $ b <= a)
+    low
+    up
+
+lessThan :: TermBound env a -> TermBound env a -> Bool
+lessThan (TermBound _ up) (TermBound low _) =
+  -- Similar to greaterThanEqual
+  or
+  $ partialEnvValues
+  $ intersectPartialEnv
+    (\(InEdge (Edge a)) (Edge b) -> IdentityF $ b < a)
+    low
+    up
+
+equal :: TermBound env a -> TermBound env a -> Bool
+equal a b = greaterThanEqual a b && greaterThanEqual b a
+
+notEqual :: TermBound env a -> TermBound env a -> Bool
+notEqual a b = lessThan a b || lessThan b a
+
+intRange :: forall t. IntegralType t -> (Integer, Integer)
+intRange tp
+  | IntegralDict <- integralDict tp = (fromIntegral (minBound :: t), fromIntegral (maxBound :: t))
+
+-- Returns Nothing if the value is above or below the valid range of this integral type
+guardOverflow :: IntegralType t -> Integer -> Maybe Integer
+guardOverflow tp x
+  | x < a || x > b = Nothing
+  | otherwise = Just x
+  where
+    (a, b) = intRange tp
+
+saturate :: IntegralType t -> Integer -> Integer
+saturate tp x = max a $ min b x
+  where
+    (a, b) = intRange tp

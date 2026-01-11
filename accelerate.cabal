@@ -411,6 +411,7 @@ library
         Data.Array.Accelerate.AST.Environment
         Data.Array.Accelerate.AST.Execute
         Data.Array.Accelerate.AST.Exp
+        Data.Array.Accelerate.AST.Graph
         Data.Array.Accelerate.AST.Idx
         Data.Array.Accelerate.AST.IdxSet
         Data.Array.Accelerate.AST.Kernel
@@ -562,6 +563,9 @@ library
         Data.Array.Accelerate.Pretty.Type
         Data.Array.Accelerate.Trafo.Exp.Algebra
         Data.Array.Accelerate.Trafo.Environment
+        Data.Array.Accelerate.Trafo.Operation.Bounds
+        Data.Array.Accelerate.Trafo.Operation.Bounds.Algebra
+        Data.Array.Accelerate.Trafo.Operation.Bounds.Environment
         Data.Array.Accelerate.Trafo.Operation.Simplify
         Data.Array.Accelerate.Trafo.Shrink
         Data.Atomic

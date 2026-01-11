@@ -28,7 +28,7 @@ module Data.Array.Accelerate.AST.Exp (
   PreOpenFun(..),
   PreOpenExp(..),
   PrimFun(..),
-  Cmp(..),
+  Cmp(..), negateCmp,
   PrimBool,
   PrimMaybe,
   TAG,
@@ -362,6 +362,12 @@ data PrimFun sig where
 -- (similar to equal and not-equal).
 --
 data Cmp = CmpLt | CmpGtEq | CmpEq | CmpNEq deriving Eq
+
+negateCmp :: Cmp -> Cmp
+negateCmp CmpLt = CmpGtEq
+negateCmp CmpGtEq = CmpLt
+negateCmp CmpEq = CmpNEq
+negateCmp CmpNEq = CmpEq
 
 expType :: (HasCallStack, IsArrayInstr arr) => PreOpenExp arr env t -> TypeR t
 expType = \case

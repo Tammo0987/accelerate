@@ -729,12 +729,6 @@ evalLNot (PrimApp PrimLOr (Pair a b)) _ = Stats.ruleFired "not/or" $ Just $ Prim
   (PrimApp PrimLNot b)
 evalLNot x env                     = bool1 (not . toBool) x env
 
-negateCmp :: Cmp -> Cmp
-negateCmp CmpLt = CmpGtEq
-negateCmp CmpGtEq = CmpLt
-negateCmp CmpEq = CmpNEq
-negateCmp CmpNEq = CmpEq
-
 evalFromIntegral :: IntegralType a -> NumType b -> a :-> b
 evalFromIntegral ta (IntegralNumType tb)
   | IntegralDict <- integralDict ta
