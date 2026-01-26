@@ -937,6 +937,14 @@ constant = Exp . go (eltR @e) . fromElt
 -- | 'undef' can be used anywhere a constant is expected, and indicates that the
 -- consumer of the value can receive an unspecified bit pattern.
 --
+-- 'undef' is not a pure value: each observation of it may yield a different
+-- result (or not), depending on unpredictable optimisation choices in the
+-- compiler, and computing with 'undef' produces 'undef'. However, computing with
+-- 'undef' /is/ valid as long as each possible bit pattern would be a valid input
+-- to that computation. For example, @'undef' - 'undef'@ may have any result, but
+-- will not crash. This is even the case after binding 'undef' to a variable, and
+-- thus @let x = 'undef' in x - x@ need not evaluate to zero.
+--
 -- This is useful because a store of an undefined value can be assumed to not
 -- have any effect; we can assume that the value is overwritten with bits that
 -- happen to match what was already there. However, a store /to/ an undefined
