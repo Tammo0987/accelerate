@@ -234,6 +234,7 @@ transform' (SyncSchedule _ simple schedule) = case schedule of
                 fromMaybe (internalError "Variable missing after acquireSome") $ prjPartial idx mapping))
               cond)
             $ buildEffect (SignalResolve $ map (weaken $ skipWeakenIdx skip) resolvers) buildReturn
+  PFence _ next -> transform' next
 
   -- Bindings
   PAlloc shr tp sh -> TransformBinding $ \fenv ->

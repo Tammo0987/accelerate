@@ -41,10 +41,13 @@ module Data.Array.Accelerate.Trafo.Exp.Shrink (
   -- Occurrence counting
   usesOfExp, usesOfFun,
 
+  -- Utilities
   arrayInstrsInExp, arrayInstrsInFun,
+  strengthenShrunkLHS,
 
 ) where
 
+import Data.Array.Accelerate.AST.Environment
 import Data.Array.Accelerate.AST.Exp
 import Data.Array.Accelerate.AST.Idx
 import Data.Array.Accelerate.AST.LeftHandSide
@@ -53,6 +56,7 @@ import Data.Array.Accelerate.Analysis.Match
 import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.Representation.Type
 import Data.Array.Accelerate.Trafo.Substitution
+import Data.Array.Accelerate.Trafo.Exp.Substitution
 
 import qualified Data.Array.Accelerate.Debug.Internal.Stats                  as Stats
 
@@ -61,7 +65,6 @@ import Data.Maybe                                                   ( isJust )
 import Data.Monoid
 import Data.Semigroup
 import Prelude                                                      hiding ( exp, seq )
-import Data.HashMap.Internal.Array (shrink)
 
 data VarsRange env =
   VarsRange !(Exists (Idx env))     -- rightmost variable
@@ -198,12 +201,10 @@ shrinkLhs (Impossible usages) lhs = case go usages lhs of
     go _ _ = internalError "Empty array, mismatch in length of usages array and LHS"
 shrinkLhs _ _ = Nothing
 
--- The first LHS should be 'larger' than the second, eg the second may have
--- a wildcard if the first LHS does bind variables there, but not the other
--- way around.
---
+-- Converts a strengthening from before a binding, to a strengthening after a binding.
+-- The two LeftHandSides may have different structures.
 strengthenShrunkLHS
-    :: HasCallStack
+    :: (Distributes s)
     => LeftHandSide s t env1 env2
     -> LeftHandSide s t env1' env2'
     -> env1 :?> env1'
@@ -213,15 +214,13 @@ strengthenShrunkLHS (LeftHandSideSingle _)   (LeftHandSideSingle _)   k = \ix ->
   ZeroIdx     -> Just ZeroIdx
   SuccIdx ix' -> SuccIdx <$> k ix'
 strengthenShrunkLHS (LeftHandSidePair lA hA) (LeftHandSidePair lB hB) k = strengthenShrunkLHS hA hB $ strengthenShrunkLHS lA lB k
-strengthenShrunkLHS (LeftHandSideSingle _)   (LeftHandSideWildcard _) k = \ix -> case ix of
-  ZeroIdx     -> Nothing
-  SuccIdx ix' -> k ix'
-strengthenShrunkLHS (LeftHandSidePair l h)   (LeftHandSideWildcard t) k = strengthenShrunkLHS h (LeftHandSideWildcard t2) $ strengthenShrunkLHS l (LeftHandSideWildcard t1) k
-  where
-    TupRpair t1 t2 = t
-strengthenShrunkLHS (LeftHandSideWildcard _) _                        _ = internalError "Second LHS defines more variables"
-strengthenShrunkLHS _                        _                        _ = internalError "Mismatch LHS single with LHS pair"
+strengthenShrunkLHS lhs (LeftHandSideWildcard _) k = \ix -> strengthenWithLHS lhs ix >>= k
+strengthenShrunkLHS (LeftHandSideWildcard _) lhs k = \ix -> k ix >>= strengthenFromWeaken (weakenWithLHS lhs)
+strengthenShrunkLHS (LeftHandSideSingle t) (LeftHandSidePair _ _) _ = pairImpossible t
+strengthenShrunkLHS (LeftHandSidePair _ _) (LeftHandSideSingle t) _ = pairImpossible t
 
+strengthenFromWeaken :: env1 :> env2 -> env1 :?> env2
+strengthenFromWeaken k ix = Just $ k >:> ix
 
 -- Shrinking
 -- =========

@@ -23,7 +23,14 @@
 --
 
 module Data.Array.Accelerate.Trafo.Operation.Bounds (
-  boundsOptimizeAfun
+  boundsOptimizeAfun,
+  OperationBounds(..),
+  -- Default implementations for OperationBounds
+  boundsOptimizeOpDefault, boundsOptimizeGenerate,
+  boundsOptimizeBackpermute, boundsOptimizeMap,
+  -- Utilities for implementing OperationBounds
+  InputBounds(..), OutputBounds(..), InputBoundArgs, OutputBoundArgs,
+  boundsOptimizeFun, boundsOptimizeFun1, boundsOptimizeFun2, boundsOptimizeExp,
 ) where
 
 import Data.Array.Accelerate.AST.Environment
@@ -33,9 +40,11 @@ import Data.Array.Accelerate.AST.IdxSet (IdxSet)
 import qualified Data.Array.Accelerate.AST.IdxSet as IdxSet
 import Data.Array.Accelerate.AST.LeftHandSide
 import Data.Array.Accelerate.AST.Operation
+import Data.Array.Accelerate.Trafo.Exp.Shrink
 import Data.Array.Accelerate.Trafo.Substitution
 import Data.Array.Accelerate.Trafo.WeakenedEnvironment
 import Data.Array.Accelerate.Trafo.SkipEnvironment
+import Data.Array.Accelerate.Representation.Array
 import Data.Array.Accelerate.Representation.Type
 import Data.Array.Accelerate.Type
 import Data.Array.Accelerate.Error
@@ -43,15 +52,21 @@ import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.Trafo.Operation.Bounds.Algebra
 import Data.Array.Accelerate.Trafo.Operation.Bounds.Environment
 
+import Data.Maybe (mapMaybe)
+import Data.List (foldl')
+import Data.Typeable ( (:~:)(..) )
+
 boundsOptimizeAfun
   :: forall op f.
-     OperationAfun op () f
+     OperationBounds op
+  => OperationAfun op () f
   -> OperationAfun op () f
 boundsOptimizeAfun = snd . boundsOptimizeOpenAfun emptyEnv
 
 boundsOptimizeOpenAfun
   :: forall benv op f.
-     BoundsEnv benv ()
+     OperationBounds op
+  => BoundsEnv benv ()
   -> OperationAfun op benv f
   -> (IdxSet benv, OperationAfun op benv f)
 boundsOptimizeOpenAfun env@(BoundsEnv _ _ zero _) = \case
@@ -65,14 +80,23 @@ boundsOptimizeOpenAfun env@(BoundsEnv _ _ zero _) = \case
 
 boundsOptimizeAcc
   :: forall benv op t.
-     BoundsEnv benv ()
+     OperationBounds op
+  => BoundsEnv benv ()
   -> OperationAcc op benv t
   -- Returns the set of arrays that have been modified,
   -- A new BoundsEnv (extended with new information from this term),
   -- the bounds of the return value and a transformed term.
   -> (IdxSet benv, BoundsEnv benv (), TermBounds (UniformEnv benv ()) t, OperationAcc op benv t)
 boundsOptimizeAcc env@(BoundsEnv _ _ zero _) acc = case acc of
-  Exec op args -> undefined
+  Exec op args
+    | modified <- IdxSet.fromList $ argsOutputs args
+    , input <- boundsInputs env args
+    -- Remove all references to 'modified' in the bounds graph and input
+    , (graph', input') <- boundsGraphWithArgsClearNodes (boundsGraph env, input) $ accIdxSet modified
+    , env' <- env{ boundsGraph = graph' }
+    , (output, args') <- boundsOptimizeOp op env input' args
+    , env'' <- envWriteArgs args' output env' -- Update env' with output
+    -> (modified, env'', TupRunit, Exec op args')
 
   Return vars ->
     ( IdxSet.empty
@@ -111,16 +135,59 @@ boundsOptimizeAcc env@(BoundsEnv _ _ zero _) acc = case acc of
       , Alet lhs uniquenesses bnd' body'
       )
 
-  Acond cond true false -> undefined
-  Awhile uniquenesses cond step initial -> undefined
+  Acond condVar true false
+    | cond <- case wprj (varIdx condVar) (boundsBindings env) of
+      BindExp expr -> expr
+      _ -> ArrayInstr (Parameter condVar) Nil
+    , (modified1, _, trueBounds, true') <- boundsOptimizeAcc (assumeTrue env cond) true
+    , (modified2, _, falseBounds, false') <- boundsOptimizeAcc (assumeFalse env cond) false
+    , modified <- IdxSet.union modified1 modified2
+    -- We cannot easily intersect the two environments (yet), so we just remove any
+    -- invalid information from the original environment and return that.
+    -- TODO: Can we take the intersection of two environments?
+    , env' <- env{ boundsGraph = boundsGraphClearNodes (boundsGraph env) $ accIdxSet modified }
+    , bounds <- unions (makeTransitives env trueBounds) (makeTransitives env falseBounds)
+    -> (modified, env', bounds, Acond condVar true' false')
 
-  Fence set body -> undefined
+  Awhile uniquenesses cond step initial
+    | (modified1, cond') <- boundsOptimizeOpenAfun env cond
+    , (modified2, step') <- boundsOptimizeOpenAfun env step
+    , modified <- IdxSet.union modified1 modified2
+    , env' <- env{ boundsGraph = boundsGraphClearNodes (boundsGraph env) $ accIdxSet modified }
+    -> (modified, env', bottomsGround zero $ mapTupR varType initial, Awhile uniquenesses cond' step' initial)
+
+  Fence set body
+    | assertions <-
+      mapMaybe
+        (\case
+          Exists (BindAssertAssume term) -> Just term
+          _ -> Nothing
+        )
+        $ wprjSet set (boundsBindings env)
+    , env' <- foldl' assumeTrue env assertions
+    , (modified, _, _, body') <- boundsOptimizeAcc env' body
+    -- We cannot propagate any information from within the body of this fence.
+    -- If we do that, and later act on it, then we may let other code work
+    -- without using the values computed here. That may make this code dead,
+    -- and that may cause that the assertions referenced by this fence are not
+    -- ran.
+    --
+    -- We thus return the environment from before this fence, with the
+    -- information of mutated buffers removed.
+    , env'' <- env{ boundsGraph = boundsGraphClearNodes (boundsGraph env) $ accIdxSet modified }
+    -> (IdxSet.empty, env'', bottomsGround zero $ groundsR acc, Fence set $ body')
+
+  Aassert expr
+    | (_, expr') <- boundsOptimizeExp env expr
+    -> (IdxSet.empty, env, TupRsingle $ bottom zero $ scalarTypeWord8, Aassert expr')
+
+  Aassume expr
+    | (_, expr') <- boundsOptimizeExp env expr
+    -> (IdxSet.empty, env, TupRsingle $ bottom zero $ scalarTypeWord8, Aassume expr')
 
   -- Default
   Alloc{} -> defaultBottom
   Use{} -> defaultBottom
-  Aassert{} -> defaultBottom
-  Aassume{} -> defaultBottom
   where
     -- Default, for expressions that don't mutate buffers,
     -- have no subexpressions and whose bound should be bottom.
@@ -136,6 +203,36 @@ boundsOptimizeFun env@(BoundsEnv _ _ zero _) = \case
     | env' <- env `pushScalars` (lhs, bottoms zero $ lhsToTupR lhs) ->
       Lam lhs $ boundsOptimizeFun env' f
   Body expr -> Body $ snd $ boundsOptimizeExp env expr
+
+boundsOptimizeFun1
+  :: forall benv s t.
+     BoundsEnv benv ()
+  -> Arg benv (Fun' (s -> t))
+  -> TermBounds (UniformEnv benv ()) s
+  -> (TermBounds (UniformEnv benv ()) t, Arg benv (Fun' (s -> t)))
+boundsOptimizeFun1 env (ArgFun (Lam lhs (Body expr))) argBounds
+  | env' <- env `pushScalars` (lhs, argBounds)
+  , (retBounds, expr') <- boundsOptimizeExp env' expr =
+    ( snd $ strengthenBoundsWithScalarLHS @benv (boundsGraph env') lhs retBounds
+    , ArgFun $ Lam lhs $ Body expr'
+    )
+boundsOptimizeFun1 _ _ _ = internalError "Expected unary function"
+
+boundsOptimizeFun2
+  :: forall benv r s t.
+     BoundsEnv benv ()
+  -> Arg benv (Fun' (r -> s -> t))
+  -> TermBounds (UniformEnv benv ()) r
+  -> TermBounds (UniformEnv benv ()) s
+  -> (TermBounds (UniformEnv benv ()) t, Arg benv (Fun' (r -> s -> t)))
+boundsOptimizeFun2 env (ArgFun (Lam lhs1 (Lam lhs2 (Body expr)))) argBounds1 argBounds2
+  | lhs <- LeftHandSidePair lhs1 lhs2
+  , env' <- env `pushScalars` (lhs, TupRpair argBounds1 argBounds2)
+  , (retBounds, expr') <- boundsOptimizeExp env' expr =
+    ( snd $ strengthenBoundsWithScalarLHS @benv (boundsGraph env') lhs retBounds
+    , ArgFun $ Lam lhs1 $ Lam lhs2 $ Body expr'
+    )
+boundsOptimizeFun2 _ _ _ _ = internalError "Expected binary function"
 
 boundsOptimizeExp
   :: forall benv env t.
@@ -177,9 +274,7 @@ boundsOptimizeExp env@(BoundsEnv _ _ zero _) expr = detectConst env $ case expr 
     Index v@(Var (GroundRbuffer _) ix)
       | ix' <- accIdx env ix ->
         -- This value has the same bounds as the buffer.
-        ( TupRsingle $ TermBound
-            (mapPartialEnv (\(Graph.InEdge (Edge d)) -> Graph.InEdge $ Edge d) $ Graph.inn (boundsGraph env) ix')
-            (mapPartialEnv (\(Edge d) -> Edge d) $ Graph.out (boundsGraph env) ix')
+        ( TupRsingle $ castTermBound $ boundOfAcc env ix
         , ArrayInstr (Index v) $ travE arg
         )
 
@@ -236,10 +331,19 @@ boundsOptimizeExp env@(BoundsEnv _ _ zero _) expr = detectConst env $ case expr 
       | (bodyBounds, body') <- boundsOptimizeExp (assumeTrue env c') body ->
         (bodyBounds, Assume c' body')
 
-  -- TODO: Add 'assumeTrue' on cond to step.
-  -- Difficulty: cond and step are functions that may build different environments,
-  -- as their left hand sides may be differehte
-  While cond step initial -> bottomExpr $ While (travF cond) (travF step) initial
+  While cond step initial
+    | cond' <- travF cond
+    , Lam lhsCond (Body bodyCond) <- cond'
+    , Lam lhsStep (Body bodyStep) <- step
+    , env' <- env `pushScalars` (lhsStep, bottoms zero $ lhsToTupR lhsStep)
+    , env'' <- assumeTrue' (strengthenShrunkLHS lhsCond lhsStep Just) env' bodyCond
+    , (stepBounds, bodyStep') <- boundsOptimizeExp env'' bodyStep
+    , stepBounds' <- snd $ strengthenBoundsWithScalarLHS @benv (boundsGraph env'') lhsStep stepBounds
+    , (initialBounds, initial') <- boundsOptimizeExp env initial ->
+      ( unions (makeTransitives env initialBounds) (makeTransitives env stepBounds')
+      , While cond' (Lam lhsStep $ Body bodyStep') initial' )
+    | otherwise ->
+      internalError "Expected unary functions"
 
   PrimApp f arg
     | (argBounds, arg') <- boundsOptimizeExp env arg ->
@@ -278,3 +382,190 @@ detectConst env (bound, expr)
   = (bound, Const tp $ fromIntegral a)
   | otherwise
   = (bound, expr)
+
+boundsOptimizeArg :: BoundsEnv benv () -> Arg benv t -> Arg benv t
+boundsOptimizeArg env = \case
+  ArgFun fun -> ArgFun $ boundsOptimizeFun env fun
+  ArgExp expr -> ArgExp $ snd $ boundsOptimizeExp env expr
+  arg -> arg -- ArgVar or ArgArray
+
+data InputBounds benv s where
+  InputIn
+    :: TermBounds (UniformEnv benv ()) sh
+    -> TermBounds (UniformEnv benv ()) t
+    -> InputBounds benv (In sh t)
+
+  InputMut
+    :: TermBounds (UniformEnv benv ()) sh
+    -> TermBounds (UniformEnv benv ()) t
+    -> InputBounds benv (Mut sh t)
+
+  InputOut
+    :: TermBounds (UniformEnv benv ()) sh
+    -> InputBounds benv (Out sh t)
+
+  InputVar
+    :: TermBounds (UniformEnv benv ()) t
+    -> InputBounds benv (Var' t)
+
+  InputExp
+    :: InputBounds benv (Exp' t)
+
+  InputFun
+    :: InputBounds benv (Fun' f)
+
+data OutputBounds benv s where
+  OutputOut
+    :: TermBounds (UniformEnv benv ()) t
+    -> OutputBounds benv (Out sh t)
+
+  OutputMut
+    :: TermBounds (UniformEnv benv ()) t
+    -> OutputBounds benv (Out sh t)
+  
+  OutputNone
+    :: OutputBounds benv s
+
+envWriteArgs :: forall benv args. Args benv args -> OutputBoundArgs benv args -> BoundsEnv benv () -> BoundsEnv benv ()
+envWriteArgs ArgsNil _ env = env
+envWriteArgs (arg :>: args) (output :>: outputs) env
+  | ArgArray _ (ArrayR _ tp) _ buffers <- arg
+  , Just bounds <- case output of
+    OutputOut b -> Just b
+    OutputMut b -> Just b
+    OutputNone -> Nothing
+  = go tp buffers bounds env
+  | otherwise = envWriteArgs args outputs env
+  where
+    go :: forall t. TypeR t -> GroundVars benv (Buffers t) -> TermBounds (UniformEnv benv ()) t -> BoundsEnv benv () -> BoundsEnv benv ()
+    go (TupRsingle tp) (TupRsingle var) (TupRsingle bound) env1
+      | Refl <- reprIsSingle @ScalarType @t @Buffer tp
+      , idx <- accIdx env $ varIdx var
+      , bound' <- castTermBound bound
+      = env1{ boundsGraph =
+          Graph.insertEdgesFromWith min idx (upper bound')
+            $ Graph.insertEdgesToWith min (lower bound') idx
+            $ boundsGraph env1      
+        }
+    go (TupRpair t1 t2) (TupRpair v1 v2) (TupRpair b1 b2) env1
+      = go t1 v1 b1 $ go t2 v2 b2 env1
+    go TupRunit TupRunit TupRunit env1 = env1
+    go _ _ _ _ = internalError "Tuple mismatch"
+
+type InputBoundArgs benv args = PreArgs (InputBounds benv) args
+type OutputBoundArgs benv args = PreArgs (OutputBounds benv) args
+
+boundsInputs :: BoundsEnv benv () -> Args benv args -> InputBoundArgs benv args
+boundsInputs env = mapArgs (boundsInput env)
+
+boundsInput :: BoundsEnv benv () -> Arg benv arg -> InputBounds benv arg
+boundsInput env = \case
+  ArgArray In (ArrayR _ tp) sh buffers -> InputIn
+    (mapTupR (\sz -> boundVar (boundsZero env) $ accIdx env $ varIdx sz) sh)
+    (unBufferTermBounds tp $ mapTupR (\buffer -> boundOfAcc env $ varIdx buffer) buffers)
+  ArgArray Mut (ArrayR _ tp) sh buffers -> InputMut
+    (mapTupR (\sz -> boundVar (boundsZero env) $ accIdx env $ varIdx sz) sh)
+    (unBufferTermBounds tp $ mapTupR (\buffer -> boundOfAcc env $ varIdx buffer) buffers)
+  ArgArray Out _ sh _ -> InputOut
+    (mapTupR (\sz -> boundVar (boundsZero env) $ accIdx env $ varIdx sz) sh)
+  ArgVar vars -> InputVar
+    (mapTupR (\var -> boundVar (boundsZero env) $ accIdx env $ varIdx var) vars)
+  ArgExp _ -> InputExp
+  ArgFun _ -> InputFun
+
+-- Variant of 'boundsGraphClearNode' that works on a graph *and Args*.
+-- Assumes that the Idx refers to a Buffer.
+boundsGraphWithArgsClearNode
+  :: forall benv args t.
+     (BoundsGraph (UniformEnv benv ()), InputBoundArgs benv args)
+  -> Idx (UniformEnv benv ()) t
+  -> (BoundsGraph (UniformEnv benv ()), InputBoundArgs benv args)
+boundsGraphWithArgsClearNode (graph, args) idx = (boundsGraphClearNode graph idx, mapArgs f args)
+  where
+    idxLower = Graph.inn graph idx
+    idxUpper = Graph.out graph idx
+
+    f :: InputBounds benv s -> InputBounds benv s
+    f (InputIn sh buffers) = InputIn sh $ mapTupR g buffers
+    f (InputMut sh buffers) = InputMut sh $ mapTupR g buffers
+    f bounds = bounds -- Does not contain buffers
+
+    g :: TermBound (UniformEnv benv ()) s -> TermBound (UniformEnv benv ()) s
+    g bound = TermBound lower' upper'
+      where
+        lower'
+          | Just (Graph.InEdge (Edge d)) <- prjPartial idx $ lower bound =
+            partialRemove idx
+              $ unionPartialEnv
+                (\(Graph.InEdge x) (Graph.InEdge y) -> Graph.InEdge $ min x y)
+                (lower bound)
+              $ mapPartialEnv
+                (\(Graph.InEdge (Edge d')) -> Graph.InEdge $ Edge $ d + d')
+                idxLower
+          | otherwise = lower bound
+        upper'
+          | Just (Edge d) <- prjPartial idx $ upper bound =
+            partialRemove idx
+              $ unionPartialEnv min (upper bound)
+              $ mapPartialEnv (\(Edge d') -> Edge $ d + d') idxUpper
+          | otherwise = upper bound
+
+-- Variant of 'boundsGraphClearNodes' that works on a graph *and Args*.
+-- Assumes that the Idx refers to a Buffer.
+boundsGraphWithArgsClearNodes
+  :: (BoundsGraph (UniformEnv benv ()), InputBoundArgs benv args)
+  -> IdxSet (UniformEnv benv ())
+  -> (BoundsGraph (UniformEnv benv ()), InputBoundArgs benv args)
+boundsGraphWithArgsClearNodes graphArgs set =
+  foldl' (\ga (Exists idx) -> boundsGraphWithArgsClearNode ga idx) graphArgs
+    $ IdxSet.toList set
+
+class OperationBounds op where
+  boundsOptimizeOp
+    :: op args
+    -> BoundsEnv benv ()
+    -> InputBoundArgs benv args
+    -> Args benv args
+    -> (OutputBoundArgs benv args, Args benv args)
+
+boundsOptimizeOpDefault
+  :: BoundsEnv benv ()
+  -> InputBoundArgs benv args
+  -> Args benv args
+  -> (OutputBoundArgs benv args, Args benv args)
+boundsOptimizeOpDefault env _ args =
+    ( mapArgs (\_ -> OutputNone) args
+    , mapArgs (boundsOptimizeArg env) args )
+
+boundsOptimizeMap
+  :: args ~ (Fun' (s -> t) -> In sh s -> Out sh t -> ())
+  => BoundsEnv benv ()
+  -> InputBoundArgs benv args
+  -> Args benv args
+  -> (OutputBoundArgs benv args, Args benv args)
+boundsOptimizeMap env (_ :>: InputIn _ inBounds :>: _) (f :>: input :>: output :>: _)
+  | (outBounds, f') <- boundsOptimizeFun1 env f inBounds =
+    ( OutputNone :>: OutputNone :>: OutputOut outBounds :>: ArgsNil
+    , f' :>: input :>: output :>: ArgsNil )
+
+boundsOptimizeGenerate
+  :: args ~ (Fun' (sh -> t) -> Out sh t -> ())
+  => BoundsEnv benv ()
+  -> InputBoundArgs benv args
+  -> Args benv args
+  -> (OutputBoundArgs benv args, Args benv args)
+boundsOptimizeGenerate env (_ :>: InputOut shBounds :>: _) (f :>: output :>: _)
+  | (outBounds, f') <- boundsOptimizeFun1 env f (indexBounds (boundsZero env) shBounds) =
+    ( OutputNone :>: OutputOut outBounds :>: ArgsNil
+    , f' :>: output :>: ArgsNil )
+
+boundsOptimizeBackpermute
+  :: args ~ (Fun' (sh' -> sh) -> In sh t -> Out sh' t -> ())
+  => BoundsEnv benv ()
+  -> InputBoundArgs benv args
+  -> Args benv args
+  -> (OutputBoundArgs benv args, Args benv args)
+boundsOptimizeBackpermute env (_ :>: InputIn _ inBounds :>: InputOut shBounds :>: _) (f :>: input :>: output :>: _)
+  | (_, f') <- boundsOptimizeFun1 env f (indexBounds (boundsZero env) shBounds) =
+    ( OutputNone :>: OutputNone :>: OutputOut inBounds :>: ArgsNil
+    , f' :>: input :>: output :>: ArgsNil )

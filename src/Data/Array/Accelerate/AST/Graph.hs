@@ -23,7 +23,9 @@
 
 module Data.Array.Accelerate.AST.Graph (
   Graph, InEdge(..), empty, nodeCount, pushNode, dropNode,
-  insertEdge, insertEdgeWith, insertCartesianEdgesWith, removeEdgesOf,
+  insertEdge, insertEdgeWith,
+  insertEdgesFromWith, insertEdgesToWith,
+  insertCartesianEdgesWith, removeEdgesOf,
   out, inn, prjNode, prjEdge, updateNode,
 
   shortestPath, shortestPathLessThanEqual, shortestPathsFrom, shortestPathsTo
@@ -38,6 +40,7 @@ import Data.Array.Accelerate.Error
 import Data.Functor
 import Data.Functor.Const
 import Data.Maybe
+import Data.Typeable ( (:~:)(..) )
 
 -- | Directed well-scoped graph.
 -- 'node' is the label on a node, 'edge' the label on an edge.
@@ -88,6 +91,31 @@ insertEdgeWith f i1 i2 edge (GPush g node) = case (i1, i2) of
   where
     f' (InEdge e1) (InEdge e2) = InEdge $ f e1 e2
 insertEdgeWith _ i1 _ _ GEmpty = case i1 of {}
+
+insertEdgesFromWith
+  :: forall node edge env s'.
+     (forall s t. edge s t -> edge s t -> edge s t) -- Combine with existing edge, if needed
+  -> Idx env s' -- Starting point
+  -> PartialEnv (edge s') env -- End points
+  -> Graph node edge env
+  -> Graph node edge env
+insertEdgesFromWith f from = insertCartesianEdgesWith
+  f
+  (\Refl edge -> edge)
+  (partialEnvSingleton from Refl :: PartialEnv ((:~:) s') env)
+
+insertEdgesToWith
+  :: forall node edge env t'.
+     (forall s t. edge s t -> edge s t -> edge s t) -- Combine with existing edge, if needed
+  -> PartialEnv (InEdge edge t') env -- Start points
+  -> Idx env t' -- End point
+  -> Graph node edge env
+  -> Graph node edge env
+insertEdgesToWith f from to = insertCartesianEdgesWith
+  f
+  (\(InEdge edge) Refl -> edge)
+  from
+  (partialEnvSingleton to Refl :: PartialEnv ((:~:) t') env)
 
 -- Given two partial environments, adds 
 insertCartesianEdgesWith

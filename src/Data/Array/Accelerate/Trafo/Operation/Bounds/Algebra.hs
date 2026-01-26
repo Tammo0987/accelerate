@@ -29,11 +29,14 @@ import Data.Array.Accelerate.AST.Idx
 import Data.Array.Accelerate.AST.Graph (InEdge(..))
 import Data.Array.Accelerate.AST.LeftHandSide
 import Data.Array.Accelerate.AST.Operation
+import Data.Array.Accelerate.Array.Buffer
 import Data.Array.Accelerate.Trafo.Substitution
 import Data.Array.Accelerate.Representation.Type
 import Data.Array.Accelerate.Representation.Shape hiding (union)
 import Data.Array.Accelerate.Type
 import Data.Array.Accelerate.Error
+
+import Data.Typeable ( (:~:)(..) )
 
 -- x <= y becomes an edge from x to y with distance 0.
 -- x <  y becomes an edge from x to y with distance -1.
@@ -61,9 +64,14 @@ data TermBound env t = TermBound
 type TermBounds env = TupR (TermBound env)
 
 bottom :: forall t env. Idx env Int -> ScalarType t -> TermBound env t
-bottom zero (SingleScalarType (NumSingleType (IntegralNumType tp)))
-  | IntegralDict <- integralDict tp
-  = boundRange zero (fromIntegral (minBound :: t)) (fromIntegral (maxBound :: t))
+-- We could give each integral variable a lower bound and upper bound based on
+-- the range of its type. That however causes that each variable is connected
+-- with each other variable in the graph, so we do not include those bounds.
+-- If we ever change our minds, we can use the following code:
+--
+-- bottom zero (SingleScalarType (NumSingleType (IntegralNumType tp)))
+--   | IntegralDict <- integralDict tp
+--   = boundRange zero (fromIntegral (minBound :: t)) (fromIntegral (maxBound :: t))
 bottom _ _
   = TermBound PEnd PEnd
 
@@ -115,6 +123,23 @@ castTermBound (TermBound l u) = TermBound
   (mapPartialEnv (\(InEdge (Edge d)) -> InEdge $ Edge d) l)
   (mapPartialEnv (\(Edge d) -> Edge d) u)
 
+unBufferTermBounds :: forall env t. TypeR t -> TermBounds env (Buffers t) -> TermBounds env t
+unBufferTermBounds (TupRsingle tp) (TupRsingle bound)
+  | Refl <- reprIsSingle @ScalarType @t @Buffer tp =
+    TupRsingle $ castTermBound bound
+unBufferTermBounds (TupRpair t1 t2) (TupRpair b1 b2) =
+  unBufferTermBounds t1 b1 `TupRpair` unBufferTermBounds t2 b2
+unBufferTermBounds TupRunit TupRunit = TupRunit
+unBufferTermBounds _ _ = internalError "Tuple mismatch"
+
+bufferTermBounds :: forall env t. TypeR t -> TermBounds env t -> TermBounds env (Buffers t)
+bufferTermBounds (TupRsingle tp) (TupRsingle bound)
+  | Refl <- reprIsSingle @ScalarType @t @Buffer tp =
+    TupRsingle $ castTermBound bound
+bufferTermBounds (TupRpair t1 t2) (TupRpair b1 b2) = bufferTermBounds t1 b1 `TupRpair` bufferTermBounds t2 b2
+bufferTermBounds TupRunit TupRunit = TupRunit
+bufferTermBounds _ _ = internalError "Tuple mismatch"
+
 -- | Returns bounds that are valid for both arguments.
 -- Some accuracy may be lost. 'makeTransitive' should be called to prevent most of that.
 union :: TermBound env t -> TermBound env t -> TermBound env t
@@ -159,7 +184,11 @@ app1 zero f arg bound closed = case f of
     | boundConst zero 0 `greaterThanEqual` closed ->
       (TupRsingle $ bottom zero $ SingleScalarType $ NumSingleType tp, PrimApp (PrimNeg tp) arg)
     | otherwise ->
-      (TupRsingle $ nonNegative zero $ SingleScalarType $ NumSingleType tp, PrimApp (PrimAbs tp) arg)
+      -- Note that we cannot assume that the result of abs is non-negative.
+      -- For signed integers, abs minBound = minBound. For instance for Int8,
+      -- minBound = -128, and abs (-128) = -(-128) = -128 due to integer
+      -- overflow. Hence abs x >= 0 is not true for all x.
+      (TupRsingle $ bottom zero $ SingleScalarType $ NumSingleType tp, PrimApp (PrimAbs tp) arg)
   -- TODO: PrimSig
   _ -> withBounds $ bottoms zero $ snd $ primFunType f
   where
@@ -279,14 +308,17 @@ true zero = (TupRsingle $ boundConst zero 1, Const scalarType 1)
 false :: Idx env Int -> (TermBounds env PrimBool, OpenExp env' benv PrimBool)
 false zero = (TupRsingle $ boundConst zero 0, Const scalarType 0)
 
-fromIndex :: forall env sh. Idx env Int -> ShapeR sh -> TermBounds env sh -> TermBound env Int -> TermBounds env sh
--- TODO: We could make this more sophisticated by using the constant bounds on the Int argument.
-fromIndex zero _ sz _ = mapTupR f sz
+indexBounds :: forall env sh. Idx env Int -> TermBounds env sh -> TermBounds env sh
+indexBounds zero = mapTupR f
   where
     f :: TermBound env t -> TermBound env t
     f (TermBound _ u) = TermBound
       (partialEnvSingleton zero $ InEdge $ Edge 0)
       (mapPartialEnv (\(Edge d) -> Edge $ d - 1) u)
+
+fromIndex :: forall env sh. Idx env Int -> ShapeR sh -> TermBounds env sh -> TermBound env Int -> TermBounds env sh
+-- TODO: We could make this more sophisticated by using the constant bounds on the Int argument.
+fromIndex zero _ sz _ = indexBounds zero sz
 
 -- Returns true if we can already proof that the first argument is greater than
 -- or equal to the second argument

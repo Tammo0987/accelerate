@@ -78,21 +78,8 @@ import Data.Array.Accelerate.Trafo.Exp.Bounds.ArrayInstr (BCOperation)
 
 
 class
-  ( Desugar.DesugarAcc (Operation backend)
-  , Operation.SLVOperation (Operation backend)
-  , Operation.SimplifyOperation (Operation backend)
-  , Partitioning.MakesILP (Operation backend)
-  , Partitioned.SetOpIndices (Operation backend)
-  , IsSchedule (Schedule backend)
-  , IsKernel (Kernel backend)
-  , Pretty.PrettyOp (Operation backend)
-  , Pretty.PrettyKernel (Kernel backend)
-  , Pretty.PrettySchedule (Schedule backend)
+  ( Trafo (Schedule backend) (Kernel backend)
   , Execute (Schedule backend) (Kernel backend)
-  , Operation.NFData' (Graph.BackendClusterArg (KernelOperation (Kernel backend)))
-  , Operation.ShrinkArg (Partitioning.BackendClusterArg (KernelOperation (Kernel backend)))
-  , Operation.EncodeOperation (Operation backend)
-  , BCOperation (Operation backend)
   ) => Backend backend where
 
   type Schedule backend :: (Type -> Type) -> Type -> Type -> Type

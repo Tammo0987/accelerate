@@ -26,7 +26,7 @@ module Data.Array.Accelerate.Trafo.Operation.Bounds.Environment where
 
 import Data.Array.Accelerate.AST.Environment
 import Data.Array.Accelerate.AST.Idx
-import Data.Array.Accelerate.AST.IdxSet
+import Data.Array.Accelerate.AST.IdxSet (IdxSet(..), unIdxSet)
 import Data.Array.Accelerate.AST.Graph (InEdge(..))
 import qualified Data.Array.Accelerate.AST.Graph as Graph
 import qualified Data.Array.Accelerate.AST.IdxSet as IdxSet
@@ -47,6 +47,7 @@ import qualified Data.Functor.Const as Functor
 import Data.Array.Accelerate.Trafo.Operation.Bounds.Algebra
 
 import Data.Maybe
+import Data.List (foldl')
 
 type BoundsGraph = Graph.Graph Node Edge
 
@@ -87,6 +88,18 @@ type UniformEnv benv env = (Append (Append ((), Int) benv) env)
 accIdx :: BoundsEnv benv env -> Idx benv t -> Idx (UniformEnv benv env) t
 accIdx (BoundsEnv _ s _ _) ix = weaken (skipWeakenIdx' s) $ extendIdx @((), Int) ix
 
+-- This function currently assumes that the scalar environment is (),
+-- as that is the case in all current uses. If this changes in the future,
+-- we can generalize this function. We should then pass a 'BoundsEnv benv env'
+-- as argument.
+accIdxSet :: IdxSet benv -> IdxSet (UniformEnv benv ())
+accIdxSet (IdxSet penv) = IdxSet $ accPartialEnv penv
+
+accPartialEnv :: PartialEnv f benv -> PartialEnv f (UniformEnv benv ())
+accPartialEnv (PPush set a) = accPartialEnv set `PPush` a
+accPartialEnv (PNone set) = PNone $ accPartialEnv set
+accPartialEnv PEnd = PEnd
+
 -- First argument is not used, but by including it in the type,
 -- the type becomes non-ambiguous
 expIdx :: forall benv env t. BoundsEnv benv env -> Idx env t -> Idx (UniformEnv benv env) t
@@ -96,6 +109,13 @@ expIdx _ idx = extendIdx @(Append ((), Int) benv) idx
 extendIdx :: forall lenv renv t. Idx renv t -> Idx (Append lenv renv) t
 extendIdx ZeroIdx = ZeroIdx
 extendIdx (SuccIdx idx) = SuccIdx $ extendIdx @lenv idx
+
+boundOfAcc :: BoundsEnv benv env -> Idx benv t -> TermBound (UniformEnv benv env) t
+boundOfAcc env ix = TermBound
+  (mapPartialEnv (\(Graph.InEdge (Edge d)) -> Graph.InEdge $ Edge d) $ Graph.inn (boundsGraph env) ix')
+  (mapPartialEnv (\(Edge d) -> Edge d) $ Graph.out (boundsGraph env) ix')
+  where
+    ix' = accIdx env ix
 
 data Node t = Node
 
@@ -206,6 +226,9 @@ assumeTrue env (PrimApp (PrimCmp tp c) (Pair e1 e2))
       }
 
     CmpNEq -> env -- Cannot encode this
+    -- TODO: If based on the current bounds information, one operand is the
+    -- upper or lowerbound of the other operand, then we can convert not-equals
+    -- to less-than, and we can handle that in our analysis.
   where
     extractArg :: OpenExp env benv a -> Maybe (Exists (Idx (UniformEnv benv env)), Integer)
     extractArg (Evar var) = Just (Exists $ expIdx env $ varIdx var, 0)
@@ -228,6 +251,12 @@ assumeFalse env (PrimApp (PrimCmp tp c) expr)
   | NumSingleType (IntegralNumType _) <- tp
   = assumeTrue env (PrimApp (PrimCmp tp (negateCmp c)) expr)
 assumeFalse env _ = env -- Cannot use the information of this expression
+
+assumeTrue' :: env1 :?> env2 -> BoundsEnv benv env2 -> OpenExp env1 benv PrimBool -> BoundsEnv benv env2
+assumeTrue' k env (PrimApp PrimLAnd (Pair e1 e2)) = assumeTrue' k (assumeTrue' k env e1) e2
+assumeTrue' k env expr
+  | Just expr' <- strengthenE k expr = assumeTrue env expr'
+  | otherwise = env
 
 -- | Finds an lowerbound on the given term.
 -- Only follows a direct edge between the node and zero.
@@ -311,3 +340,11 @@ boundsGraphClearNode graph idx
     (Graph.inn graph idx)
     (Graph.out graph idx)
     graph
+
+boundsGraphClearNodes
+  :: BoundsGraph env
+  -> IdxSet env
+  -> BoundsGraph env
+boundsGraphClearNodes graph set =
+  foldl' (\g (Exists idx) -> boundsGraphClearNode g idx) graph
+    $ IdxSet.toList set
