@@ -492,24 +492,6 @@ library
         Data.Array.Accelerate.Trafo.WeakenedEnvironment
         Data.Array.Accelerate.Type
 
-        -- Bounds checking optimization
-        Data.Array.Accelerate.Trafo.Exp.Bounds.ESSA.ESSAEnv
-        Data.Array.Accelerate.Trafo.Exp.Bounds.ESSA.ESSAIdx
-        Data.Array.Accelerate.Trafo.Exp.Bounds.CAS.Constraints
-        Data.Array.Accelerate.Trafo.Exp.Bounds.CAS.IG
-        Data.Array.Accelerate.Trafo.Exp.Bounds.CAS.ConstraintArgs
-        Data.Array.Accelerate.Trafo.Exp.Bounds.Optimize.Acc
-        Data.Array.Accelerate.Trafo.Exp.Bounds.Optimize.Exp
-        Data.Array.Accelerate.Trafo.Exp.Bounds.Optimize.ArrayInstr
-        Data.Array.Accelerate.Trafo.Exp.Bounds.Optimize.Pi
-        Data.Array.Accelerate.Trafo.Exp.Bounds.SCEV.LoopStack
-        Data.Array.Accelerate.Trafo.Exp.Bounds.SCEV.RecChain
-        Data.Array.Accelerate.Trafo.Exp.Bounds.SCEV.ChainEnv
-        Data.Array.Accelerate.Trafo.Exp.Bounds.ArrayInstr
-
-        Data.Array.Accelerate.Trafo.Exp.Bounds.BCState
-        Data.Array.Accelerate.Trafo.Exp.Bounds.Utils
-
         -- For testing
         Data.Array.Accelerate.Test.NoFib
         Data.Array.Accelerate.Test.Similar

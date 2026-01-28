@@ -95,8 +95,6 @@ import Data.Array.Accelerate.Trafo.Operation.Substitution (alet, aletUnique, wea
 import Data.Map (Map)
 import Data.Functor.Identity
 import System.IO.Unsafe (unsafePerformIO)
-import Data.Array.Accelerate.Trafo.Exp.Bounds.ArrayInstr
-import Data.Array.Accelerate.Trafo.Exp.Bounds.Optimize.ArrayInstr
 
 data Interpreter
 -- instance Backend Interpreter where
@@ -225,16 +223,6 @@ instance SLVOperation InterpretOp where
   slvOperation IMap         = defaultSlvMap         IMap
   slvOperation IBackpermute = defaultSlvBackpermute IBackpermute
   slvOperation _            = Nothing
-
-instance BCOperation InterpretOp where
-  bcOperation :: InterpretOp f -> AbstInterpOperation InterpretOp f
-  bcOperation IGenerate        = defaultBCGenerate IGenerate
-  bcOperation IMap             = defaultBCMap IMap
-  bcOperation IBackpermute     = defaultBCBackpermute IBackpermute
-  bcOperation IPermute         = defaultBCPermute IPermute
-  bcOperation IPermuteUnique   = defaultBCPermuteUnique IPermuteUnique
-  bcOperation (IFold1 ref)     = defaultBCFold1 (IFold1 ref)
-  bcOperation (IScan1 dir ref) = defaultBCScan1 (IScan1 dir ref)
 
 instance SetOpIndices InterpretOp where
   setOpIndices _ _ _ _ = error "TODO"
