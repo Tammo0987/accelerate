@@ -41,6 +41,7 @@ import qualified Data.Array.Accelerate.AST.IdxSet as IdxSet
 import Data.Array.Accelerate.AST.LeftHandSide
 import Data.Array.Accelerate.AST.Operation
 import Data.Array.Accelerate.Trafo.Exp.Shrink
+import Data.Array.Accelerate.Trafo.Exp.Simplify
 import Data.Array.Accelerate.Trafo.Substitution
 import Data.Array.Accelerate.Trafo.WeakenedEnvironment
 import Data.Array.Accelerate.Trafo.SkipEnvironment
@@ -87,7 +88,7 @@ boundsOptimizeAcc
   -- A new BoundsEnv (extended with new information from this term),
   -- the bounds of the return value and a transformed term.
   -> (IdxSet benv, BoundsEnv benv (), TermBounds (UniformEnv benv ()) t, OperationAcc op benv t)
-boundsOptimizeAcc env@(BoundsEnv _ _ zero _) acc = case acc of
+boundsOptimizeAcc env@(BoundsEnv _ _ zero bindings) acc = case acc of
   Exec op args
     | modified <- IdxSet.fromList $ argsOutputs args
     , input <- boundsInputs env args
@@ -172,6 +173,10 @@ boundsOptimizeAcc env@(BoundsEnv _ _ zero _) acc = case acc of
     -- and that may cause that the assertions referenced by this fence are not
     -- ran.
     --
+    -- TODO: If all variables in the set refer to assertions that we already
+    -- proved to be true, or assumes, then we can actually keep this
+    -- information.
+    --
     -- We thus return the environment from before this fence, with the
     -- information of mutated buffers removed.
     , env'' <- env{ boundsGraph = boundsGraphClearNodes (boundsGraph env) $ accIdxSet modified }
@@ -179,7 +184,12 @@ boundsOptimizeAcc env@(BoundsEnv _ _ zero _) acc = case acc of
 
   Aassert expr
     | (_, expr') <- boundsOptimizeExp env expr
-    -> (IdxSet.empty, env, TupRsingle $ bottom zero $ scalarTypeWord8, Aassert expr')
+    , expr'' <- simplifyExp expr'
+    -> case expr'' of
+      Const _ 1 -> (IdxSet.empty, env, TupRsingle $ bottom zero $ scalarTypeWord8, Compute $ Const scalarTypeWord8 1)
+      _ | Just idx <- lookupAssertion bindings expr'' ->
+        (IdxSet.empty, env, TupRsingle $ bottom zero $ scalarTypeWord8, Fence (IdxSet.singleton idx) $ Compute $ Const scalarTypeWord8 1)
+      _ -> (IdxSet.empty, env, TupRsingle $ bottom zero $ scalarTypeWord8, Aassert expr')
 
   Aassume expr
     | (_, expr') <- boundsOptimizeExp env expr
@@ -569,3 +579,5 @@ boundsOptimizeBackpermute env (_ :>: InputIn _ inBounds :>: InputOut shBounds :>
   | (_, f') <- boundsOptimizeFun1 env f (indexBounds (boundsZero env) shBounds) =
     ( OutputNone :>: OutputNone :>: OutputOut inBounds :>: ArgsNil
     , f' :>: input :>: output :>: ArgsNil )
+
+-- TODO: Add default implementations for fold, scan and permute

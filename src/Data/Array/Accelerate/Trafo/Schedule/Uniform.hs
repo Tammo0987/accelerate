@@ -223,17 +223,20 @@ transform' (SyncSchedule _ simple schedule) = case schedule of
           $ instr
           $ buildEffect (Exec (kernelMetadata kernel) kernel $ args' SkipNone)
           $ buildEffect (SignalResolve $ map (weaken $ skipWeakenIdx skip) resolvers) buildReturn
-  PAssert cond -> TransformSchedule $ \fenv _ _ ->
+  PAssert cond -> TransformSchedule $ \fenv _ ctx ->
     case acquireSome fenv $ IdxSet.fromVarList $ expGroundVars cond of
       AcquireSome skip signals resolvers instr mapping'
-        | mapping <- mapping' SkipNone ->
-          buildEffect (SignalAwait signals)
-            $ instr
-            $ buildEffect (Aassert $ mapArrayInstr
-              (weaken (Weaken $ \idx ->
-                fromMaybe (internalError "Variable missing after acquireSome") $ prjPartial idx mapping))
-              cond)
-            $ buildEffect (SignalResolve $ map (weaken $ skipWeakenIdx skip) resolvers) buildReturn
+        | mapping <- mapping' SkipNone -> case ctx of
+          CtxNormal dest
+            | TupRsingle dest' <- dest ->
+              buildEffect (SignalAwait signals)
+                $ instr
+                $ buildEffect (Aassert $ mapArrayInstr
+                  (weaken (Weaken $ \idx ->
+                    fromMaybe (internalError "Variable missing after acquireSome") $ prjPartial idx mapping))
+                  cond)
+                $ buildEffect (SignalResolve $ map (weaken $ skipWeakenIdx skip) resolvers)
+                $ writeLoopCondition (weaken (skipWeakenIdx skip) dest') True
   PFence _ next -> transform' next
 
   -- Bindings

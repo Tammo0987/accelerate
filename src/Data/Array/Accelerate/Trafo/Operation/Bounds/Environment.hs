@@ -32,6 +32,7 @@ import qualified Data.Array.Accelerate.AST.Graph as Graph
 import qualified Data.Array.Accelerate.AST.IdxSet as IdxSet
 import Data.Array.Accelerate.AST.LeftHandSide
 import Data.Array.Accelerate.AST.Operation
+import Data.Array.Accelerate.Analysis.Match
 import Data.Array.Accelerate.Trafo.WeakenedEnvironment
 import Data.Array.Accelerate.Trafo.Substitution
 import Data.Array.Accelerate.Trafo.Exp.Substitution
@@ -348,3 +349,15 @@ boundsGraphClearNodes
 boundsGraphClearNodes graph set =
   foldl' (\g (Exists idx) -> boundsGraphClearNode g idx) graph
     $ IdxSet.toList set
+
+lookupAssertion
+  :: forall benv.
+     WEnv Binding benv
+  -> Exp benv PrimBool
+  -> Maybe (Idx benv PrimBool)
+lookupAssertion wenv expr = listToMaybe $ mapMaybe f $ wenvToList wenv
+  where
+    f :: EnvBinding (Binding benv) benv -> Maybe (Idx benv PrimBool)
+    f (EnvBinding idx (BindAssertAssume expr'))
+      | Just _ <- matchOpenExp expr expr' = Just idx
+    f _ = Nothing
