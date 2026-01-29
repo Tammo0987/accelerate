@@ -204,7 +204,7 @@ shrinkLhs _ _ = Nothing
 -- Converts a strengthening from before a binding, to a strengthening after a binding.
 -- The two LeftHandSides may have different structures.
 strengthenShrunkLHS
-    :: (Distributes s)
+    :: Distributes s
     => LeftHandSide s t env1 env2
     -> LeftHandSide s t env1' env2'
     -> env1 :?> env1'

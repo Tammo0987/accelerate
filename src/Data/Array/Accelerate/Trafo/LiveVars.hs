@@ -166,7 +166,7 @@ setLive = \idx env -> uncurry setIdxSetLive $ go idx env
       Live -> (IdxSet.skip newSet, LPush env' Live)
       Unknown implies impliedBy
         | idx `IdxSet.member` impliedBy ->
-          -- This variable may be present in the implied-by set of otherlEnvPushLHS variables,
+          -- This variable may be present in the implied-by set of other variables,
           -- hence we need to add it to the IdxSet and potentially mark other variables
           -- live in the next iteration of setIdxSetLive.
           (IdxSet.push $ implies `IdxSet.union` newSet, LPush env' Live)

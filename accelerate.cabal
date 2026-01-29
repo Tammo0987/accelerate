@@ -313,6 +313,7 @@ flag tracy
     .
       > brew install cmake pkg-config freetype glfw
 
+
 flag bounds-checks
   manual:               True
   -- For now disabled by default. We may enable it by default when we know the
@@ -381,8 +382,6 @@ library
         , transformers                  >= 0.3
         , unordered-containers          >= 0.2
         , vector                        >= 0.10
-        , dependent-map
-        , some                          >= 1.0
   exposed-modules:
         -- The core language and reference implementation
         Data.Array.Accelerate

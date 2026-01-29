@@ -26,6 +26,7 @@ module Data.Array.Accelerate.Backend (
   runAt, runWithAt,
   run1At, run1WithAt,
   runNAt, runNWithAt,
+  inspectCompiler,
 
   -- Type classes that a backend should implement:
   Desugar.DesugarAcc(..),
@@ -155,6 +156,13 @@ runNBench b f = program `seq` sugarFunction (afunctionRepr @f) $ executeAfun (af
   where
     schedule = convertAfunBench @(Schedule backend) @(Kernel backend) b f
     program = linkAfunSchedule schedule -}
+
+inspectCompiler
+  :: forall backend f.
+     (Afunction f, Backend backend)
+  => f
+  -> String
+inspectCompiler = inspectCompiler' @(Schedule backend) @(Kernel backend)
 
 sugarFunction
   :: forall f.

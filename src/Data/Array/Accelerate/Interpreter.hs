@@ -156,7 +156,7 @@ instance DesugarAcc InterpretOp where
   -- we desugar a Scan with seed into a scan1 followed by a map followed by an append
   -- mkScan dir comb (Just (ArgExp seed)) i@(ArgArray In arr@(ArrayR shr tp) sh _) o
   --   | DeclareVars lhsTemp1 wTemp  kTemp1 <- declareVars $ buffersR tp
-  --   , DeclareVadefaultBCPermuteWithFunrs lhsTemp2 wTemp2 kTemp2 <- declareVars $ buffersR tp
+  --   , DeclareVars lhsTemp2 wTemp2 kTemp2 <- declareVars $ buffersR tp
   --   , wTemp1 <- wTemp2 .> wTemp =
   --     aletUnique lhsTemp1 (desugarAlloc arr $ fromGrounds sh) $
   --       aletUnique lhsTemp2 (desugarAlloc arr $ fromGrounds $ weakenVars wTemp sh) $
@@ -875,7 +875,7 @@ evalOpenExp pexp env arr@(EvalArrayInstr runArrayInstr) =
 
     Assert g e -> do
       g' <- evalE g
-      (if toBool g' then evalE e else error "Memory Access Violation!")
+      (if toBool g' then evalE e else error "Assertion failed")
 
     Assume _ e -> evalE e
 

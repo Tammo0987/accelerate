@@ -431,8 +431,10 @@ module Data.Array.Accelerate (
   CShort, CUShort, CInt, CUInt, CLong, CULong, CLLong, CULLong,
   CChar, CSChar, CUChar,
 
-  inspectCompiler,
-  module Data.Array.Accelerate.Backend
+  runAt, runWithAt,
+  run1At, run1WithAt,
+  runNAt, runNWithAt,
+  inspectCompiler, inspectCompiler'
 ) where
 
 import Data.Array.Accelerate.Backend
@@ -455,7 +457,7 @@ import Data.Array.Accelerate.Language
 import Data.Array.Accelerate.Pattern
 import Data.Array.Accelerate.Pattern.TH
 import Data.Array.Accelerate.Prelude
-import Data.Array.Accelerate.Trafo                                  ( inspectCompiler )
+import Data.Array.Accelerate.Trafo                                  ( inspectCompiler' )
 import Data.Array.Accelerate.Pretty                                 () -- show instances
 import Data.Array.Accelerate.Smart
 import Data.Array.Accelerate.Sugar.Array                            ( Array, Arrays, Scalar, Vector, Matrix, Segments, fromFunction, fromFunctionM, toList, fromList )

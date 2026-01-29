@@ -32,7 +32,7 @@ module Data.Array.Accelerate.Trafo (
   Function, EltFunctionR,
   convertExp, convertFun,
 
-  inspectCompiler, convertAfunWithObj,
+  inspectCompiler', convertAfunWithObj,
 ) where
 
 import Data.Array.Accelerate.Sugar.Array                  ( ArraysR )
@@ -84,12 +84,12 @@ import Control.Monad ((>=>))
 import Data.Array.Accelerate.Pretty.Exp (context0)
 import Data.Array.Accelerate.Trafo.Operation.Bounds
 
-inspectCompiler
+inspectCompiler'
   :: forall sched kernel f. 
      (Afunction f, Trafo sched kernel)
   => f
   -> String
-inspectCompiler = snd . convertAfunFullOptions @sched @kernel defaultOptions defaultObjective Pretty.renderForTerminal
+inspectCompiler' = snd . convertAfunFullOptions @sched @kernel defaultOptions defaultObjective Pretty.renderForTerminal
 
 {- testWithObjective
   :: forall sched kernel f. (Afunction f, DesugarAcc (KernelOperation kernel), Operation.SimplifyOperation (KernelOperation kernel), Operation.SLVOperation (KernelOperation kernel), Partitioning.MakesILP (KernelOperation kernel), Partitioned.SetOpIndices (KernelOperation kernel), Pretty.PrettyOp (KernelOperation kernel), Pretty.PrettyKernel kernel, IsSchedule sched, IsKernel kernel, Pretty.PrettySchedule sched, Operation.ShrinkArg (Partitioning.BackendClusterArg (KernelOperation kernel)), Operation.NFData' (Graph.BackendClusterArg (KernelOperation kernel)),  Operation.ShrinkArg (Partitioning.BackendClusterArg (KernelOperation kernel)))
@@ -152,7 +152,7 @@ convertAfunFullOptions
 convertAfunFullOptions config ft pprint f = runWriter $
   (   phase'' "sharing-recovery"    (Sharing.convertAfunWith config)                                (Pretty.prettyPreOpenAfun configPlain prettyOpenAcc Empty)
   >=> phase'' "array-split-lets"    LetSplit.convertAfun                                            (Pretty.prettyPreOpenAfun configPlain prettyOpenAcc Empty)
-  >=> phase'' "desugar"             (Operation.simplifyFun . Operation.simplifyFun . desugarAfun)                            Pretty.prettyAfun
+  >=> phase'' "desugar"             (Operation.simplifyFun . Operation.simplifyFun . desugarAfun)    Pretty.prettyAfun
   >=> phase'' "operation-bounds"    (Operation.simplifyFun . boundsOptimizeAfun)                     Pretty.prettyAfun
   >=> phase'' "operation-live-vars" (Operation.simplifyFun . Operation.stronglyLiveVariablesFun)     Pretty.prettyAfun
   >=> phase'' "array-fusion"        (Operation.simplifyFun . NewNewFusion.convertAfunWith config ft) Pretty.prettyAfun
