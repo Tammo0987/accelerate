@@ -29,6 +29,7 @@ import Data.Maybe (fromJust,  mapMaybe )
 import Control.Monad.State
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.NameGeneration (freshName)
 import Data.Foldable
+import Control.Monad
 
 data Objective
   -- Old fusion only objectives:

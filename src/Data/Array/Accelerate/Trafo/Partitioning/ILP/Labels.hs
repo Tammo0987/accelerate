@@ -52,7 +52,7 @@ import Data.Array.Accelerate.Representation.Ground (groundRelt)
 import qualified Data.Array.Accelerate.Pretty.Operation as P
 import qualified Data.Array.Accelerate.Pretty.Exp as P
 import Data.String (fromString)
-
+import Control.Monad
 
 
 --------------------------------------------------------------------------------
