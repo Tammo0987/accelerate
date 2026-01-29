@@ -53,13 +53,13 @@ rnfGroundsR :: GroundsR t -> ()
 rnfGroundsR = rnfTupR rnfGroundR
 
 -- | Conversion from arrays representation to grounds representation
-desugarArraysR :: ArraysR arr -> GroundsR (DesugaredArrays arr)
-desugarArraysR TupRunit          = TupRunit
-desugarArraysR (TupRsingle repr) = desugarArrayR repr
-desugarArraysR (TupRpair r1 r2)  = desugarArraysR r1 `TupRpair` desugarArraysR r2
+lowerArraysR :: ArraysR arr -> GroundsR (LoweredArrays arr)
+lowerArraysR TupRunit          = TupRunit
+lowerArraysR (TupRsingle repr) = lowerArrayR repr
+lowerArraysR (TupRpair r1 r2)  = lowerArraysR r1 `TupRpair` lowerArraysR r2
 
-desugarArrayR :: ArrayR arr -> GroundsR (DesugaredArrays arr)
-desugarArrayR (ArrayR shr tp) = mapTupR GroundRscalar (shapeType shr) `TupRpair` buffersR tp
+lowerArrayR :: ArrayR arr -> GroundsR (LoweredArrays arr)
+lowerArrayR (ArrayR shr tp) = mapTupR GroundRscalar (shapeType shr) `TupRpair` buffersR tp
 
 buffersR :: forall e. TypeR e -> GroundsR (Buffers e)
 buffersR TupRunit           = TupRunit
@@ -82,26 +82,26 @@ groundRelt :: GroundR (Buffer t) -> ScalarType t
 groundRelt (GroundRbuffer tp) = tp
 groundRelt (GroundRscalar tp) = bufferImpossible tp
 
-type family DesugaredArrays a where
-  DesugaredArrays ()           = ()
-  DesugaredArrays (a, b)       = (DesugaredArrays a, DesugaredArrays b)
-  DesugaredArrays (Array sh e) = (sh, Buffers e)
+type family LoweredArrays a where
+  LoweredArrays ()           = ()
+  LoweredArrays (a, b)       = (LoweredArrays a, LoweredArrays b)
+  LoweredArrays (Array sh e) = (sh, Buffers e)
 
-type family DesugaredAfun a where
-  DesugaredAfun (a -> b) = DesugaredArrays a -> DesugaredAfun b
-  DesugaredAfun a        = DesugaredArrays a
+type family LoweredAfun a where
+  LoweredAfun (a -> b) = LoweredArrays a -> LoweredAfun b
+  LoweredAfun a        = LoweredArrays a
 
-desugaredAfunIsBody :: ArraysR a -> DesugaredAfun a :~: DesugaredArrays a
-desugaredAfunIsBody (TupRsingle ArrayR{}) = Refl
-desugaredAfunIsBody TupRunit              = Refl
-desugaredAfunIsBody (TupRpair _ _)        = Refl
+loweredAfunIsBody :: ArraysR a -> LoweredAfun a :~: LoweredArrays a
+loweredAfunIsBody (TupRsingle ArrayR{}) = Refl
+loweredAfunIsBody TupRunit              = Refl
+loweredAfunIsBody (TupRpair _ _)        = Refl
 
-desugarArrays :: ArraysR a -> a -> DesugaredArrays a
-desugarArrays TupRunit              ()                 = ()
-desugarArrays (TupRpair r1 r2)      (a1, a2)           = (desugarArrays r1 a1, desugarArrays r2 a2)
-desugarArrays (TupRsingle ArrayR{}) (Array sh buffers) = (sh, buffers)
+lowerArrays :: ArraysR a -> a -> LoweredArrays a
+lowerArrays TupRunit              ()                 = ()
+lowerArrays (TupRpair r1 r2)      (a1, a2)           = (lowerArrays r1 a1, lowerArrays r2 a2)
+lowerArrays (TupRsingle ArrayR{}) (Array sh buffers) = (sh, buffers)
 
-sugarArrays :: ArraysR a -> DesugaredArrays a -> a
+sugarArrays :: ArraysR a -> LoweredArrays a -> a
 sugarArrays TupRunit              ()            = ()
 sugarArrays (TupRpair r1 r2)      (d1, d2)      = (sugarArrays r1 d1, sugarArrays r2 d2)
 sugarArrays (TupRsingle ArrayR{}) (sh, buffers) = Array sh buffers

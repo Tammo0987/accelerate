@@ -455,7 +455,7 @@ library
         Data.Array.Accelerate.Sugar.Vec
         Data.Array.Accelerate.Trafo
         Data.Array.Accelerate.Trafo.Config
-        Data.Array.Accelerate.Trafo.Desugar
+        Data.Array.Accelerate.Trafo.Lowering
         Data.Array.Accelerate.Trafo.Exp.Shrink
         Data.Array.Accelerate.Trafo.Exp.Simplify
         Data.Array.Accelerate.Trafo.Exp.Substitution

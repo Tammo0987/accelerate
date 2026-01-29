@@ -61,8 +61,8 @@ import System.IO.Unsafe (unsafePerformIO)
 
 import Control.DeepSeq
 import qualified Data.Array.Accelerate.Trafo.Partitioning.ILP.Graph as Partitioning
-import Data.Array.Accelerate.Representation.Ground (DesugaredArrays, DesugaredAfun)
-import Data.Array.Accelerate.Trafo.Desugar (DesugarAcc, desugar, desugarAfun)
+import Data.Array.Accelerate.Representation.Ground (LoweredArrays, LoweredAfun)
+import Data.Array.Accelerate.Trafo.Lowering (LowerAcc, lowerAfun)
 import qualified Data.Array.Accelerate.Trafo.NewNewFusion as NewNewFusion
 import Prettyprinter                                      as Pretty
 import qualified Data.Array.Accelerate.Pretty             as Pretty
@@ -92,7 +92,7 @@ inspectCompiler'
 inspectCompiler' = snd . convertAfunFullOptions @sched @kernel defaultOptions defaultObjective Pretty.renderForTerminal
 
 {- testWithObjective
-  :: forall sched kernel f. (Afunction f, DesugarAcc (KernelOperation kernel), Operation.SimplifyOperation (KernelOperation kernel), Operation.SLVOperation (KernelOperation kernel), Partitioning.MakesILP (KernelOperation kernel), Partitioned.SetOpIndices (KernelOperation kernel), Pretty.PrettyOp (KernelOperation kernel), Pretty.PrettyKernel kernel, IsSchedule sched, IsKernel kernel, Pretty.PrettySchedule sched, Operation.ShrinkArg (Partitioning.BackendClusterArg (KernelOperation kernel)), Operation.NFData' (Graph.BackendClusterArg (KernelOperation kernel)),  Operation.ShrinkArg (Partitioning.BackendClusterArg (KernelOperation kernel)))
+  :: forall sched kernel f. (Afunction f, LowerAcc (KernelOperation kernel), Operation.SimplifyOperation (KernelOperation kernel), Operation.SLVOperation (KernelOperation kernel), Partitioning.MakesILP (KernelOperation kernel), Partitioned.SetOpIndices (KernelOperation kernel), Pretty.PrettyOp (KernelOperation kernel), Pretty.PrettyKernel kernel, IsSchedule sched, IsKernel kernel, Pretty.PrettySchedule sched, Operation.ShrinkArg (Partitioning.BackendClusterArg (KernelOperation kernel)), Operation.NFData' (Graph.BackendClusterArg (KernelOperation kernel)),  Operation.ShrinkArg (Partitioning.BackendClusterArg (KernelOperation kernel)))
   => Objective
   -> f
   -> String
@@ -100,7 +100,7 @@ testWithObjective obj = snd . convertAfunFullOptions @sched @kernel defaultOptio
 
 
 testBench
-  :: forall sched kernel f. (Afunction f, DesugarAcc (KernelOperation kernel), Operation.SimplifyOperation (KernelOperation kernel), Operation.SLVOperation (KernelOperation kernel), Partitioning.MakesILP (KernelOperation kernel), Partitioned.SetOpIndices (KernelOperation kernel), Pretty.PrettyOp (KernelOperation kernel), Pretty.PrettyKernel kernel, IsSchedule sched, IsKernel kernel, Pretty.PrettySchedule sched, Operation.ShrinkArg (Partitioning.BackendClusterArg (KernelOperation kernel)), Operation.NFData' (Graph.BackendClusterArg (KernelOperation kernel)),  Operation.ShrinkArg (Partitioning.BackendClusterArg (KernelOperation kernel)))
+  :: forall sched kernel f. (Afunction f, LowerAcc (KernelOperation kernel), Operation.SimplifyOperation (KernelOperation kernel), Operation.SLVOperation (KernelOperation kernel), Partitioning.MakesILP (KernelOperation kernel), Partitioned.SetOpIndices (KernelOperation kernel), Pretty.PrettyOp (KernelOperation kernel), Pretty.PrettyKernel kernel, IsSchedule sched, IsKernel kernel, Pretty.PrettySchedule sched, Operation.ShrinkArg (Partitioning.BackendClusterArg (KernelOperation kernel)), Operation.NFData' (Graph.BackendClusterArg (KernelOperation kernel)),  Operation.ShrinkArg (Partitioning.BackendClusterArg (KernelOperation kernel)))
   => Benchmarking
   -> f
   -> String
@@ -123,7 +123,7 @@ convertAfun
   :: forall sched kernel f.
      (Afunction f, Trafo sched kernel)
   => f
-  -> sched kernel () (Scheduled sched (DesugaredAfun (ArraysFunctionR f)))
+  -> sched kernel () (Scheduled sched (LoweredAfun (ArraysFunctionR f)))
 convertAfun = convertAfunWith defaultOptions
 
 convertAfunWith
@@ -131,7 +131,7 @@ convertAfunWith
      (Afunction f, Trafo sched kernel)
   => Config
   -> f
-  -> sched kernel () (Scheduled sched (DesugaredAfun (ArraysFunctionR f)))
+  -> sched kernel () (Scheduled sched (LoweredAfun (ArraysFunctionR f)))
 convertAfunWith config = fst . convertAfunFullOptions config defaultObjective (const ())
 
 convertAfunWithObj
@@ -139,20 +139,20 @@ convertAfunWithObj
      (Afunction f, Trafo sched kernel)
   => Objective
   -> f
-  -> sched kernel () (Scheduled sched (DesugaredAfun (ArraysFunctionR f)))
+  -> sched kernel () (Scheduled sched (LoweredAfun (ArraysFunctionR f)))
 convertAfunWithObj obj = fst . convertAfunFullOptions defaultOptions (Fusion obj) (const ())
 
-type Trafo sched kernel = (DesugarAcc (KernelOperation kernel), Operation.SimplifyOperation (KernelOperation kernel), Operation.SLVOperation (KernelOperation kernel), OperationBounds (KernelOperation kernel), Partitioning.MakesILP (KernelOperation kernel), Partitioned.SetOpIndices (KernelOperation kernel), Pretty.PrettyOp (KernelOperation kernel), Pretty.PrettyKernel kernel, IsSchedule sched, IsKernel kernel, Pretty.PrettySchedule sched, Operation.ShrinkArg (Partitioning.BackendClusterArg (KernelOperation kernel)), Operation.NFData' (Graph.BackendClusterArg (KernelOperation kernel)),  Operation.ShrinkArg (Partitioning.BackendClusterArg (KernelOperation kernel)))
+type Trafo sched kernel = (LowerAcc (KernelOperation kernel), Operation.SimplifyOperation (KernelOperation kernel), Operation.SLVOperation (KernelOperation kernel), OperationBounds (KernelOperation kernel), Partitioning.MakesILP (KernelOperation kernel), Partitioned.SetOpIndices (KernelOperation kernel), Pretty.PrettyOp (KernelOperation kernel), Pretty.PrettyKernel kernel, IsSchedule sched, IsKernel kernel, Pretty.PrettySchedule sched, Operation.ShrinkArg (Partitioning.BackendClusterArg (KernelOperation kernel)), Operation.NFData' (Graph.BackendClusterArg (KernelOperation kernel)),  Operation.ShrinkArg (Partitioning.BackendClusterArg (KernelOperation kernel)))
 
 convertAfunFullOptions
   :: forall sched kernel f m.
      (Monoid m, Afunction f, Trafo sched kernel)
   => Config -> FusionType -> (Pretty.Adoc -> m)
-  -> f -> (sched kernel () (Scheduled sched (DesugaredAfun (ArraysFunctionR f))), m)
+  -> f -> (sched kernel () (Scheduled sched (LoweredAfun (ArraysFunctionR f))), m)
 convertAfunFullOptions config ft pprint f = runWriter $
   (   phase'' "sharing-recovery"    (Sharing.convertAfunWith config)                                (Pretty.prettyPreOpenAfun configPlain prettyOpenAcc Empty)
   >=> phase'' "array-split-lets"    LetSplit.convertAfun                                            (Pretty.prettyPreOpenAfun configPlain prettyOpenAcc Empty)
-  >=> phase'' "desugar"             (Operation.simplifyFun . Operation.simplifyFun . desugarAfun)    Pretty.prettyAfun
+  >=> phase'' "lowering"            (Operation.simplifyFun . Operation.simplifyFun . lowerAfun)      Pretty.prettyAfun
   >=> phase'' "operation-bounds"    (Operation.simplifyFun . boundsOptimizeAfun)                     Pretty.prettyAfun
   >=> phase'' "operation-live-vars" (Operation.simplifyFun . Operation.stronglyLiveVariablesFun)     Pretty.prettyAfun
   >=> phase'' "array-fusion"        (Operation.simplifyFun . NewNewFusion.convertAfunWith config ft) Pretty.prettyAfun

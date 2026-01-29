@@ -50,7 +50,7 @@ import Prelude                                                      hiding (take
 import qualified Prelude
 import Data.Array.Accelerate.AST.Partitioned
 import Data.Array.Accelerate.AST.Kernel
-import Data.Array.Accelerate.Trafo.Desugar
+import Data.Array.Accelerate.Trafo.Lowering
 import qualified Data.Array.Accelerate.Debug.Internal as Debug
 import Data.Array.Accelerate.Representation.Array
 import Data.Array.Accelerate.Error
@@ -130,17 +130,17 @@ data InterpretOp args where
   -- append a number of elements to the left or right of each innermost row using the generate function
   -- IAppend :: Side -> Int -> InterpretOp (Fun' ((sh, Int) -> e) -> In (sh, Int) e -> Out (sh, Int) e -> ())
 
-instance DesugarAcc InterpretOp where
+instance LowerAcc InterpretOp where
   mkMap         a b c   = Exec IMap         (a :>: b :>: c :>:       ArgsNil)
   mkBackpermute a b c   = Exec IBackpermute (a :>: b :>: c :>:       ArgsNil)
   mkGenerate    a b     = Exec IGenerate    (a :>: b :>:             ArgsNil)
   mkPermute     (Just a) b c = Exec IPermute     (a :>: b :>: c :>: ArgsNil)
   mkPermute     Nothing  b c = Exec IPermuteUnique (b :>: c :>: ArgsNil)
   mkFold        a Nothing b c = Exec (IFold1 $ unsafePerformIO $ newIORef mempty) (a :>: b :>: c :>:       ArgsNil)
-  -- we desugar a Fold with seed element into a Fold1 followed by a map which prepends the seed
+  -- we lower a Fold with seed element into a Fold1 followed by a map which prepends the seed
   mkFold a@(ArgFun f) (Just (ArgExp seed)) b@(ArgArray In (ArrayR _ tp) _ _) c@(ArgArray _ arr' sh' _)
     | DeclareVars lhsTemp wTemp kTemp <- declareVars $ buffersR tp =
-      aletUnique lhsTemp (desugarAlloc arr' $ fromGrounds sh') $
+      aletUnique lhsTemp (lowerAlloc arr' $ fromGrounds sh') $
         alet LeftHandSideUnit
           (mkFold (weaken wTemp a) Nothing (weaken wTemp b) (ArgArray Out arr' (weakenVars wTemp sh') (kTemp weakenId))) $
           case mkLHS tp of
@@ -153,13 +153,13 @@ instance DesugarAcc InterpretOp where
                 (weaken wTemp c)
   -- mkScan dir a Nothing b c = Exec (IScan1 dir $ unsafePerformIO $ newIORef mempty) (a :>: b :>: c :>: ArgsNil)
   -- mkScan _ _ _ _ _ = error "exclusive scan not implemented"
-  -- we desugar a Scan with seed into a scan1 followed by a map followed by an append
+  -- we lower a Scan with seed into a scan1 followed by a map followed by an append
   -- mkScan dir comb (Just (ArgExp seed)) i@(ArgArray In arr@(ArrayR shr tp) sh _) o
   --   | DeclareVars lhsTemp1 wTemp  kTemp1 <- declareVars $ buffersR tp
   --   , DeclareVars lhsTemp2 wTemp2 kTemp2 <- declareVars $ buffersR tp
   --   , wTemp1 <- wTemp2 .> wTemp =
-  --     aletUnique lhsTemp1 (desugarAlloc arr $ fromGrounds sh) $
-  --       aletUnique lhsTemp2 (desugarAlloc arr $ fromGrounds $ weakenVars wTemp sh) $
+  --     aletUnique lhsTemp1 (lowerAlloc arr $ fromGrounds sh) $
+  --       aletUnique lhsTemp2 (lowerAlloc arr $ fromGrounds $ weakenVars wTemp sh) $
   --         alet LeftHandSideUnit
   --           (alet LeftHandSideUnit
   --             (mkScan dir (weaken wTemp1 comb) Nothing (weaken wTemp1 i) (ArgArray Out arr (weakenVars wTemp1 sh) (kTemp1 wTemp2)))
@@ -684,7 +684,7 @@ firstOfRow i (Shape (ShapeRsnoc _) (_, n)) idleRowsLeft = (i `mod` (n + idleRows
 -- run :: forall a. (HasCallStack, Sugar.Arrays a) => Smart.Acc a -> a
 -- run _ = unsafePerformIO execute
 --   where
---     acc :: PartitionedAcc InterpretOp () (DesugaredArrays (Sugar.ArraysR a))
+--     acc :: PartitionedAcc InterpretOp () (LoweredArrays (Sugar.ArraysR a))
 --     !acc    = undefined -- convertAcc a
 --     execute = do
 --       Debug.dumpGraph $!! acc

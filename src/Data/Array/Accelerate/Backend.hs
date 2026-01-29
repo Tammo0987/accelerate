@@ -29,7 +29,7 @@ module Data.Array.Accelerate.Backend (
   inspectCompiler,
 
   -- Type classes that a backend should implement:
-  Desugar.DesugarAcc(..),
+  Lowering.LowerAcc(..),
 
   Operation.SLVOperation(..),
   Operation.SubArgs(..), Operation.SubArg(..),
@@ -66,7 +66,7 @@ import qualified Data.Array.Accelerate.Trafo.Operation.Simplify as Operation
 import qualified Data.Array.Accelerate.Analysis.Hash.Operation  as Operation
 
 import Data.Array.Accelerate.Trafo.Sharing (Afunction(..), AfunctionRepr(..), afunctionGroundR, afunctionRepr)
-import qualified Data.Array.Accelerate.Trafo.Desugar as Desugar
+import qualified Data.Array.Accelerate.Trafo.Lowering as Lowering
 import qualified Data.Array.Accelerate.Trafo.Partitioning.ILP.Graph as Partitioning
 import qualified Data.Array.Accelerate.Pretty.Operation as Pretty
 import qualified Data.Array.Accelerate.Pretty.Schedule as Pretty
@@ -96,7 +96,7 @@ runWithAt :: forall backend t. (Sugar.Arrays t, Backend backend) => Config -> Sm
 runWithAt = runNWithAt @backend
 
 {- runWithObj :: forall backend t. (Sugar.Arrays t, Backend backend) => Objective -> Smart.Acc t -> t
-runWithObj obj acc = Sugar.toArr $ sugarArrays repr $ unsafePerformIO $ executeAcc (desugarArraysR repr) program
+runWithObj obj acc = Sugar.toArr $ sugarArrays repr $ unsafePerformIO $ executeAcc (lowerArraysR repr) program
   where
     repr = Sugar.arraysR @t
     schedule = convertAccWithObj @(Schedule backend) @(Kernel backend) obj acc
@@ -167,14 +167,14 @@ inspectCompiler = inspectCompiler' @(Schedule backend) @(Kernel backend)
 sugarFunction
   :: forall f.
      AfunctionRepr f (AfunctionR f) (ArraysFunctionR f)
-  -> IOFun (DesugaredAfun (ArraysFunctionR f))
+  -> IOFun (LoweredAfun (ArraysFunctionR f))
   -> AfunctionR f
 sugarFunction AfunctionReprBody a
-  | Refl <- desugaredAfunIsBody repr
-  , Refl <- reprIsBody (desugarArraysR repr) = Sugar.toArr $ sugarArrays repr $ unsafePerformIO a
+  | Refl <- loweredAfunIsBody repr
+  , Refl <- reprIsBody (lowerArraysR repr) = Sugar.toArr $ sugarArrays repr $ unsafePerformIO a
   where
     repr = Sugar.arraysR @(AfunctionR f)
-sugarFunction (AfunctionReprLam r) f = sugarFunction r . f . desugarArrays repr . Sugar.fromArr
+sugarFunction (AfunctionReprLam r) f = sugarFunction r . f . lowerArrays repr . Sugar.fromArr
   where
     repr :: forall a b. f ~ (Smart.Acc a -> b) => ArraysR (Sugar.ArraysR a)
     repr = Sugar.arraysR @a
