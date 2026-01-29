@@ -88,7 +88,7 @@ module Data.Array.Accelerate.Language (
   -- * Flow-control
   acond, awhile,
   cond,  while,
-  Assert(..),
+  Assert(..), assertBounds,
 
   -- * Array operations with a scalar result
   (!), (!!), shape, size, shapeSize,
@@ -309,7 +309,7 @@ generate
     => Exp sh
     -> (Exp sh -> Exp a)
     -> Acc (Array sh a)
-generate sh fun = Acc $ applyAcc (Generate $ arrayR @sh @a) (assert isNonNegative sh) fun
+generate sh fun = Acc $ applyAcc (Generate $ arrayR @sh @a) (assertBounds isNonNegative sh) fun
 
 -- Shape manipulation
 -- ------------------
@@ -329,7 +329,7 @@ reshape
     => Exp sh
     -> Acc (Array sh' e)
     -> Acc (Array sh e)
-reshape sh as = Acc $ applyAcc (Reshape $ shapeR @sh) (assert (\s -> shapeSize s == size as) sh) as
+reshape sh as = Acc $ applyAcc (Reshape $ shapeR @sh) (assertBounds (\s -> shapeSize s == size as) sh) as
 
 -- Extraction of sub-arrays
 -- ------------------------
@@ -550,7 +550,7 @@ fold1 :: forall sh a.
       -> Acc (Array sh a)
 fold1 f =
   Acc . applyAcc (Fold (eltR @a) (unExpBinaryFunction f) Nothing)
-  . assert (\xs -> let Exp sh = shape xs in innerNonEmpty (shapeR @sh) sh)
+  . assertBounds (\xs -> let Exp sh = shape xs in innerNonEmpty (shapeR @sh) sh)
 
 -- | Segmented reduction along the innermost dimension of an array. The
 -- segment descriptor specifies the starting index (offset) along the
@@ -710,7 +710,7 @@ permute'
 permute' f def src = Acc $ applyAcc
   (Permute (arrayR @sh @a) $ Just $ unExpBinaryFunction f)
   def
-  $ map (assert (\s@(Exp s') -> not (isJust s) ||! inboundsOf def (Exp $ prj1 $ prj0 $ prj0 s'))) src
+  $ map (assertBounds (\s@(Exp s') -> not (isJust s) ||! inboundsOf def (Exp $ prj1 $ prj0 $ prj0 s'))) src
 
 permuteUnique'
     :: forall sh sh' a. (Shape sh, Shape sh', Elt a)
@@ -720,7 +720,7 @@ permuteUnique'
 permuteUnique' def src = Acc $ applyAcc
   (Permute (arrayR @sh @a) Nothing)
   def
-  $ map (assert (\s@(Exp s') -> not (isJust s) ||! inboundsOf def (Exp $ prj1 $ prj0 $ prj0 s'))) src
+  $ map (assertBounds (\s@(Exp s') -> not (isJust s) ||! inboundsOf def (Exp $ prj1 $ prj0 $ prj0 s'))) src
 
 -- | Generalised backward permutation operation (array gather).
 --
@@ -772,9 +772,9 @@ backpermute
     -> Acc (Array sh  a)                -- ^ source array
     -> Acc (Array sh' a)
 backpermute sz f as =
-  Acc $ applyAcc (Backpermute $ shapeR @sh') (assert isNonNegative sz) f' as
+  Acc $ applyAcc (Backpermute $ shapeR @sh') (assertBounds isNonNegative sz) f' as
   where
-    f' ix = assert (inboundsOf as) $ f ix
+    f' ix = assertBounds (inboundsOf as) $ f ix
 
 -- Stencil operations
 -- ------------------
@@ -1236,13 +1236,13 @@ toIndex
     -> Exp sh                     -- ^ index to remap
     -> Exp Int
 toIndex sh@(Exp sh') ix = mkExp $ ToIndex (shapeR @sh) sh' ix'
-  where Exp ix' = assert (inbounds sh) ix
+  where Exp ix' = assertBounds (inbounds sh) ix
 
 -- | Inverse of 'toIndex'
 --
 fromIndex :: forall sh. Shape sh => Exp sh -> Exp Int -> Exp sh
 fromIndex sh@(Exp sh') e = mkExp $ FromIndex (shapeR @sh) sh' e'
-  where Exp e' = assert (\s -> s >= 0 &&! s < shapeSize sh) e
+  where Exp e' = assertBounds (\s -> s >= 0 &&! s < shapeSize sh) e
 
 -- | Intersection of two shapes
 --
@@ -1314,6 +1314,19 @@ class Assert a where
   --
   assume :: (a -> Exp Bool) -> a -> a
 
+-- | Variant of 'assert' that only adds an assertion when bounds checks are
+-- enabled via the flag bounds-checks.
+--
+-- This function may be removed in the future and replaced by the regular
+-- 'assert', if we decide to turn bounds checks on by default.
+--
+assertBounds :: Assert a => (a -> Exp Bool) -> a -> a
+#ifdef ACCELERATE_BOUNDS_CHECKS
+assertBounds = assert
+#else
+assertBounds _ a = a
+#endif
+
 instance Elt t => Assert (Exp t) where
   assert f (Exp e) = mkExp $ Assert (mkCoerce' g) e
     where Exp g = f $ Exp e
@@ -1380,7 +1393,7 @@ inboundsOf = inbounds . shape
 infixl 9 !
 (!) :: forall sh e. (Shape sh, Elt e) => Acc (Array sh e) -> Exp sh -> Exp e
 a@(Acc a') ! ix = mkExp $ Index (eltR @e) a' ix'
-  where Exp ix' = assert (inboundsOf a) ix
+  where Exp ix' = assertBounds (inboundsOf a) ix
 
 -- | Extract the value from an array at the specified linear index.
 -- Multidimensional arrays in Accelerate are stored in row-major order with
@@ -1401,7 +1414,7 @@ a@(Acc a') ! ix = mkExp $ Index (eltR @e) a' ix'
 infixl 9 !!
 (!!) :: forall sh e. (Shape sh, Elt e) => Acc (Array sh e) -> Exp Int -> Exp e
 a@(Acc a') !! ix = mkExp $ LinearIndex (eltR @e) a' ix'
-  where Exp ix' = assert (\i -> 0 <= i &&! i < size a) ix
+  where Exp ix' = assertBounds (\i -> 0 <= i &&! i < size a) ix
 
 -- | Extract the shape (extent) of an array.
 --

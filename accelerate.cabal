@@ -315,13 +315,10 @@ flag tracy
 
 flag bounds-checks
   manual:               True
-  default:              True
+  -- For now disabled by default. We may enable it by default when we know the
+  -- performance overhead of assertions.
+  default:              False
   description:          Enable bounds checking
-
-flag optimize-assertions
-  manual:               True
-  default:              True
-  description:          Enable redundant assertion elimination analysis
 
 flag memory-counter
   manual:               True
@@ -707,10 +704,6 @@ library
   if flag(bounds-checks)
     cpp-options:
         -DACCELERATE_BOUNDS_CHECKS
-
-  if flag(optimize-assertions)
-    cpp-options:
-        -DACCELERATE_OPTIMIZE_ASSERTIONS
 
   if flag(memory-counter)
     cpp-options:
