@@ -120,7 +120,6 @@ prettyPreOpenExp ctx prettyArrayInstr env exp =
         op  = primOperator f
         op' = isInfix op ? (Operator (parens (opName op)) App L 10, op)
     --
-    PrimConst c           -> prettyPrimConst c
     Const tp c            -> prettyConst (TupRsingle tp) c
     Pair{}                -> prettyTuple ctx prettyArrayInstr env exp
     Nil                   -> "()"
@@ -141,8 +140,6 @@ prettyPreOpenExp ctx prettyArrayInstr env exp =
                       , hang shiftwidth (sep [ then_, t' ])
                       , hang shiftwidth (sep [ else_, e' ]) ]
     --
-    IndexSlice _ slix sh  -> ppF2 "indexSlice"  (ppE slix) (ppE sh)
-    IndexFull _ slix sl   -> ppF2 "indexFull"   (ppE slix) (ppE sl)
     ToIndex _ sh ix       -> ppF2 "toIndex"     (ppE sh) (ppE ix)
     FromIndex _ sh ix     -> ppF2 "fromIndex"   (ppE sh) (ppE ix)
     While p f x           -> ppF3 "while"       (ppF p) (ppF f) (ppE x)
@@ -151,6 +148,8 @@ prettyPreOpenExp ctx prettyArrayInstr env exp =
     ShapeSize _ sh        -> ppF1 "shapeSize"   (ppE sh)
     Coerce _ tp x         -> ppF1 (Operator (withTypeRep tp "coerce") App L 10) (ppE x)
     Undef tp              -> withTypeRep tp "undef"
+    Assert e1 e2          -> ppF2 "assert" (ppE e1) (ppE e2)
+    Assume e1 e2          -> ppF2 "assume" (ppE e1) (ppE e2)
 
   where
     ppE :: PreOpenExp arr env e -> Context -> Adoc
@@ -275,11 +274,6 @@ prettyConst :: TypeR e -> e -> Adoc
 prettyConst tp x =
   let y = showElt tp x
   in  parensIf (any isSpace y) (pretty y)
-
-prettyPrimConst :: PrimConst a -> Adoc
-prettyPrimConst PrimMinBound{} = "minBound"
-prettyPrimConst PrimMaxBound{} = "maxBound"
-prettyPrimConst PrimPi{}       = "pi"
 
 data Operator = Operator
   { opName            :: Adoc
@@ -463,12 +457,10 @@ primOperator PrimCeiling{}            = Operator "ceiling"            App    L 1
 primOperator PrimAtan2{}              = Operator "atan2"              App    L 10
 primOperator PrimIsNaN{}              = Operator "isNaN"              App    L 10
 primOperator PrimIsInfinite{}         = Operator "isInfinite"         App    L 10
-primOperator PrimLt{}                 = Operator "<"                  Infix  N 4
-primOperator PrimGt{}                 = Operator ">"                  Infix  N 4
-primOperator PrimLtEq{}               = Operator "<="                 Infix  N 4
-primOperator PrimGtEq{}               = Operator ">="                 Infix  N 4
-primOperator PrimEq{}                 = Operator "=="                 Infix  N 4
-primOperator PrimNEq{}                = Operator "/="                 Infix  N 4
+primOperator (PrimCmp _ CmpLt)        = Operator "<"                  Infix  N 4
+primOperator (PrimCmp _ CmpGtEq)      = Operator ">="                 Infix  N 4
+primOperator (PrimCmp _ CmpEq)        = Operator "=="                 Infix  N 4
+primOperator (PrimCmp _ CmpNEq)       = Operator "/="                 Infix  N 4
 primOperator PrimMax{}                = Operator "max"                App    L 10
 primOperator PrimMin{}                = Operator "min"                App    L 10
 primOperator PrimLAnd                 = Operator "&&"                 Infix  R 3

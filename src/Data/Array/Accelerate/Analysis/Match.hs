@@ -32,7 +32,8 @@ module Data.Array.Accelerate.Analysis.Match (
   matchIdx, matchVar, matchVars, matchArrayR, matchArraysR, matchGroundR,
   matchGroundsR, matchTypeR, matchShapeR, matchShapeType, matchIntegralType,
   matchFloatingType, matchNumType, matchScalarType, matchLeftHandSide,
-  matchALeftHandSide, matchELeftHandSide, matchSingleType, matchTupR
+  matchALeftHandSide, matchELeftHandSide, matchSingleType, matchTupR,
+  matchVecR
 
 ) where
 
@@ -45,7 +46,9 @@ import Data.Array.Accelerate.Representation.Array
 import Data.Array.Accelerate.Representation.Shape
 import Data.Array.Accelerate.Representation.Slice
 import Data.Array.Accelerate.Representation.Stencil
+import Data.Array.Accelerate.Representation.Tag
 import Data.Array.Accelerate.Representation.Type
+import Data.Array.Accelerate.Representation.Vec
 import Data.Array.Accelerate.Representation.Ground
 import Data.Array.Accelerate.Type
 import Data.Primitive.Vec
@@ -102,6 +105,10 @@ matchPreOpenAcc matchAcc = match
       = Just Refl
 
     match (Manifest a1) (Manifest a2)
+      = matchAcc a1 a2
+    
+    match (Aassert c1 a1) (Aassert c2 a2)
+      | Just Refl <- matchExp c1 c2
       = matchAcc a1 a2
 
     match (Aforeign _ ff1 f1 a1) (Aforeign _ ff2 f2 a2)
@@ -486,16 +493,14 @@ matchOpenExp (Pair a1 b1) (Pair a2 b2)
 matchOpenExp Nil Nil
   = Just Refl
 
-matchOpenExp (IndexSlice sliceIndex1 ix1 sh1) (IndexSlice sliceIndex2 ix2 sh2)
-  | Just Refl <- matchOpenExp ix1 ix2
-  , Just Refl <- matchOpenExp sh1 sh2
-  , Just Refl <- matchSliceIndex sliceIndex1 sliceIndex2
+matchOpenExp (VecPack r1 e1) (VecPack r2 e2)
+  | Just Refl <- matchVecR r1 r2
+  , Just Refl <- matchOpenExp e1 e2
   = Just Refl
 
-matchOpenExp (IndexFull sliceIndex1 ix1 sl1) (IndexFull sliceIndex2 ix2 sl2)
-  | Just Refl <- matchOpenExp ix1 ix2
-  , Just Refl <- matchOpenExp sl1 sl2
-  , Just Refl <- matchSliceIndex sliceIndex1 sliceIndex2
+matchOpenExp (VecUnpack r1 e1) (VecUnpack r2 e2)
+  | Just Refl <- matchVecR r1 r2
+  , Just Refl <- matchOpenExp e1 e2
   = Just Refl
 
 matchOpenExp (ToIndex _ sh1 i1) (ToIndex _ sh2 i2)
@@ -506,6 +511,13 @@ matchOpenExp (ToIndex _ sh1 i1) (ToIndex _ sh2 i2)
 matchOpenExp (FromIndex _ sh1 i1) (FromIndex _ sh2 i2)
   | Just Refl <- matchOpenExp i1  i2
   , Just Refl <- matchOpenExp sh1 sh2
+  = Just Refl
+
+matchOpenExp c1@(Case t1 alts1 d1) c2@(Case t2 alts2 d2)
+  | Just Refl <- matchOpenExp t1 t2
+  , Just Refl <- matchTypeR (expType c1) (expType c2)
+  , matchAlts alts1 alts2
+  , matchMaybeExp d1 d2
   = Just Refl
 
 matchOpenExp (Cond p1 t1 e1) (Cond p2 t2 e2)
@@ -520,8 +532,13 @@ matchOpenExp (While p1 f1 x1) (While p2 f2 x2)
   , Just Refl <- matchOpenFun f1 f2
   = Just Refl
 
-matchOpenExp (PrimConst c1) (PrimConst c2)
-  = matchPrimConst c1 c2
+matchOpenExp (Assert g1 e1) (Assert g2 e2)
+  | Just Refl <- matchOpenExp g1 g2
+  = matchOpenExp e1 e2
+
+matchOpenExp (Assume g1 e1) (Assume g2 e2)
+  | Just Refl <- matchOpenExp g1 g2
+  = matchOpenExp e1 e2
 
 matchOpenExp (PrimApp f1 x1) (PrimApp f2 x2)
   | Just x1'  <- commutes f1 x1
@@ -546,6 +563,31 @@ matchOpenExp (ShapeSize _ sh1) (ShapeSize _ sh2)
 matchOpenExp _ _
   = Nothing
 
+matchAlts :: IsArrayInstr arr => [(TAG, PreOpenExp arr env t)] -> [(TAG, PreOpenExp arr env t)] -> Bool
+matchAlts [] [] = True
+matchAlts ((t1, e1) : alts1) ((t2, e2) : alts2)
+  | t1 == t2
+  , Just Refl <- matchOpenExp e1 e2
+  = matchAlts alts1 alts2
+matchAlts _ _ = False
+
+matchMaybeExp
+    :: IsArrayInstr arr
+    => Maybe (PreOpenExp arr env t)
+    -> Maybe (PreOpenExp arr env t)
+    -> Bool
+matchMaybeExp Nothing Nothing = True
+matchMaybeExp (Just a) (Just b) = isJust $ matchOpenExp a b
+matchMaybeExp _ _ = False
+
+matchVecR :: VecR n1 s1 t1 -> VecR n2 s2 t2 -> Maybe ((Vec n1 s1, t1) :~: (Vec n2 s2, t2))
+matchVecR (VecRnil t1) (VecRnil t2)
+  | Just Refl <- matchSingleType t1 t2
+  = Just Refl
+matchVecR (VecRsucc r1) (VecRsucc r2)
+  | Just Refl <- matchVecR r1 r2
+  = Just Refl
+matchVecR _ _ = Nothing
 
 -- Match scalar functions
 --
@@ -602,14 +644,6 @@ matchSliceIndex (SliceFixed sl1) (SliceFixed sl2)
 matchSliceIndex _ _
   = Nothing
 
--- Primitive constants and functions
---
-matchPrimConst :: PrimConst s -> PrimConst t -> Maybe (s :~: t)
-matchPrimConst (PrimMinBound s) (PrimMinBound t) = matchBoundedType s t
-matchPrimConst (PrimMaxBound s) (PrimMaxBound t) = matchBoundedType s t
-matchPrimConst (PrimPi s)       (PrimPi t)       = matchFloatingType s t
-matchPrimConst _                _                = Nothing
-
 
 -- Covariant function matching
 --
@@ -664,12 +698,8 @@ matchPrimFun (PrimFloor _ s)            (PrimFloor _ t)            = matchIntegr
 matchPrimFun (PrimCeiling _ s)          (PrimCeiling _ t)          = matchIntegralType s t
 matchPrimFun (PrimIsNaN _)              (PrimIsNaN _)              = Just Refl
 matchPrimFun (PrimIsInfinite _)         (PrimIsInfinite _)         = Just Refl
-matchPrimFun (PrimLt _)                 (PrimLt _)                 = Just Refl
-matchPrimFun (PrimGt _)                 (PrimGt _)                 = Just Refl
-matchPrimFun (PrimLtEq _)               (PrimLtEq _)               = Just Refl
-matchPrimFun (PrimGtEq _)               (PrimGtEq _)               = Just Refl
-matchPrimFun (PrimEq _)                 (PrimEq _)                 = Just Refl
-matchPrimFun (PrimNEq _)                (PrimNEq _)                = Just Refl
+matchPrimFun (PrimCmp _ c1)             (PrimCmp _ c2)
+  | c1 == c2                                                       = Just Refl
 matchPrimFun (PrimMax _)                (PrimMax _)                = Just Refl
 matchPrimFun (PrimMin _)                (PrimMin _)                = Just Refl
 matchPrimFun (PrimFromIntegral _ s)     (PrimFromIntegral _ t)     = matchNumType s t
@@ -680,7 +710,6 @@ matchPrimFun PrimLNot                   PrimLNot                   = Just Refl
 
 matchPrimFun _ _
   = Nothing
-
 
 -- Contravariant function matching
 --
@@ -743,29 +772,9 @@ matchPrimFun' PrimLAnd                   PrimLAnd                   = Just Refl
 matchPrimFun' PrimLOr                    PrimLOr                    = Just Refl
 matchPrimFun' PrimLNot                   PrimLNot                   = Just Refl
 
-matchPrimFun' (PrimLt s) (PrimLt t)
-  | Just Refl <- matchSingleType s t
-  = Just Refl
-
-matchPrimFun' (PrimGt s) (PrimGt t)
-  | Just Refl <- matchSingleType s t
-  = Just Refl
-
-matchPrimFun' (PrimLtEq s) (PrimLtEq t)
-  | Just Refl <- matchSingleType s t
-  = Just Refl
-
-matchPrimFun' (PrimGtEq s) (PrimGtEq t)
-  | Just Refl <- matchSingleType s t
-  = Just Refl
-
-matchPrimFun' (PrimEq s) (PrimEq t)
-  | Just Refl <- matchSingleType s t
-  = Just Refl
-
-matchPrimFun' (PrimNEq s) (PrimNEq t)
-  | Just Refl <- matchSingleType s t
-  = Just Refl
+matchPrimFun' (PrimCmp s c1)             (PrimCmp t c2)
+  | c1 == c2                                                       
+  , Just Refl <- matchSingleType s t                                = Just Refl
 
 matchPrimFun' _ _
   = Nothing
@@ -880,6 +889,9 @@ matchFloatingType _            _            = Nothing
 -- a stable ordering such that matching recognises expressions modulo
 -- commutativity.
 --
+-- TODO: Should we remove this functionality? The expression simplifier
+-- already converts commutative operations to a normal form, and we
+-- compare expressions only after simplification.
 commutes
     :: forall arr env a r.
        IsArrayInstr arr
@@ -892,8 +904,8 @@ commutes f x = case f of
   PrimBAnd{}    -> Just (swizzle x)
   PrimBOr{}     -> Just (swizzle x)
   PrimBXor{}    -> Just (swizzle x)
-  PrimEq{}      -> Just (swizzle x)
-  PrimNEq{}     -> Just (swizzle x)
+  PrimCmp _ CmpEq  -> Just (swizzle x)
+  PrimCmp _ CmpNEq -> Just (swizzle x)
   PrimMax{}     -> Just (swizzle x)
   PrimMin{}     -> Just (swizzle x)
   PrimLAnd      -> Just (swizzle x)

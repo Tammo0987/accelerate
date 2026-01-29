@@ -32,6 +32,8 @@ import Data.Array.Accelerate.Pretty.Exp
 import Data.Array.Accelerate.Pretty.Type
 import Data.Array.Accelerate.AST.Operation
 import Data.Array.Accelerate.AST.LeftHandSide
+import Data.Array.Accelerate.AST.IdxSet (IdxSet)
+import qualified Data.Array.Accelerate.AST.IdxSet as IdxSet
 import Data.Array.Accelerate.Array.Buffer
 import Data.Array.Accelerate.Representation.Elt
 import Data.Array.Accelerate.Representation.Type
@@ -70,9 +72,8 @@ prettyOpenAcc env = \case
   Manifest var -> hang 2 $ group $ vsep [annotate Statement "manifest", prettyVar (val env) var]
   Compute exp -> hang 2 $ group $ vsep [annotate Statement "compute", prettyExp (val env) exp]
   Alet LeftHandSideUnit _ bnd body
-    | notReturn bnd
-    -- A return looks very strange if there is no explict LHS. It's uncommon,
-    -- but also very strange when this does happens.
+    | Exec{} <- bnd
+    -- Only hide the left hand side if the right hand side is a kernel execution
     -> prettyOpenAcc env bnd
         <> hardline
         <> prettyOpenAcc env body
@@ -102,9 +103,14 @@ prettyOpenAcc env = \case
         <> hardline <> hang 4 ("  ( " <> prettyOpenAfun env step)
         <> hardline <> "  )"
         <> hardline <> indent 2 (prettyVars (val env) 10 initial)
-  where
-    notReturn Return{} = False
-    notReturn _        = True
+  Aassert g ->
+    hang 2 (group $ vsep [annotate Statement "assert", prettyExp (val env) g])
+  Aassume g ->
+    hang 2 (group $ vsep [annotate Statement "assume", prettyExp (val env) g])
+  Fence set next ->
+    hang 2 (group $ vsep [annotate Statement "fence", prettyIdxSet (val env) set])
+    <> hardline
+    <> prettyOpenAcc env next
 
 prettyArgs :: Val benv -> Args benv f -> Adoc
 prettyArgs env args = tupled $ map (\(Exists a) -> prettyArg env a) $ argsToList args
@@ -188,6 +194,9 @@ prettyVars env = prettyTupR $ const $ prettyVar env
 prettyShapeVars :: Val env -> Vars s env sh -> Adoc
 prettyShapeVars _   TupRunit = "Z"
 prettyShapeVars env vars = encloseSep "Z :. " "" " :. " $ map (\(Exists v) -> prettyVar env v) $ flattenTupR vars
+
+prettyIdxSet :: Val env -> IdxSet env -> Adoc
+prettyIdxSet env set = "{" <> hsep (map (\(Exists idx) -> prj idx env) $ IdxSet.toList set) <> "}"
 
 -- Types
 prettyGroundR :: GroundR t -> Adoc

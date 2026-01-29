@@ -43,6 +43,7 @@ import Data.Array.Accelerate.Trafo.LiveVars
 import Data.Array.Accelerate.Error
 
 import Data.Type.Equality
+import Data.Maybe (mapMaybe)
 
 stronglyLiveVariablesFun :: SLVOperation op => PreOpenAfun op () t -> PreOpenAfun op () t
 stronglyLiveVariablesFun acc = acc' ReEnvEnd
@@ -134,22 +135,17 @@ stronglyLiveVariables' liveness returns us = \case
         $ \re s -> case s of
           SubTupRskip -> Right $ Return TupRunit
           SubTupRkeep -> Right $ Manifest $ expectJust $ reEnvVar re var
-  Compute expr
-    -- If the LHS of the binding is live, then all free variables of this
-    -- expression are live as well.
-    | free <- expGroundVars expr
-    , liveness1 <- returnIndices returns (IdxSet.fromVarList free) liveness ->
-      LVAnalysis
-        liveness1
-        $ \re s ->
-          let
-            tp = expType expr
-            expr' = mapArrayInstr (reEnvArrayInstr re) expr
-          in case s of
-              SubTupRskip -> Right $ Return TupRunit
-              SubTupRkeep -> Right $ Compute $ expr'
-              _ | DeclareSubVars lhs _ vars <- declareSubVars tp s
-                -> Right $ Compute $ Let lhs expr' $ returnExpVars $ vars weakenId
+  Compute expr -> stronglyLiveVariablesComputeLike (const Compute) liveness returns expr
+  Aassert cond -> stronglyLiveVariablesComputeLike
+    (\s -> case s of
+      SubTupRkeep -> Aassert
+      SubTupRskip -> const $ Return TupRunit) -- Should not occur
+    liveness returns cond
+  Aassume cond -> stronglyLiveVariablesComputeLike
+    (\s -> case s of
+      SubTupRkeep -> Aassume
+      SubTupRskip -> const $ Return TupRunit) -- Should not occur
+    liveness returns cond
   Alet lhs us' bnd body
     | liveness1 <- lEnvPushLHS lhs liveness
     , LVAnalysis liveness2 body' <- stronglyLiveVariables' liveness1 (returnImplicationsWeakenByLHS lhs returns) us body
@@ -215,6 +211,16 @@ stronglyLiveVariables' liveness returns us = \case
         liveness3
         $ \re _ ->
           Left $ Awhile us' (condition' re) (step' re) $ expectJust $ reEnvVars re initial
+  Fence set next
+    | liveness1 <- setIdxSetLive set liveness
+    , LVAnalysis liveness2 next' <- stronglyLiveVariables' liveness1 returns us next ->
+      LVAnalysis
+        liveness2
+        $ \re s ->
+          let set' = reEnvIdxSet re set
+          in case next' re s of
+              Left  next'' -> Left  $ Fence set' next''
+              Right next'' -> Right $ Fence set' next''
   where
     mkAcond :: ExpVar env' PrimBool -> PreOpenAcc op env' t' -> PreOpenAcc op env' t' -> PreOpenAcc op env' t'
     mkAcond _         (Return TupRunit) (Return TupRunit) = Return TupRunit
@@ -223,6 +229,37 @@ stronglyLiveVariables' liveness returns us = \case
     mkAlet :: GLeftHandSide bnd subenv subenv' -> Uniquenesses bnd -> PreOpenAcc op subenv bnd -> PreOpenAcc op subenv' t -> PreOpenAcc op subenv t
     mkAlet (LeftHandSideWildcard TupRunit) _ (Return TupRunit) body = body
     mkAlet lhs us' bnd body = Alet lhs us' bnd body
+
+-- Implementation of stronglyLiveVariables' for Compute, Aassert and Aassume
+stronglyLiveVariablesComputeLike
+  :: SLVOperation op
+  => (forall env' t'. SubTupR t t' -> Exp env' t' -> OperationAcc op env' t')
+  -> LivenessEnv env
+  -> ReturnImplications env t
+  -> Exp env t
+  -> LVAnalysis (PreOpenAcc op) env t
+stronglyLiveVariablesComputeLike constructor liveness returns expr
+  -- If the LHS of the binding is live, then all free variables of this
+  -- expression are live as well.
+  | free <- expGroundVars expr
+  , liveness1 <- returnIndices returns (IdxSet.fromVarList free) liveness =
+    LVAnalysis
+      liveness1
+      $ \re s ->
+        let
+          tp = expType expr
+          expr' = mapArrayInstr (reEnvArrayInstr re) expr
+        in case s of
+            SubTupRskip -> Right $ Return TupRunit
+            SubTupRkeep -> Right $ constructor s $ expr'
+            _ | DeclareSubVars lhs _ vars <- declareSubVars tp s
+              -> Right $ constructor s $ Let lhs expr' $ returnExpVars $ vars weakenId
+
+reEnvIdxSet :: ReEnv env subenv -> IdxSet.IdxSet env -> IdxSet.IdxSet subenv
+reEnvIdxSet re idxSet =
+  IdxSet.fromList $
+    mapMaybe (\(Exists ix) -> fmap Exists (reEnvIdx re ix))
+             (IdxSet.toList idxSet)
 
 class SLVOperation op where
   slvOperation :: op f -> Maybe (ShrinkOperation op f)

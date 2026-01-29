@@ -332,6 +332,8 @@ convertSharingAcc config alyt aenv (ScopedAcc lams (AccSharing _ preAcc))
       Aprj ix a                   -> let AST.OpenAcc a' = cvtAprj ix a
                                      in a'
       Atrace msg acc1 acc2        -> AST.Atrace msg (cvtA acc1) (cvtA acc2)
+      Aassert cond acc            -> AST.Aassert (cvtE cond) (cvtA acc)
+      Aassume cond acc            -> AST.Aassume (cvtE cond) (cvtA acc)
       Use repr array              -> AST.Use repr array
       Unit tp e                   -> AST.Unit tp (cvtE e)
       Generate repr@(ArrayR shr _) sh f
@@ -760,7 +762,6 @@ convertSharingExp config lyt alyt env aenv exp@(ScopedExp lams _) = cvt exp
           Case e rhs            -> cvtCase (cvt e) (over (mapped . _2) cvt rhs)
           Cond e1 e2 e3         -> AST.Cond (cvt e1) (cvt e2) (cvt e3)
           While tp p it i       -> AST.While (cvtFun1 tp p) (cvtFun1 tp it) (cvt i)
-          PrimConst c           -> AST.PrimConst c
           PrimApp f e           -> cvtPrimFun f (cvt e)
           Index _ a e           -> AST.ArrayInstr (AST.Index $ cvtAvar a) (cvt e)
           LinearIndex _ a i     -> AST.ArrayInstr (AST.LinearIndex $ cvtAvar a) (cvt i)
@@ -768,6 +769,8 @@ convertSharingExp config lyt alyt env aenv exp@(ScopedExp lams _) = cvt exp
           ShapeSize shr e       -> AST.ShapeSize shr (cvt e)
           Foreign repr ff f e   -> AST.Foreign repr ff (cvtNoArrayInstr $ convertSmartFun config (typeR e) f) (cvt e)
           Coerce t1 t2 e        -> AST.Coerce t1 t2 (cvt e)
+          Assert g e            -> AST.Assert (cvt g) (cvt e)
+          Assume g e            -> AST.Assume (cvt g) (cvt e)
 
     cvtPrj :: forall a b c env1 aenv1. PairIdx (a, b) c -> AST.OpenExp env1 aenv1 (a, b) -> AST.OpenExp env1 aenv1 c
     cvtPrj PairIdxLeft  (AST.Pair a _) = a
@@ -1518,6 +1521,14 @@ makeOccMapSharingAcc config accOccMap = traverseAcc
                                              (a', h1) <- traverseAcc lvl acc1
                                              (b', h2) <- traverseAcc lvl acc2
                                              return (Atrace msg a' b', h1 `max` h2 + 1)
+            Aassert cond acc            -> do
+                                             (cond', h1) <- traverseExp lvl cond
+                                             (acc', h2)  <- traverseAcc lvl acc
+                                             return (Aassert cond' acc', h1 `max` h2 + 1)
+            Aassume cond acc            -> do
+                                             (cond', h1) <- traverseExp lvl cond
+                                             (acc', h2)  <- traverseAcc lvl acc
+                                             return (Aassume cond' acc', h1 `max` h2 + 1)
             Use repr arr                -> return (Use repr arr, 1)
             Unit tp e                   -> do
                                              (e', h) <- traverseExp lvl e
@@ -1862,7 +1873,6 @@ makeOccMapSharingExp config accOccMap expOccMap = travE
                                      (iter', h2) <- traverseFun1 lvl t iter
                                      (init', h3) <- travE lvl init
                                      return (While t p' iter' init', h1 `max` h2 `max` h3 + 1)
-            PrimConst c         -> return (PrimConst c, 1)
             PrimApp p e         -> travE1 (PrimApp p) e
             Index tp a e        -> travAE (Index tp) a e
             LinearIndex tp a i  -> travAE (LinearIndex tp) a i
@@ -1872,6 +1882,8 @@ makeOccMapSharingExp config accOccMap expOccMap = travE
                                       (e', h) <- travE lvl e
                                       return  (Foreign tp ff f e', h+1)
             Coerce t1 t2 e      -> travE1 (Coerce t1 t2) e
+            Assert g e          -> travE2 Assert g e
+            Assume g e          -> travE2 Assume g e
 
       where
         traverseAcc :: HasCallStack => Level -> SmartAcc arrs -> IO (UnscopedAcc arrs, Int)
@@ -2377,6 +2389,16 @@ determineScopesSharingAcc config accOccMap = scopesAcc
                                        reconstruct (Apair a1' a2') (accCount1 +++ accCount2)
           Aprj ix a               -> travA (Aprj ix) a
 
+          Aassert cond acc        -> let
+                                       (cond', accCount1) = scopesExp cond
+                                       (acc',  accCount2) = scopesAcc acc
+                                     in
+                                       reconstruct (Aassert cond' acc') (accCount1 +++ accCount2)
+          Aassume cond acc        -> let
+                                       (cond', accCount1) = scopesExp cond
+                                       (acc',  accCount2) = scopesAcc acc
+                                     in
+                                       reconstruct (Aassume cond' acc') (accCount1 +++ accCount2)
           Atrace msg a1 a2        -> let
                                        (a1', accCount1) = scopesAcc a1
                                        (a2', accCount2) = scopesAcc a2
@@ -2767,7 +2789,6 @@ determineScopesSharingExp config accOccMap expOccMap = scopesExp
                                        (it', accCount2) = scopesFun1 it
                                        (i' , accCount3) = scopesExp i
                                     in reconstruct (While tp p' it' i') (accCount1 +++ accCount2 +++ accCount3)
-          PrimConst c           -> reconstruct (PrimConst c) noNodeCounts
           PrimApp p e           -> travE1 (PrimApp p) e
           Index tp a e          -> travAE (Index tp) a e
           LinearIndex tp a e    -> travAE (LinearIndex tp) a e
@@ -2775,6 +2796,9 @@ determineScopesSharingExp config accOccMap expOccMap = scopesExp
           ShapeSize shr e       -> travE1 (ShapeSize shr) e
           Foreign tp ff f e     -> travE1 (Foreign tp ff f) e
           Coerce t1 t2 e        -> travE1 (Coerce t1 t2) e
+          Assert g e            -> travE2 Assert g e
+          Assume g e            -> travE2 Assume g e
+
       where
         travE1 :: HasCallStack
                => (ScopedExp a -> PreSmartExp ScopedAcc ScopedExp t)

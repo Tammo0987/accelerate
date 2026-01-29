@@ -18,12 +18,13 @@ module Data.Array.Accelerate.Unsafe (
 
   -- ** Unsafe operations
   Coerce, coerce,
-  undef,
+  undef, Assert(assume),
 
 ) where
 
 import Data.Array.Accelerate.Smart
 import Data.Array.Accelerate.Sugar.Elt
+import Data.Array.Accelerate.Language
 
 
 -- | The function 'coerce' allows you to convert a value between any two types

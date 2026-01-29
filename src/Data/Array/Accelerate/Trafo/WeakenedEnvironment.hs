@@ -18,7 +18,8 @@
 --
 
 module Data.Array.Accelerate.Trafo.WeakenedEnvironment
-  ( WEnv, WEnv'(..), wprj, wprj', wupdate, wupdateSetWeakened, wempty, wpush, wpush2, wpush', wremoveSet, wupdatePrjSet
+  ( WEnv, WEnv'(..), wprj, wprj', wupdate, wupdateSetWeakened, wempty
+  , wpush, wpush2, wpush', wremoveSet, wupdatePrjSet, wprjSet, wenvToList
   ) where
 
 import Data.Array.Accelerate.AST.Environment
@@ -118,3 +119,27 @@ wupdatePrjSet update (IdxSet set) env = go weakenId set env
       where (l, e') = go k p e
     go k (PPush p _) (WPushB e f)  = (l, WPushB e' f)
       where (l, e') = go (weakenSucc k) p e
+
+wprjSet :: forall f env. Sink f => IdxSet env -> WEnv f env -> ([Exists (f env)])
+wprjSet (IdxSet set) env = go weakenId set env
+  where
+    go :: env1 :> env -> PartialEnv g env' -> WEnv' f env1 env' -> ([Exists (f env)])
+    go _ PEnd        _              = []
+    go k p           (WWeaken k' e) = go (k .> k') p e
+    go k (PPush p _) (WPushA e f)  = Exists (weaken k f) : go k p e
+    go k (PPush p _) (WPushB e f)  = Exists (weaken k f) : go (weakenSucc k) p e
+    go k (PNone p)   (WPushA e _)  = go k p e
+    go k (PNone p)   (WPushB e _)  = go (weakenSucc k) p e
+
+wenvToList :: forall f env. Sink f => WEnv f env -> [EnvBinding (f env) env]
+wenvToList = go weakenId weakenId
+  where
+    go :: env1 :> env -> env2 :> env -> WEnv' f env1 env2 -> [EnvBinding (f env) env]
+    go _ _ WEmpty = []
+    go k1 k2 (WPushA env a) =
+      EnvBinding (k2 >:> ZeroIdx) (weaken k1 a)
+        : go k1 (weakenSucc k2) env
+    go k1 k2 (WPushB env a) =
+      EnvBinding (k2 >:> ZeroIdx) (weaken k1 a)
+        : go (weakenSucc k1) (weakenSucc k2) env
+    go k1 k2 (WWeaken k env) = go (k1 .> k) k2 env

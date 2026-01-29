@@ -51,6 +51,7 @@ module Data.Array.Accelerate.AST.Operation (
   paramIn, paramsIn, paramIn', paramsIn',
 
   ReindexPartial, reindexArg, reindexArgs, reindexExp, reindexPreArgs, reindexVar, reindexVars,
+  reindexIdxSet,
   weakenReindex,
   argVars, argsVars, argsInputs, argsOutputs, AccessGroundR(..),
 
@@ -84,6 +85,8 @@ import Language.Haskell.TH.Extra                                    ( CodeQ )
 import Data.Kind (Type)
 import Control.DeepSeq (NFData (rnf))
 import Data.Functor.Identity
+import Data.Array.Accelerate.AST.IdxSet (IdxSet)
+import qualified Data.Array.Accelerate.AST.IdxSet as IdxSet
 
 -- | An intermediate representation parameterized over executable operations.
 -- This data type only consists of the control flow structure and
@@ -170,7 +173,7 @@ data PreOpenAcc (op :: Type -> Type) env a where
           -> PreOpenAcc op env a
           -> PreOpenAcc op env a
 
-  -- Value-recursion for array-level computations
+  -- | Value-recursion for array-level computations.
   -- The uniqueness guarantees are an invariant of the loop
   -- and should hold before and after each iteration.
   --
@@ -179,6 +182,41 @@ data PreOpenAcc (op :: Type -> Type) env a where
           -> PreOpenAfun op env (a -> a)
           -> GroundVars     env a
           -> PreOpenAcc  op env a
+
+  -- | Asserts that the given expression evaluates to true.
+  --
+  -- The return value of this operation is intentionally not specified.
+  -- The value must be stored in a variable (in Alet) and that variable must be
+  -- used in a Fence. This ensures that the assertion runs before the
+  -- statements under the Fence are executed.
+  --
+  -- Forgetting to use the return value in a Fence may cause that the assertion
+  -- is removed from the program (and thus not evaluated).
+  --
+  Aassert :: Exp env PrimBool
+          -> PreOpenAcc op env Word8
+
+  -- | Assumes that the given expression evaluates to true,
+  -- without checking.
+  --
+  -- See Aassert for the description of the return value and the interaction
+  -- with Fence.
+  --
+  Aassume :: Exp env PrimBool
+          -> PreOpenAcc op env Word8
+
+  -- | Compiler fence, to prevent the compiler from reordering the computation
+  -- of the given variables past this point.
+  --
+  -- This is indented to be used with the return value of Aassert and Aassume,
+  -- to ensure an assertion runs before certain instructions. By having two
+  -- separate instructions (Aassert and Fence), we can more granually specify
+  -- which parts of the program depend on an assertion. Without this
+  -- granularity, assertions can block fusion in certain situations
+  --
+  Fence   :: IdxSet env
+          -> PreOpenAcc op env t
+          -> PreOpenAcc op env t
 
 -- | Function abstraction over parametrised array computations
 --
@@ -371,6 +409,9 @@ instance HasGroundsR (PreOpenAcc op env) where
   groundsR (Unit (Var tp _)) = TupRsingle $ GroundRbuffer tp
   groundsR (Acond _ a _)     = groundsR a
   groundsR (Awhile _ _ _ a)  = groundsR a
+  groundsR (Aassert _)       = TupRsingle $ GroundRscalar scalarTypeWord8
+  groundsR (Aassume _)       = TupRsingle $ GroundRscalar scalarTypeWord8
+  groundsR (Fence _ a)       = groundsR a
 
 instance HasGroundsR (GroundVar env) where
   groundsR (Var repr _) = TupRsingle repr
@@ -397,6 +438,7 @@ instance IsArrayInstr (ArrayInstr benv) where
     Index (Var (GroundRscalar tp) _) -> bufferImpossible tp
     Parameter (Var tp _)             -> tp
 
+  liftArrayInstr :: ArrayInstr benv t -> CodeQ (ArrayInstr benv t)
   liftArrayInstr (Index var)     = [|| Index $$(liftGroundVar var) ||]
   liftArrayInstr (Parameter var) = [|| Parameter $$(liftExpVar var) ||]
 
@@ -412,6 +454,10 @@ instance IsArrayInstr (ArrayInstr benv) where
 
   encodeArrayInstr (Index v)     = intHost $(hashQ ("Index" :: String))     <> encodeGroundVar v
   encodeArrayInstr (Parameter v) = intHost $(hashQ ("Parameter" :: String)) <> encodeExpVar v
+
+  inlineArrayInstr = \case
+    Parameter _ -> True
+    _ -> False
 
 encodeGroundR :: GroundR t -> Builder
 encodeGroundR (GroundRscalar tp) = intHost $(hashQ ("Scalar" :: String))    <> encodeScalarType tp
@@ -498,6 +544,17 @@ reindexPreArgs
 reindexPreArgs _ _ ArgsNil = pure ArgsNil
 reindexPreArgs reindex k (a :>: as) = (:>:) <$> reindex k a <*> reindexPreArgs reindex k as
 
+reindexIdxSet
+  :: forall f env env' . Applicative f
+  => ReindexPartial f env env'
+  -> IdxSet.IdxSet env
+  -> f (IdxSet.IdxSet env')
+reindexIdxSet k set =
+  foldr go (pure IdxSet.empty) (IdxSet.toList set)
+  where
+    go :: Exists (Idx env) -> f (IdxSet.IdxSet env') -> f (IdxSet.IdxSet env')
+    go (Exists ix) acc = IdxSet.insert <$> k ix <*> acc
+
 reindexAcc :: Applicative f => ReindexPartial f env env' -> PreOpenAcc op env t -> f (PreOpenAcc op env' t)
 reindexAcc r (Exec opargs pa) = Exec opargs <$> reindexArgs r pa
 reindexAcc r (Return tr) = Return <$> reindexVars r tr
@@ -509,7 +566,9 @@ reindexAcc _ (Use st n bu) = pure $ Use st n bu
 reindexAcc r (Unit var) = Unit <$> reindexVar r var
 reindexAcc r (Acond var poa poa') = Acond <$> reindexVar r var <*> reindexAcc r poa <*> reindexAcc r poa'
 reindexAcc r (Awhile tr poa poa' tr') = Awhile tr <$> reindexAfun r poa <*> reindexAfun r poa' <*> reindexVars r tr'
-
+reindexAcc r (Aassert cond) = Aassert <$> reindexExp r cond
+reindexAcc r (Aassume cond) = Aassume <$> reindexExp r cond
+reindexAcc r (Fence set e) = Fence <$> reindexIdxSet r set <*> reindexAcc r e
 
 reindexAfun :: Applicative f => ReindexPartial f env env' -> PreOpenAfun op env t -> f (PreOpenAfun op env' t)
 reindexAfun r (Abody poa) = Abody <$> reindexAcc r poa
@@ -592,6 +651,9 @@ mapAccExecutable f = \case
   Unit vars                     -> Unit vars
   Acond var a1 a2               -> Acond var (mapAccExecutable f a1) (mapAccExecutable f a2)
   Awhile uniqueness c g a       -> Awhile uniqueness (mapAfunExecutable f c) (mapAfunExecutable f g) a
+  Aassert cond                  -> Aassert cond
+  Aassume cond                  -> Aassume cond
+  Fence set e                   -> Fence set (mapAccExecutable f e)
 
 mapAfunExecutable :: (forall args benv'. op args -> Args benv' args -> op' args) -> PreOpenAfun op benv t -> PreOpenAfun op' benv t
 mapAfunExecutable f (Abody a)    = Abody    $ mapAccExecutable  f a
@@ -602,6 +664,7 @@ groundToExpVar (TupRsingle t)   (TupRsingle (Var _ ix)) = TupRsingle (Var t ix)
 groundToExpVar (TupRpair t1 t2) (TupRpair v1 v2)        = groundToExpVar t1 v1 `TupRpair` groundToExpVar t2 v2
 groundToExpVar TupRunit         TupRunit                = TupRunit
 groundToExpVar _                _                       = internalError "Impossible pair"
+
 expToGroundVar :: ExpVars env e -> GroundVars env e
 expToGroundVar  TupRunit = TupRunit
 expToGroundVar  (TupRsingle (Var a ix)) = TupRsingle $ Var (GroundRscalar a) ix
@@ -621,6 +684,9 @@ instance NFData' op => NFData (OperationAcc op env a) where
   rnf (Unit var)                    = rnfVar rnfScalarType var
   rnf (Acond cond true false)       = rnfVar rnfScalarType cond `seq` rnf true `seq` rnf false
   rnf (Awhile us cond step initial) = rnfTupR rnfUniqueness us `seq` rnf cond `seq` rnf step `seq` rnfGroundVars initial
+  rnf (Aassert cond)                = rnfOpenExp cond
+  rnf (Aassume cond)                = rnfOpenExp cond
+  rnf (Fence set a)                 = IdxSet.rnfIdxSet set `seq` rnf a
 
 instance NFData' op => NFData (OperationAfun op env a) where
   rnf (Abody a) = rnf a

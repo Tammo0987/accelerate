@@ -313,10 +313,13 @@ flag tracy
     .
       > brew install cmake pkg-config freetype glfw
 
+
 flag bounds-checks
   manual:               True
-  default:              True
-  description:          Enable bounds checking in the interpreter
+  -- For now disabled by default. We may enable it by default when we know the
+  -- performance overhead of assertions.
+  default:              False
+  description:          Enable bounds checking
 
 flag memory-counter
   manual:               True
@@ -404,6 +407,7 @@ library
         Data.Array.Accelerate.AST.Environment
         Data.Array.Accelerate.AST.Execute
         Data.Array.Accelerate.AST.Exp
+        Data.Array.Accelerate.AST.Graph
         Data.Array.Accelerate.AST.Idx
         Data.Array.Accelerate.AST.IdxSet
         Data.Array.Accelerate.AST.Kernel
@@ -458,6 +462,7 @@ library
         Data.Array.Accelerate.Trafo.LetSplit
         Data.Array.Accelerate.Trafo.LiveVars
         Data.Array.Accelerate.Trafo.NewNewFusion
+        Data.Array.Accelerate.Trafo.Operation.Bounds
         Data.Array.Accelerate.Trafo.Operation.Substitution
         Data.Array.Accelerate.Trafo.Operation.LiveVars
         Data.Array.Accelerate.Trafo.Partitioning.ILP
@@ -537,6 +542,8 @@ library
         Data.Array.Accelerate.Pretty.Type
         Data.Array.Accelerate.Trafo.Exp.Algebra
         Data.Array.Accelerate.Trafo.Environment
+        Data.Array.Accelerate.Trafo.Operation.Bounds.Algebra
+        Data.Array.Accelerate.Trafo.Operation.Bounds.Environment
         Data.Array.Accelerate.Trafo.Operation.Simplify
         Data.Array.Accelerate.Trafo.Shrink
         Data.Atomic

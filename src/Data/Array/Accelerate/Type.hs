@@ -531,4 +531,3 @@ runQ $ do
   vs <- mapM (uncurry mkVector)   vectorTypes
   --
   return (concat is ++ concat fs ++ concat vs)
-

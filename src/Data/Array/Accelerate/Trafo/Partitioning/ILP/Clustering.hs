@@ -216,8 +216,11 @@ openReconstruct' singletons labelenv graph clusterslist mlab subclustersmap symb
         SBlk {} -> error "wrong type: block"
         SRet env' vars     -> Exists $ Return      (fromJust $ reindexVars (mkReindexPartial' env' env) vars)
         SCmp env' expr     -> Exists $ Compute     (fromJust $ reindexExp  (mkReindexPartial' env' env) expr)
+        SAsr env' expr     -> Exists $ Aassert     (fromJust $ reindexExp  (mkReindexPartial' env' env) expr)
+        SAsu env' expr     -> Exists $ Aassume     (fromJust $ reindexExp  (mkReindexPartial' env' env) expr)
         SAlc env' shr e sh -> Exists $ Alloc shr e (fromJust $ reindexVars (mkReindexPartial' env' env) sh)
         SUnt env' evar     -> Exists $ Unit        (fromJust $ reindexVar  (mkReindexPartial' env' env) evar)
+        SFen {} -> Exists $ Return TupRunit -- Fence with no futher terms does nothing
     makeAST env (cluster:ctail) =
       -- TODO: use guards to fuse these two identical cases
       case makeCluster env cluster of
@@ -228,6 +231,10 @@ openReconstruct' singletons labelenv graph clusterslist mlab subclustersmap symb
                 case makeAST env' ctail of
                   Exists scp
                     -> Exists $ tryBuildAlet lhs u bnd scp
+          | SFen env' set <- con ->
+            case makeAST env ctail of
+              Exists next ->
+                Exists $ Fence (fromJust $ reindexIdxSet (mkReindexPartial' env' env) set) next
         _ -> let res = makeAST env [cluster] in case cluster of
               ExecL _ -> case (res, makeAST env ctail) of
                 (Exists exec@Exec{}, Exists scp) -> Exists $ Alet LeftHandSideUnit (shared TupRunit) exec scp

@@ -24,6 +24,8 @@ either be a computation or a buffer.
 module Data.Array.Accelerate.Trafo.Partitioning.ILP.Labels where
 
 import Data.Array.Accelerate.AST.Idx
+import Data.Array.Accelerate.AST.IdxSet (IdxSet)
+import qualified Data.Array.Accelerate.AST.IdxSet as IdxSet
 import Data.Array.Accelerate.AST.LeftHandSide
 import Data.Array.Accelerate.AST.Operation
 import Data.Array.Accelerate.Error
@@ -191,12 +193,15 @@ type Nodes t = Set (Node t)
 
 
 -- | A value consists of its type @s t@ and and the 'Node' that represents it.
---
--- This is probably redudant now, because we don't need the type information anymore,
--- but I'll keep it for now because it might be useful for in-place updates accross while-loops.
--- Then we'd need to know the value returned by the while-loop, which would need to be existentially quantified.
-data Val s t = Val { valType :: s t, valNodes :: Nodes GVal }
+data Val s t = Val
+  { valType :: s t -- Type is needed to make mkReindexPartial safe
+  , valNode :: Node GVal
+  }
 
+-- TODO: Remove this function, and let all callers directly work with a single
+-- Node instead of a Set
+valNodes :: Val s t -> Nodes GVal
+valNodes (Val _ n) = S.singleton n
 
 -- | A 'TupR' of 'Val's.
 type Vals s = TupR (Val s)
@@ -211,7 +216,7 @@ type GroundVals = Vals GroundR
 
 
 val :: s t -> Node GVal -> Val s t
-val t = Val t . S.singleton
+val t n = Val t n
 
 
 -- | Get the nodes of 'Vals'.
@@ -225,13 +230,13 @@ valsType = mapTupR valType
 
 
 -- | Match the types of two 'GroundVals'.
-matchGroundVals :: GroundVals s -> GroundVals t -> Maybe (s :~: t)
-matchGroundVals = matchTupR matchGroundVal
+matchGroundValsType :: GroundVals s -> GroundVals t -> Maybe (s :~: t)
+matchGroundValsType = matchTupR matchGroundValType
 
 
 -- | Match the types of two 'GroundVal's.
-matchGroundVal :: GroundVal s -> GroundVal t -> Maybe (s :~: t)
-matchGroundVal (Val t1 _) (Val t2 _) = matchGroundR t1 t2
+matchGroundValType :: GroundVal s -> GroundVal t -> Maybe (s :~: t)
+matchGroundValType (Val t1 _) (Val t2 _) = matchGroundR t1 t2
 
 
 -- | Expect 'GroundVals' of the given type.
@@ -259,16 +264,9 @@ instance Eq (Val s t) where
   (==) :: Val s t -> Val s t -> Bool
   (==) (Val _ n1) (Val _ n2) = n1 == n2
 
-
 instance Show (Val s t) where
   show :: Val s t -> String
   show (Val _ n) = "Val " ++ show n
-
-
-instance Semigroup (Val s t) where
-  (<>) :: Val s t -> Val s t -> Val s t
-  (<>) (Val tp n1) (Val _ n2) = Val tp (n1 <> n2)
-
 
 
 --------------------------------------------------------------------------------
@@ -483,7 +481,7 @@ getLabelShDeps = valsNodes . getLabelShape
 -- | Check if two arguments have the same shape.
 sameShape :: ArgLabel (m1 sh1 e1) -> ArgLabel (m2 sh2 e2) -> Bool
 sameShape (getLabelShape -> sh1) (getLabelShape -> sh2)
-  | Just Refl <- matchGroundVals sh1 sh2 = sh1 == sh2
+  | Just Refl <- matchGroundValsType sh1 sh2 = sh1 == sh2
   | otherwise = False
 
 
@@ -518,9 +516,17 @@ getVarsDeps :: Vars s env t -> Env env -> Nodes GVal
 getVarsDeps vars = valsNodes . (^._2) . lookupVars vars
 
 
--- | Get the dependencies of a tuple of variables.
+-- | Get the dependencies of a variable.
 getVarDeps :: Var s env t -> Env env -> Nodes GVal
 getVarDeps var = valsNodes . (^._2) . lookupVar var
+
+-- | Get the dependencies, given the index of a variable.
+getIdxDeps :: Idx env t -> Env env -> Nodes GVal
+getIdxDeps idx = valsNodes . (^._2) . lookupIdx idx
+
+-- | Get the dependencies of a set of indices.
+getIdxSetDeps :: IdxSet env -> Env env -> Nodes GVal
+getIdxSetDeps deps env = mconcat $ map (\(Exists idx) -> getIdxDeps idx env) $ IdxSet.toList deps
 
 
 -- | Get the dependencies of an expression.
@@ -534,8 +540,6 @@ getExpDeps (Pair  poe1 poe2)                env = getExpDeps poe1 env <> getExpD
 getExpDeps  Nil                             _   = mempty
 getExpDeps (VecPack _ poe)                  env = getExpDeps poe  env
 getExpDeps (VecUnpack _ poe)                env = getExpDeps poe  env
-getExpDeps (IndexSlice _ poe1 poe2)         env = getExpDeps poe1 env <> getExpDeps poe2 env
-getExpDeps (IndexFull  _ poe1 poe2)         env = getExpDeps poe1 env <> getExpDeps poe2 env
 getExpDeps (ToIndex    _ poe1 poe2)         env = getExpDeps poe1 env <> getExpDeps poe2 env
 getExpDeps (FromIndex  _ poe1 poe2)         env = getExpDeps poe1 env <> getExpDeps poe2 env
 getExpDeps (Case poe1 poes poe2)            env = getExpDeps poe1 env <>
@@ -548,11 +552,12 @@ getExpDeps (While pof1 pof2 poe)            env = getFunDeps pof1 env <>
                                                   getFunDeps pof2 env <>
                                                   getExpDeps poe  env
 getExpDeps (Const _ _)                      _   = mempty
-getExpDeps (PrimConst _)                    _   = mempty
 getExpDeps (PrimApp   _ poe)                env = getExpDeps poe  env
 getExpDeps (ShapeSize _ poe)                env = getExpDeps poe  env
 getExpDeps (Undef _)                        _   = mempty
 getExpDeps  Coerce{}                        _   = mempty
+getExpDeps (Assert g e)                     env = getExpDeps g env <> getExpDeps e env
+getExpDeps (Assume g e)                     env = getExpDeps g env <> getExpDeps e env
 
 
 -- | Get the dependencies of a function.

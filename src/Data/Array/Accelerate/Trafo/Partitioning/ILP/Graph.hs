@@ -27,6 +27,9 @@ import Prelude hiding ( init, reads )
 
 -- Accelerate imports
 import Data.Array.Accelerate.AST.Idx
+import Data.Array.Accelerate.AST.IdxSet (IdxSet(..))
+import qualified Data.Array.Accelerate.AST.IdxSet as IdxSet
+import qualified Data.Array.Accelerate.AST.Environment as E
 import Data.Array.Accelerate.AST.LeftHandSide
 import Data.Array.Accelerate.AST.Operation hiding (Var)
 import Data.Array.Accelerate.Analysis.Hash.Exp
@@ -554,6 +557,9 @@ data Symbol (op :: Type -> Type) where
   SCmp  :: Env env -> Exp env a                                                        -> Symbol op
   SAlc  :: Env env -> ShapeR sh -> ScalarType e -> ExpVars env sh                      -> Symbol op
   SUnt  :: Env env -> ExpVar env e                                                     -> Symbol op
+  SAsr  :: Env env -> Exp env PrimBool                                                 -> Symbol op
+  SAsu  :: Env env -> Exp env PrimBool                                                 -> Symbol op
+  SFen  :: Env env -> IdxSet env                                                       -> Symbol op
 
 instance Show (Symbol op) where
   show :: Symbol op -> String
@@ -570,6 +576,9 @@ instance Show (Symbol op) where
   show (SCmp {}) = "Cmp"
   show (SAlc {}) = "Alc"
   show (SUnt {}) = "Unt"
+  show (SAsr {}) = "Asr"
+  show (SAsu {}) = "Asu"
+  show (SFen {}) = "Fen"
 
 -- | Mapping from labels to symbols.
 type Symbols op = Map (Node Comp) (Symbol op)
@@ -639,14 +648,15 @@ attachBackendLabels sol = M.mapWithKey \cases
 -- depending on which branch is taken.
 --
 data FusionGraphState op env = FusionGraphState
-  { _fusionILP  :: FusionILP op    -- ^ The ILP information.
-  , _buffersEnv :: Env env  -- ^ The label environment.
-  , _readersEnv :: ReadersEnv      -- ^ Mapping from buffers to their current consumers.
-  , _writersEnv :: WritersEnv      -- ^ Mapping from buffers to their current producers.
-  , _allocators :: Allocators      -- ^ Mapping from buffers to their allocator.
-  , _symbols    :: Symbols op      -- ^ The symbols for the ILP.
-  , _currComp   :: Node Comp      -- ^ The current computation label.
-  , _currEnvL   :: EnvLabel        -- ^ The current environment label.
+  { _fusionILP  :: FusionILP op      -- ^ The ILP information.
+  , _buffersEnv :: Env env           -- ^ The label environment.
+  , _readersEnv :: ReadersEnv        -- ^ Mapping from buffers to their current consumers.
+  , _writersEnv :: WritersEnv        -- ^ Mapping from buffers to their current producers.
+  , _allocators :: Allocators        -- ^ Mapping from buffers to their allocator.
+  , _symbols    :: Symbols op        -- ^ The symbols for the ILP.
+  , _currComp   :: Node Comp         -- ^ The current computation label.
+  , _currFence  :: Maybe (Node Comp) -- ^ The current fence. All new nodes should be linked with an edge from currFence, so the fence is placed before that node.
+  , _currEnvL   :: EnvLabel          -- ^ The current environment label.
   }
 
 type ReadersEnv = Map (Node GVal) (Nodes Comp)
@@ -654,7 +664,7 @@ type WritersEnv = Map (Node GVal) (Nodes Comp)
 type Allocators = Map (Node GVal) (Node  Comp)
 
 initialFusionGraphState :: FusionGraphState op ()
-initialFusionGraphState = FusionGraphState mempty EnvNil mempty mempty mempty mempty (Node 0 Nothing) 0
+initialFusionGraphState = FusionGraphState mempty EnvNil mempty mempty mempty mempty (Node 0 Nothing) Nothing 0
 
 -- instance Show (FusionGraphState op env) where
 --   show :: FusionGraphState op env -> String
@@ -703,6 +713,9 @@ instance HasSymbols (FusionGraphState op env) op where
 
 currComp :: Lens' (FusionGraphState op env) (Node Comp)
 currComp f s = f (_currComp s) <&> \c -> s{_currComp = c}
+
+currFence :: Lens' (FusionGraphState op env) (Maybe (Node Comp))
+currFence f s = f (_currFence s) <&> \c -> s{_currFence = c}
 
 currEnvL :: Lens' (FusionGraphState op env) EnvLabel
 currEnvL f s = f (_currEnvL s) <&> \l -> s{_currEnvL = l}
@@ -764,6 +777,10 @@ local env' f s = (environment .~ s^.environment) <$> f (s & environment .~ env')
 freshComp :: State (FusionGraphState op env) (Node Comp)
 freshComp = do
   c <- zoom currComp freshL'
+  assertion' <- use currFence
+  case assertion' of
+    Nothing -> return ()
+    Just a -> fusionILP %= a `before` c
   fusionILP %= insertComputation c
   return c
 
@@ -996,9 +1013,10 @@ mkFusionGraph (Acond cond tacc facc) = do
     falseN <- freshComp
     symbol condN ?= SITE env cond trueN falseN
     condN `requiresBuffers` getVarDeps cond env  -- If-then-else reads the condition variable,
-    res <- uncurry (<>) <$> branches             -- executes "both" branches, and
+    _ <- branches                                -- executes "both" branches, and
       (block trueN  $ mkFusionGraph tacc)
       (block falseN $ mkFusionGraph facc)
+    res <- freshVals condN (groundsR tacc)
     condN `returnsBuffers` valsNodes res         -- returns the unified result of both branches.
     return res
 
@@ -1017,7 +1035,27 @@ mkFusionGraph (Awhile u cond body init) = do
     symbol whileN ?= SWhl env condN bodyN init u
   return res                                      -- to return a fresh value of the same type as the initial value.
 
+mkFusionGraph (Aassert cond) = do
+  c    <- freshComp
+  env  <- use environment
+  c `requiresBuffers` getExpDeps cond env
+  symbol c ?= SAsr env cond
+  TupRsingle <$> freshVal c (GroundRscalar scalarTypeWord8)
 
+mkFusionGraph (Aassume cond) = do
+  c    <- freshComp
+  env  <- use environment
+  c `requiresBuffers` getExpDeps cond env
+  symbol c ?= SAsu env cond
+  TupRsingle <$> freshVal c (GroundRscalar scalarTypeWord8)
+
+mkFusionGraph (Fence deps next) = do
+  c    <- freshComp
+  env  <- use environment
+  c `requiresBuffers` getIdxSetDeps deps env
+  symbol c ?= SFen env deps
+  currFence .= Just c -- All later nodes will be placed after this fence
+  mkFusionGraph next
 
 -- | Construct the fusion graph of a single-argument function.
 mkFusionGraphU :: forall op env s t. (MakesILP op)
@@ -1179,8 +1217,6 @@ mkInplacePathsFromClusters g = g&fusionILP.inplacePaths <>~ go initialClusters
         foldMapInputLabels (\lIn -> foldMapOutputLabels (mkInplacePaths 1 cIn cOut lIn) largsOut) largsIn
       _ -> mempty
 
-
-
 --------------------------------------------------------------------------------
 -- Reconstruction
 --------------------------------------------------------------------------------
@@ -1207,7 +1243,7 @@ mkReindexPartial m env env' idx = let node = lookupIdx idx env^._2 in case idxOf
   where
     -- Replace the buffer with the one we will actually write the data to.
     inplaceOf :: GroundVals a -> GroundVals a
-    inplaceOf (TupRsingle (Val tp ns)) = TupRsingle $ Val tp $ S.map (\b -> M.findWithDefault b b m) ns
+    inplaceOf (TupRsingle (Val tp n)) = TupRsingle $ Val tp $ M.findWithDefault n n m
     inplaceOf (TupRpair bs1 bs2) = TupRpair (inplaceOf bs1) (inplaceOf bs2)
     inplaceOf TupRunit = TupRunit
 
@@ -1221,8 +1257,8 @@ mkReindexPartial m env env' idx = let node = lookupIdx idx env^._2 in case idxOf
       -- Basically: standard procedure if you're using Ints as a unique identifier
       -- and want to re-introduce type information. :)
       -- Type applications allow us to restrict unsafeCoerce to the return type.
-      | Just Refl <- matchGroundVals bs bs'
-      , bs == bs' = Just $ unsafeCoerce @(Idx e _) @(Idx e a) ZeroIdx
+      | Just Refl <- matchGroundValsType bs bs'
+      , bs == bs' = Just ZeroIdx
       -- Recurse if we did not find e' yet.
       | otherwise = SuccIdx <$> idxOf bs rest
     -- If we hit the end, the Elabel was not present in the environment.

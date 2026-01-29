@@ -24,11 +24,11 @@
 
 module Data.Array.Accelerate.AST.Exp (
   -- ** Scalar expressions
-  ELeftHandSide, ExpVar, ExpVars, expVars,
+  ELeftHandSide, ExpVar, ExpVars, expVars, undefs,
   PreOpenFun(..),
   PreOpenExp(..),
-  PrimConst(..),
   PrimFun(..),
+  Cmp(..), negateCmp,
   PrimBool,
   PrimMaybe,
   TAG,
@@ -37,14 +37,12 @@ module Data.Array.Accelerate.AST.Exp (
 
   -- ** Extracting type information
   expType,
-  primConstType,
   primFunType,
 
   -- ** Normal-form
   rnfOpenFun,
   rnfOpenExp,
   rnfConst,
-  rnfPrimConst,
   rnfPrimFun,
   rnfMaybe,
   rnfELeftHandSide,
@@ -56,7 +54,6 @@ module Data.Array.Accelerate.AST.Exp (
   liftMaybe,
   liftELeftHandSide,
   liftExpVar,
-  liftPrimConst,
   liftPrimFun,
 
   -- ** Miscellaneous
@@ -72,7 +69,6 @@ import Data.Array.Accelerate.AST.Var
 import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.Representation.Elt
 import Data.Array.Accelerate.Representation.Shape
-import Data.Array.Accelerate.Representation.Slice
 import Data.Array.Accelerate.Representation.Tag
 import Data.Array.Accelerate.Representation.Type
 import Data.Array.Accelerate.Representation.Vec
@@ -151,17 +147,6 @@ data PreOpenExp arr env t where
                 -> PreOpenExp arr env (Vec n s)
                 -> PreOpenExp arr env tup
 
-  -- Array indices & shapes
-  IndexSlice    :: SliceIndex slix sl co sh
-                -> PreOpenExp arr env slix
-                -> PreOpenExp arr env sh
-                -> PreOpenExp arr env sl
-
-  IndexFull     :: SliceIndex slix sl co sh
-                -> PreOpenExp arr env slix
-                -> PreOpenExp arr env sl
-                -> PreOpenExp arr env sh
-
   -- Shape and index conversion
   ToIndex       :: ShapeR sh
                 -> PreOpenExp arr env sh           -- shape of the array
@@ -185,6 +170,14 @@ data PreOpenExp arr env t where
                 -> PreOpenExp arr env t
                 -> PreOpenExp arr env t
 
+  Assert        :: PreOpenExp arr env PrimBool
+                -> PreOpenExp arr env t
+                -> PreOpenExp arr env t
+
+  Assume        :: PreOpenExp arr env PrimBool
+                -> PreOpenExp arr env t
+                -> PreOpenExp arr env t
+
   -- Value recursion
   While         :: PreOpenFun arr env (a -> PrimBool) -- continue while true
                 -> PreOpenFun arr env (a -> a)        -- function to iterate
@@ -194,9 +187,6 @@ data PreOpenExp arr env t where
   -- Constant values
   Const         :: ScalarType t
                 -> t
-                -> PreOpenExp arr env t
-
-  PrimConst     :: PrimConst t
                 -> PreOpenExp arr env t
 
   -- Primitive scalar operations
@@ -230,6 +220,11 @@ expVars TupRunit         = Nil
 expVars (TupRsingle var) = Evar var
 expVars (TupRpair v1 v2) = expVars v1 `Pair` expVars v2
 
+undefs :: TypeR t -> PreOpenExp arr env t
+undefs (TupRsingle tp) = Undef tp
+undefs (TupRpair t1 t2) = undefs t1 `Pair` undefs t2
+undefs TupRunit = Nil
+
 -- Types for scalar bindings
 --
 type ELeftHandSide = LeftHandSide ScalarType
@@ -245,6 +240,9 @@ class IsArrayInstr arr where
   showArrayInstrOp :: arr t -> String
   encodeArrayInstr :: arr a -> Builder
   matchArrayInstr :: arr t -> arr s -> Maybe (t :~: s)
+  -- | Whether the array instruction may be inlined (and duplicated)
+  -- True for Parameter and False for Index
+  inlineArrayInstr :: arr t -> Bool
 
 -- | Allows no array instructions at all. Used for expressions
 -- which cannot perform array operations. The only use case
@@ -258,21 +256,11 @@ instance IsArrayInstr NoArrayInstr where
   rnfArrayInstr    = \case {}
   showArrayInstrOp = \case {}
   encodeArrayInstr = \case {}
-  matchArrayInstr  = \case{}
+  matchArrayInstr  = \case {}
+  inlineArrayInstr = \case {}
 
 data Direction = LeftToRight | RightToLeft
   deriving Eq
-
--- |Primitive constant values
---
-data PrimConst ty where
-
-  -- constants from Bounded
-  PrimMinBound  :: BoundedType a -> PrimConst a
-  PrimMaxBound  :: BoundedType a -> PrimConst a
-
-  -- constant from Floating
-  PrimPi        :: FloatingType a -> PrimConst a
 
 
 -- |Primitive scalar operations
@@ -344,12 +332,7 @@ data PrimFun sig where
   PrimIsInfinite :: FloatingType a -> PrimFun (a -> PrimBool)
 
   -- relational and equality operators
-  PrimLt   :: SingleType a -> PrimFun ((a, a) -> PrimBool)
-  PrimGt   :: SingleType a -> PrimFun ((a, a) -> PrimBool)
-  PrimLtEq :: SingleType a -> PrimFun ((a, a) -> PrimBool)
-  PrimGtEq :: SingleType a -> PrimFun ((a, a) -> PrimBool)
-  PrimEq   :: SingleType a -> PrimFun ((a, a) -> PrimBool)
-  PrimNEq  :: SingleType a -> PrimFun ((a, a) -> PrimBool)
+  PrimCmp  :: SingleType a -> Cmp -> PrimFun ((a, a) -> PrimBool)
   PrimMax  :: SingleType a -> PrimFun ((a, a) -> a)
   PrimMin  :: SingleType a -> PrimFun ((a, a) -> a)
 
@@ -371,6 +354,20 @@ data PrimFun sig where
   PrimFromIntegral :: IntegralType a -> NumType b -> PrimFun (a -> b)
   PrimToFloating   :: NumType a -> FloatingType b -> PrimFun (a -> b)
 
+-- | Comparison operator
+-- Greater-than and less-than-equal are missing, as they are equal to
+-- respectively less-than and greater-than-equal with their arguments swapped.
+-- We kept less-than and greater-than-equal as they are each others negation
+-- (similar to equal and not-equal).
+--
+data Cmp = CmpLt | CmpGtEq | CmpEq | CmpNEq deriving Eq
+
+negateCmp :: Cmp -> Cmp
+negateCmp CmpLt = CmpGtEq
+negateCmp CmpGtEq = CmpLt
+negateCmp CmpEq = CmpNEq
+negateCmp CmpNEq = CmpEq
+
 expType :: (HasCallStack, IsArrayInstr arr) => PreOpenExp arr env t -> TypeR t
 expType = \case
   Let _ _ body                 -> expType body
@@ -380,8 +377,6 @@ expType = \case
   Nil                          -> TupRunit
   VecPack   vecR _             -> TupRsingle $ VectorScalarType $ vecRvector vecR
   VecUnpack vecR _             -> vecRtuple vecR
-  IndexSlice si _ _            -> shapeType $ sliceShapeR si
-  IndexFull  si _ _            -> shapeType $ sliceDomainR si
   ToIndex{}                    -> TupRsingle scalarTypeInt
   FromIndex shr _ _            -> shapeType shr
   Case _ ((_,e):_) _           -> expType e
@@ -391,24 +386,13 @@ expType = \case
   While _ (Lam lhs _) _        -> lhsToTupR lhs
   While{}                      -> internalError "What's the matter, you're running in the shadows"
   Const tR _                   -> TupRsingle tR
-  PrimConst c                  -> TupRsingle $ SingleScalarType $ primConstType c
   PrimApp f _                  -> snd $ primFunType f
   ArrayInstr arr _             -> arrayInstrType arr
   ShapeSize{}                  -> TupRsingle scalarTypeInt
   Undef tR                     -> TupRsingle tR
   Coerce _ tR _                -> TupRsingle tR
-
-primConstType :: PrimConst a -> SingleType a
-primConstType = \case
-  PrimMinBound t -> bounded t
-  PrimMaxBound t -> bounded t
-  PrimPi       t -> floating t
-  where
-    bounded :: BoundedType a -> SingleType a
-    bounded (IntegralBoundedType t) = NumSingleType $ IntegralNumType t
-
-    floating :: FloatingType t -> SingleType t
-    floating = NumSingleType . FloatingNumType
+  Assert _ e2                  -> expType e2
+  Assume _ e2                  -> expType e2
 
 primFunType :: PrimFun (a -> b) -> (TypeR a, TypeR b)
 primFunType = \case
@@ -474,12 +458,7 @@ primFunType = \case
   PrimIsInfinite t          -> unary (floating t) tbool
 
   -- Relational and equality
-  PrimLt t                  -> compare' t
-  PrimGt t                  -> compare' t
-  PrimLtEq t                -> compare' t
-  PrimGtEq t                -> compare' t
-  PrimEq t                  -> compare' t
-  PrimNEq t                 -> compare' t
+  PrimCmp t _               -> compare' t
   PrimMax t                 -> binary' $ single t
   PrimMin t                 -> binary' $ single t
 
@@ -530,18 +509,17 @@ rnfOpenExp topExp =
     Nil                       -> ()
     VecPack   vecr e          -> rnfVecR vecr `seq` rnfE e
     VecUnpack vecr e          -> rnfVecR vecr `seq` rnfE e
-    IndexSlice slice slix sh  -> rnfSliceIndex slice `seq` rnfE slix `seq` rnfE sh
-    IndexFull slice slix sl   -> rnfSliceIndex slice `seq` rnfE slix `seq` rnfE sl
     ToIndex shr sh ix         -> rnfShapeR shr `seq` rnfE sh `seq` rnfE ix
     FromIndex shr sh ix       -> rnfShapeR shr `seq` rnfE sh `seq` rnfE ix
     Case e rhs def            -> rnfE e `seq` rnfList (\(t,c) -> t `seq` rnfE c) rhs `seq` rnfMaybe rnfE def
     Cond p e1 e2              -> rnfE p `seq` rnfE e1 `seq` rnfE e2
     While p f x               -> rnfF p `seq` rnfF f `seq` rnfE x
-    PrimConst c               -> rnfPrimConst c
     PrimApp f x               -> rnfPrimFun f `seq` rnfE x
     ArrayInstr arr e          -> rnfArrayInstr arr `seq` rnfE e
     ShapeSize shr sh          -> rnfShapeR shr `seq` rnfE sh
     Coerce t1 t2 e            -> rnfScalarType t1 `seq` rnfScalarType t2 `seq` rnfE e
+    Assert e1 e2              -> rnfE e1 `seq` rnfE e2
+    Assume e1 e2              -> rnfE e1 `seq` rnfE e2
 
 rnfExpVar :: ExpVar env t -> ()
 rnfExpVar = rnfVar rnfScalarType
@@ -553,11 +531,6 @@ rnfConst :: TypeR t -> t -> ()
 rnfConst TupRunit          ()    = ()
 rnfConst (TupRsingle t)    !_    = rnfScalarType t  -- scalars should have (nf == whnf)
 rnfConst (TupRpair ta tb)  (a,b) = rnfConst ta a `seq` rnfConst tb b
-
-rnfPrimConst :: PrimConst c -> ()
-rnfPrimConst (PrimMinBound t) = rnfBoundedType t
-rnfPrimConst (PrimMaxBound t) = rnfBoundedType t
-rnfPrimConst (PrimPi t)       = rnfFloatingType t
 
 rnfPrimFun :: PrimFun f -> ()
 rnfPrimFun (PrimAdd t)                = rnfNumType t
@@ -609,12 +582,7 @@ rnfPrimFun (PrimCeiling f i)          = rnfFloatingType f `seq` rnfIntegralType 
 rnfPrimFun (PrimIsNaN t)              = rnfFloatingType t
 rnfPrimFun (PrimIsInfinite t)         = rnfFloatingType t
 rnfPrimFun (PrimAtan2 t)              = rnfFloatingType t
-rnfPrimFun (PrimLt t)                 = rnfSingleType t
-rnfPrimFun (PrimGt t)                 = rnfSingleType t
-rnfPrimFun (PrimLtEq t)               = rnfSingleType t
-rnfPrimFun (PrimGtEq t)               = rnfSingleType t
-rnfPrimFun (PrimEq t)                 = rnfSingleType t
-rnfPrimFun (PrimNEq t)                = rnfSingleType t
+rnfPrimFun (PrimCmp t !_)             = rnfSingleType t
 rnfPrimFun (PrimMax t)                = rnfSingleType t
 rnfPrimFun (PrimMin t)                = rnfSingleType t
 rnfPrimFun PrimLAnd                   = ()
@@ -665,23 +633,17 @@ liftOpenExp pexp =
     Nil                       -> [|| Nil ||]
     VecPack   vecr e          -> [|| VecPack   $$(liftVecR vecr) $$(liftE e) ||]
     VecUnpack vecr e          -> [|| VecUnpack $$(liftVecR vecr) $$(liftE e) ||]
-    IndexSlice slice slix sh  -> [|| IndexSlice $$(liftSliceIndex slice) $$(liftE slix) $$(liftE sh) ||]
-    IndexFull slice slix sl   -> [|| IndexFull $$(liftSliceIndex slice) $$(liftE slix) $$(liftE sl) ||]
     ToIndex shr sh ix         -> [|| ToIndex $$(liftShapeR shr) $$(liftE sh) $$(liftE ix) ||]
     FromIndex shr sh ix       -> [|| FromIndex $$(liftShapeR shr) $$(liftE sh) $$(liftE ix) ||]
     Case p rhs def            -> [|| Case $$(liftE p) $$(liftList (\(t,c) -> [|| (t, $$(liftE c)) ||]) rhs) $$(liftMaybe liftE def) ||]
     Cond p t e                -> [|| Cond $$(liftE p) $$(liftE t) $$(liftE e) ||]
     While p f x               -> [|| While $$(liftF p) $$(liftF f) $$(liftE x) ||]
-    PrimConst t               -> [|| PrimConst $$(liftPrimConst t) ||]
     PrimApp f x               -> [|| PrimApp $$(liftPrimFun f) $$(liftE x) ||]
     ArrayInstr arr x          -> [|| ArrayInstr $$(liftArrayInstr arr) $$(liftE x) ||]
     ShapeSize shr ix          -> [|| ShapeSize $$(liftShapeR shr) $$(liftE ix) ||]
     Coerce t1 t2 e            -> [|| Coerce $$(liftScalarType t1) $$(liftScalarType t2) $$(liftE e) ||]
-
-liftPrimConst :: PrimConst c -> CodeQ (PrimConst c)
-liftPrimConst (PrimMinBound t) = [|| PrimMinBound $$(liftBoundedType t) ||]
-liftPrimConst (PrimMaxBound t) = [|| PrimMaxBound $$(liftBoundedType t) ||]
-liftPrimConst (PrimPi t)       = [|| PrimPi $$(liftFloatingType t) ||]
+    Assert e1 e2              -> [|| Assert $$(liftE e1) $$(liftE e2) ||]
+    Assume e1 e2              -> [|| Assume $$(liftE e1) $$(liftE e2) ||]
 
 liftPrimFun :: PrimFun f -> CodeQ (PrimFun f)
 liftPrimFun (PrimAdd t)                = [|| PrimAdd $$(liftNumType t) ||]
@@ -733,12 +695,7 @@ liftPrimFun (PrimCeiling ta tb)        = [|| PrimCeiling $$(liftFloatingType ta)
 liftPrimFun (PrimIsNaN t)              = [|| PrimIsNaN $$(liftFloatingType t) ||]
 liftPrimFun (PrimIsInfinite t)         = [|| PrimIsInfinite $$(liftFloatingType t) ||]
 liftPrimFun (PrimAtan2 t)              = [|| PrimAtan2 $$(liftFloatingType t) ||]
-liftPrimFun (PrimLt t)                 = [|| PrimLt $$(liftSingleType t) ||]
-liftPrimFun (PrimGt t)                 = [|| PrimGt $$(liftSingleType t) ||]
-liftPrimFun (PrimLtEq t)               = [|| PrimLtEq $$(liftSingleType t) ||]
-liftPrimFun (PrimGtEq t)               = [|| PrimGtEq $$(liftSingleType t) ||]
-liftPrimFun (PrimEq t)                 = [|| PrimEq $$(liftSingleType t) ||]
-liftPrimFun (PrimNEq t)                = [|| PrimNEq $$(liftSingleType t) ||]
+liftPrimFun (PrimCmp t c)              = [|| PrimCmp $$(liftSingleType t) $$(liftCmp c) ||]
 liftPrimFun (PrimMax t)                = [|| PrimMax $$(liftSingleType t) ||]
 liftPrimFun (PrimMin t)                = [|| PrimMin $$(liftSingleType t) ||]
 liftPrimFun PrimLAnd                   = [|| PrimLAnd ||]
@@ -760,6 +717,12 @@ liftELeftHandSide = liftLeftHandSide liftScalarType
 
 liftExpVar :: ExpVar env t -> CodeQ (ExpVar env t)
 liftExpVar = liftVar liftScalarType
+
+liftCmp :: Cmp -> CodeQ Cmp
+liftCmp CmpLt   = [|| CmpLt ||]
+liftCmp CmpGtEq = [|| CmpGtEq ||]
+liftCmp CmpEq   = [|| CmpEq ||]
+liftCmp CmpNEq  = [|| CmpNEq ||]
 
 mkConstant :: TypeR t -> t -> PreOpenExp arr env t
 mkConstant (TupRsingle tp)  c        = Const tp c
@@ -788,18 +751,17 @@ formatExpOp = later $ \case
   Nil{}           -> "Nil"
   VecPack{}       -> "VecPack"
   VecUnpack{}     -> "VecUnpack"
-  IndexSlice{}    -> "IndexSlice"
-  IndexFull{}     -> "IndexFull"
   ToIndex{}       -> "ToIndex"
   FromIndex{}     -> "FromIndex"
   Case{}          -> "Case"
   Cond{}          -> "Cond"
   While{}         -> "While"
-  PrimConst{}     -> "PrimConst"
   PrimApp{}       -> "PrimApp"
   ArrayInstr ar _ -> fromString $ showArrayInstrOp ar
   ShapeSize{}     -> "ShapeSize"
   Coerce{}        -> "Coerce"
+  Assert{}        -> "Assert"
+  Assume{}        -> "Assume"
 
 expIsTrivial :: forall arr env t. (forall s. arr s -> Bool) -> PreOpenExp arr env t -> Bool
 expIsTrivial arrayInstr = \case
@@ -811,17 +773,16 @@ expIsTrivial arrayInstr = \case
   Nil                     -> True
   VecPack _ e             -> trav e
   VecUnpack _ e           -> trav e
-  IndexSlice _ a b        -> trav a && trav b
-  IndexFull _ a b         -> trav a && trav b
   ToIndex _ a b           -> trav a && trav b
   FromIndex _ a b         -> trav a && trav b
   Case scrutinee alts def -> trav scrutinee && all (trav . snd) alts && all trav def
   Cond c t f              -> trav c && trav t && trav f
-  PrimConst{}             -> True
   PrimApp _ a             -> trav a
   ArrayInstr ar a         -> arrayInstr ar && trav a
   ShapeSize _ a           -> trav a
   Coerce _ _ a            -> trav a
+  Assert cond e           -> trav cond && trav e
+  Assume _ e              -> trav e -- Condition is not executed, so does not have to be trivial
   _                       -> False
   where
     trav :: PreOpenExp arr env' t' -> Bool

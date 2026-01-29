@@ -496,6 +496,9 @@ executeEffect env = \case
     let S.OutputRef ioref = prj (varIdx ref) env
     let value = prj (varIdx valueVar) env
     writeIORef ioref value
+  S.Aassert cond
+    | runIdentity (evalExp cond $ evalArrayInstrDefault env) == 1 -> return ()
+    | otherwise -> error "Assertion failed"
   where
     await :: Idx env S.Signal -> IO ()
     await idx = do
@@ -804,8 +807,6 @@ evalOpenExp pexp env arr@(EvalArrayInstr runArrayInstr) =
       return c
     Undef tp ->
       return $ undefElt (TupRsingle tp)
-    PrimConst c ->
-      return $ evalPrimConst c
     PrimApp f x -> do
       !v <- evalE x
       return $ evalPrim f v
@@ -821,33 +822,6 @@ evalOpenExp pexp env arr@(EvalArrayInstr runArrayInstr) =
     VecUnpack vecR e -> do
       !v <- evalE e
       return $ unpack vecR v
-    IndexSlice slice slix sh -> do
-      !slix' <- evalE slix
-      !sh' <- evalE sh
-      return $ restrict slice slix' sh'
-      where
-        restrict :: SliceIndex slix sl co sh -> slix -> sh -> sl
-        restrict SliceNil              ()        ()         = ()
-        restrict (SliceAll sliceIdx)   (slx, ()) (sl, sz)   =
-          let sl' = restrict sliceIdx slx sl
-          in  (sl', sz)
-        restrict (SliceFixed sliceIdx) (slx, _i)  (sl, _sz) =
-          restrict sliceIdx slx sl
-
-    IndexFull slice slix sh -> do
-      !slix' <- evalE slix
-      !sh' <- evalE sh
-      return $ extend slice slix' sh'
-      where
-        extend :: SliceIndex slix sl co sh -> slix -> sl -> sh
-        extend SliceNil              ()        ()       = ()
-        extend (SliceAll sliceIdx)   (slx, ()) (sl, sz) =
-          let sh' = extend sliceIdx slx sl
-          in  (sh', sz)
-        extend (SliceFixed sliceIdx) (slx, sz) sl       =
-          let sh' = extend sliceIdx slx sl
-          in  (sh', sz)
-
     ToIndex shr sh ix -> do
       !sh' <- evalE sh
       !ix' <- evalE ix
@@ -898,6 +872,12 @@ evalOpenExp pexp env arr@(EvalArrayInstr runArrayInstr) =
     Coerce t1 t2 e -> do
       x <- evalE e
       return $ evalCoerceScalar t1 t2 x
+
+    Assert g e -> do
+      g' <- evalE g
+      (if toBool g' then evalE e else error "Assertion failed")
+
+    Assume _ e -> evalE e
 
 
 -- Coercions
@@ -977,11 +957,6 @@ evalCoerceScalar VectorScalarType{} (SingleScalarType tb) a = scalar tb a
 -- Scalar primitives
 -- -----------------
 
-evalPrimConst :: PrimConst a -> a
-evalPrimConst (PrimMinBound ty) = evalMinBound ty
-evalPrimConst (PrimMaxBound ty) = evalMaxBound ty
-evalPrimConst (PrimPi       ty) = evalPi ty
-
 evalPrim :: PrimFun (a -> r) -> (a -> r)
 evalPrim (PrimAdd                ty) = evalAdd ty
 evalPrim (PrimSub                ty) = evalSub ty
@@ -1032,12 +1007,10 @@ evalPrim (PrimCeiling         ta tb) = evalCeiling ta tb
 evalPrim (PrimAtan2              ty) = evalAtan2 ty
 evalPrim (PrimIsNaN              ty) = evalIsNaN ty
 evalPrim (PrimIsInfinite         ty) = evalIsInfinite ty
-evalPrim (PrimLt                 ty) = evalLt ty
-evalPrim (PrimGt                 ty) = evalGt ty
-evalPrim (PrimLtEq               ty) = evalLtEq ty
-evalPrim (PrimGtEq               ty) = evalGtEq ty
-evalPrim (PrimEq                 ty) = evalEq ty
-evalPrim (PrimNEq                ty) = evalNEq ty
+evalPrim (PrimCmp ty CmpLt         ) = evalLt ty
+evalPrim (PrimCmp ty CmpGtEq       ) = evalGtEq ty
+evalPrim (PrimCmp ty CmpEq         ) = evalEq ty
+evalPrim (PrimCmp ty CmpNEq        ) = evalNEq ty
 evalPrim (PrimMax                ty) = evalMax ty
 evalPrim (PrimMin                ty) = evalMin ty
 evalPrim PrimLAnd                    = evalLAnd
@@ -1285,14 +1258,6 @@ evalRecip ty | FloatingDict <- floatingDict ty = recip
 evalLt :: SingleType a -> ((a, a) -> PrimBool)
 evalLt (NumSingleType (IntegralNumType ty)) | IntegralDict <- integralDict ty = fromBool . uncurry (<)
 evalLt (NumSingleType (FloatingNumType ty)) | FloatingDict <- floatingDict ty = fromBool . uncurry (<)
-
-evalGt :: SingleType a -> ((a, a) -> PrimBool)
-evalGt (NumSingleType (IntegralNumType ty)) | IntegralDict <- integralDict ty = fromBool . uncurry (>)
-evalGt (NumSingleType (FloatingNumType ty)) | FloatingDict <- floatingDict ty = fromBool . uncurry (>)
-
-evalLtEq :: SingleType a -> ((a, a) -> PrimBool)
-evalLtEq (NumSingleType (IntegralNumType ty)) | IntegralDict <- integralDict ty = fromBool . uncurry (<=)
-evalLtEq (NumSingleType (FloatingNumType ty)) | FloatingDict <- floatingDict ty = fromBool . uncurry (<=)
 
 evalGtEq :: SingleType a -> ((a, a) -> PrimBool)
 evalGtEq (NumSingleType (IntegralNumType ty)) | IntegralDict <- integralDict ty = fromBool . uncurry (>=)

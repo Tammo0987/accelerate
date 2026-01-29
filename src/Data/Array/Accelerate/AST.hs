@@ -89,15 +89,12 @@ module Data.Array.Accelerate.AST (
   Exp, OpenExp, PreOpenExp(..),
   ArrayInstr(..), IsArrayInstr(..), NoArrayInstr,
   Boundary(..),
-  PrimConst(..),
-  PrimFun(..),
-  PrimBool,
-  PrimMaybe,
+  PrimFun(..), Cmp(..),
+  PrimBool, PrimMaybe,
 
   -- ** Extracting type information
   HasArraysR(..), arrayR,
   expType,
-  primConstType,
   primFunType,
 
   -- ** Normal-form
@@ -112,7 +109,6 @@ module Data.Array.Accelerate.AST (
   rnfExpVar,
   rnfBoundary,
   rnfConst,
-  rnfPrimConst,
   rnfPrimFun,
 
   -- ** Template Haskell
@@ -126,7 +122,6 @@ module Data.Array.Accelerate.AST (
   liftELeftHandSide,
   liftExpVar,
   liftBoundary,
-  liftPrimConst,
   liftPrimFun,
   liftMessage,
 
@@ -249,6 +244,14 @@ data PreOpenAcc (acc :: Type -> Type -> Type) aenv a where
   -- Fusion boundary.
   -- Corresponds to 'compute' in the user-facing language.
   Manifest    :: acc            aenv as
+              -> PreOpenAcc acc aenv as
+
+  Aassume     :: Exp            aenv PrimBool
+              -> acc            aenv as
+              -> PreOpenAcc acc aenv as
+
+  Aassert     :: Exp            aenv PrimBool
+              -> acc            aenv as
               -> PreOpenAcc acc aenv as
 
   -- Apply a backend-specific foreign function to an array, with a pure
@@ -393,26 +396,24 @@ data PreOpenAcc (acc :: Type -> Type -> Type) aenv a where
               -> acc            aenv (Array (sh, Int) e)
               -> PreOpenAcc acc aenv (Array (sh, Int) e, Array sh e)
 
-  -- Generalised forward permutation is characterised by a permutation function
-  -- that determines for each element of the source array where it should go in
-  -- the output. The permutation can be between arrays of varying shape and
-  -- dimensionality. This permutation function is implicit in this representation.
+  -- Generalised forward permutation. The source array contains values combined
+  -- with the indices they should be written to.
   --
-  -- Other characteristics of the permutation function 'f':
+  -- Characteristics of the permutation mapping:
   --
-  --   1. 'f' is a (morally) partial function: only the elements of the domain
+  --   1. it is a (morally) partial mapping: only the elements of the domain
   --      for which the source array contains a 'Just' value are mapped in the
   --      result.
   --
-  --   2. 'f' is not surjective: positions in the target array need not be
+  --   2. it is not surjective: positions in the target array need not be
   --      picked up by the permutation function, so the target array must first
   --      be initialised from an array of default values.
   --
-  --   3. 'f' is not injective: distinct elements of the domain may map to the
+  --   3. it is not injective: distinct elements of the domain may map to the
   --      same position in the target array. In this case the combination
   --      function is used to combine elements, which needs to be /associative/
-  --      and /commutative/. When the combination function is missing (and thus
-  --      set to `const`), we assume that 'f' is injective.
+  --      and /commutative/. When the combination function is missing,
+  --      we assume that 'f' is injective.
   --
   Permute     :: Maybe (Fun     aenv (e -> e -> e))                  -- combination function
               -> acc            aenv (Array sh' e)                   -- default values
@@ -501,10 +502,14 @@ instance IsArrayInstr (ArrayInstr aenv) where
   matchArrayInstr (LinearIndex v1) (LinearIndex v2) | Just Refl <- matchVar v1 v2 = Just Refl
   matchArrayInstr _                _                                              = Nothing
 
-  encodeArrayInstr arr = case arr of
+  encodeArrayInstr = \case
     Index a                     -> intHost $(hashQ ("Index" :: String))       <> encodeArrayVar a
     LinearIndex a               -> intHost $(hashQ ("LinearIndex" :: String)) <> encodeArrayVar a
     Shape a                     -> intHost $(hashQ ("Shape" :: String))       <> encodeArrayVar a
+
+  inlineArrayInstr = \case
+    Shape _ -> True
+    _ -> False
 
 encodeArrayVar :: ArrayVar aenv a -> Hash.Builder
 encodeArrayVar (Var repr v) = encodeArrayType repr <> encodeIdx v
@@ -551,6 +556,8 @@ instance HasArraysR acc => HasArraysR (PreOpenAcc acc) where
   arraysR Anil                        = TupRunit
   arraysR (Atrace _ _ bs)             = arraysR bs
   arraysR (Manifest as)               = arraysR as
+  arraysR (Aassert _ as)              = arraysR as
+  arraysR (Aassume _ as)              = arraysR as
   arraysR (Aforeign r _ _ _)          = r
   arraysR (Acond _ a _)               = arraysR a
   arraysR (Awhile _ (Alam lhs _) _)   = lhsToTupR lhs
@@ -636,6 +643,8 @@ rnfPreOpenAcc rnfA pacc =
     Anil                      -> ()
     Atrace msg as bs          -> rnfM msg `seq` rnfA as `seq` rnfA bs
     Manifest as               -> rnfA as
+    Aassert cond as           -> rnfE cond `seq` rnfA as
+    Aassume cond as           -> rnfE cond `seq` rnfA as
     Aforeign repr asm afun a  -> rnfTupR rnfArrayR repr `seq` rnf (strForeign asm) `seq` rnfAF afun `seq` rnfA a
     Acond p a1 a2             -> rnfE p `seq` rnfA a1 `seq` rnfA a2
     Awhile p f a              -> rnfAF p `seq` rnfAF f `seq` rnfA a
@@ -719,6 +728,8 @@ liftPreOpenAcc liftA pacc =
     Anil                      -> [|| Anil ||]
     Atrace msg as bs          -> [|| Atrace $$(liftMessage (arraysR as) msg) $$(liftA as) $$(liftA bs) ||]
     Manifest as               -> [|| Manifest $$(liftA as) ||]
+    Aassert cond as           -> [|| Aassert $$(liftE cond) $$(liftA as) ||]
+    Aassume cond as           -> [|| Aassume $$(liftE cond) $$(liftA as) ||]
     Aforeign repr asm f a     -> [|| Aforeign $$(liftArraysR repr) $$(liftForeign asm) $$(liftPreOpenAfun liftA f) $$(liftA a) ||]
     Acond p t e               -> [|| Acond $$(liftE p) $$(liftA t) $$(liftA e) ||]
     Awhile p f a              -> [|| Awhile $$(liftAF p) $$(liftAF f) $$(liftA a) ||]
@@ -794,6 +805,8 @@ formatPreAccOp = later $ \case
   Use aR a          -> bformat ("Use " % string) (showArrayShort 5 (showsElt (arrayRtype aR)) aR a)
   Atrace{}          -> "Atrace"
   Manifest{}        -> "Manifest"
+  Aassert{}         -> "Aassert"
+  Aassume{}         -> "Aassume"
   Aforeign{}        -> "Aforeign"
   Acond{}           -> "Acond"
   Awhile{}          -> "Awhile"

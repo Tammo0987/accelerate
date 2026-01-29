@@ -88,6 +88,7 @@ module Data.Array.Accelerate.Language (
   -- * Flow-control
   acond, awhile,
   cond,  while,
+  Assert(..), assertBounds,
 
   -- * Array operations with a scalar result
   (!), (!!), shape, size, shapeSize,
@@ -96,11 +97,12 @@ module Data.Array.Accelerate.Language (
   subtract, even, odd, gcd, lcm, (^), (^^),
 
   -- * Conversions
-  ord, chr, boolToInt, bitcast,
+  ord, chr, boolToInt, bitcast, isJust,
 
 ) where
 
 import Data.Array.Accelerate.AST                                    ( PrimFun(..) )
+import Data.Array.Accelerate.AST.Idx
 import Data.Array.Accelerate.Pattern
 import Data.Array.Accelerate.Representation.Array                   ( ArrayR(..) )
 import Data.Array.Accelerate.Representation.Shape                   ( ShapeR(..) )
@@ -112,7 +114,6 @@ import Data.Array.Accelerate.Sugar.Foreign
 import Data.Array.Accelerate.Sugar.Shape                            ( Shape(..), Slice(..), (:.) )
 import Data.Array.Accelerate.Type
 import qualified Data.Array.Accelerate.Representation.Array         as R
-import qualified Data.Array.Accelerate.Representation.Tag           as R
 
 import Data.Array.Accelerate.Classes.Eq
 import Data.Array.Accelerate.Classes.Fractional
@@ -123,10 +124,11 @@ import Data.Array.Accelerate.Classes.Ord
 import Prelude                                                      ( ($), (.), Maybe(..), Char )
 #if __GLASGOW_HASKELL__ >= 904
 import Data.Type.Equality
-import Data.Array.Accelerate.Smart (unExpBinaryFunction, PreSmartExp (Tag))
+import Data.Array.Accelerate.Smart (unExpBinaryFunction, PreSmartExp (Tag), mkExp, mkCoerce)
 #endif
 
 import qualified Prelude
+
 -- $setup
 -- >>> :seti -XFlexibleContexts
 -- >>> :seti -XScopedTypeVariables
@@ -307,7 +309,7 @@ generate
     => Exp sh
     -> (Exp sh -> Exp a)
     -> Acc (Array sh a)
-generate = Acc $$ applyAcc (Generate $ arrayR @sh @a)
+generate sh fun = Acc $ applyAcc (Generate $ arrayR @sh @a) (assertBounds isNonNegative sh) fun
 
 -- Shape manipulation
 -- ------------------
@@ -327,7 +329,7 @@ reshape
     => Exp sh
     -> Acc (Array sh' e)
     -> Acc (Array sh e)
-reshape = Acc $$ applyAcc (Reshape $ shapeR @sh)
+reshape sh as = Acc $ applyAcc (Reshape $ shapeR @sh) (assertBounds (\s -> shapeSize s == size as) sh) as
 
 -- Extraction of sub-arrays
 -- ------------------------
@@ -458,6 +460,7 @@ zipWith :: forall sh a b c.
         -> Acc (Array sh b)
         -> Acc (Array sh c)
 zipWith = Acc $$$ applyAcc (ZipWith (eltR @a) (eltR @b) (eltR @c))
+-- TODO: zipWithChecked
 
 -- Reductions
 -- ----------
@@ -545,7 +548,9 @@ fold1 :: forall sh a.
       => (Exp a -> Exp a -> Exp a)
       -> Acc (Array (sh:.Int) a)
       -> Acc (Array sh a)
-fold1 f = Acc . applyAcc (Fold (eltR @a) (unExpBinaryFunction f) Nothing)
+fold1 f =
+  Acc . applyAcc (Fold (eltR @a) (unExpBinaryFunction f) Nothing)
+  . assertBounds (\xs -> let Exp sh = shape xs in innerNonEmpty (shapeR @sh) sh)
 
 -- | Segmented reduction along the innermost dimension of an array. The
 -- segment descriptor specifies the starting index (offset) along the
@@ -702,14 +707,20 @@ permute'
     -> Acc (Array sh' a)                -- ^ array of default values
     -> Acc (Array sh  (Maybe (sh', a))) -- ^ array of source values to be permuted, alongside their target index
     -> Acc (Array sh' a)
-permute' f = Acc $$ applyAcc $ Permute (arrayR @sh @a) (Just $ unExpBinaryFunction f)
+permute' f def src = Acc $ applyAcc
+  (Permute (arrayR @sh @a) $ Just $ unExpBinaryFunction f)
+  def
+  $ map (assertBounds (\s@(Exp s') -> not (isJust s) ||! inboundsOf def (Exp $ prj1 $ prj0 $ prj0 s'))) src
 
 permuteUnique'
     :: forall sh sh' a. (Shape sh, Shape sh', Elt a)
     => Acc (Array sh' a)                -- ^ array of default values
     -> Acc (Array sh  (Maybe (sh', a))) -- ^ array of source values to be permuted, alongside their target index
     -> Acc (Array sh' a)
-permuteUnique' = Acc $$ applyAcc (Permute (arrayR @sh @a) Nothing)
+permuteUnique' def src = Acc $ applyAcc
+  (Permute (arrayR @sh @a) Nothing)
+  def
+  $ map (assertBounds (\s@(Exp s') -> not (isJust s) ||! inboundsOf def (Exp $ prj1 $ prj0 $ prj0 s'))) src
 
 -- | Generalised backward permutation operation (array gather).
 --
@@ -760,7 +771,10 @@ backpermute
     -> (Exp sh' -> Exp sh)              -- ^ index permutation function
     -> Acc (Array sh  a)                -- ^ source array
     -> Acc (Array sh' a)
-backpermute = Acc $$$ applyAcc (Backpermute $ shapeR @sh')
+backpermute sz f as =
+  Acc $ applyAcc (Backpermute $ shapeR @sh') (assertBounds isNonNegative sz) f' as
+  where
+    f' ix = assertBounds (inboundsOf as) $ f ix
 
 -- Stencil operations
 -- ------------------
@@ -874,6 +888,9 @@ stencil
     -> Acc (Array sh a)                       -- ^ source array
     -> Acc (Array sh b)                       -- ^ destination array
 stencil f (Boundary b) (Acc a)
+-- TODO: Do boundary conditions put requirements on the input size?
+-- We should add an 'assert' to check whether the size is large enough for the
+-- chosen boundary condition.
   = Acc $ SmartAcc $ Stencil
       (stencilR @sh @a @stencil)
       (eltR @b)
@@ -1218,12 +1235,14 @@ toIndex
     => Exp sh                     -- ^ extent of the array
     -> Exp sh                     -- ^ index to remap
     -> Exp Int
-toIndex (Exp sh) (Exp ix) = mkExp $ ToIndex (shapeR @sh) sh ix
+toIndex sh@(Exp sh') ix = mkExp $ ToIndex (shapeR @sh) sh' ix'
+  where Exp ix' = assertBounds (inbounds sh) ix
 
 -- | Inverse of 'toIndex'
 --
 fromIndex :: forall sh. Shape sh => Exp sh -> Exp Int -> Exp sh
-fromIndex (Exp sh) (Exp e) = mkExp $ FromIndex (shapeR @sh) sh e
+fromIndex sh@(Exp sh') e = mkExp $ FromIndex (shapeR @sh) sh' e'
+  where Exp e' = assertBounds (\s -> s >= 0 &&! s < shapeSize sh) e
 
 -- | Intersection of two shapes
 --
@@ -1279,6 +1298,79 @@ while c f (Exp e) =
             (mkCoerce' . unExp . c . Exp)
             (unExp . f . Exp) e
 
+class Assert a where
+  -- | Verifies whether a predicate holds. The predicate is evaluated before
+  -- the result of this function is used, and the program will crash if the
+  -- predicate returns false.
+  --
+  -- Note that the predicate is only guaranteed to run if the result of this
+  -- function is used. If the result is not used, it may (or may not) be
+  -- removed from the program.
+  --
+  assert :: (a -> Exp Bool) -> a -> a
+  
+  -- | Informs the compiler that a certain property holds on the given value.
+  -- The compiler may use this information to optimize the program.
+  --
+  assume :: (a -> Exp Bool) -> a -> a
+
+-- | Variant of 'assert' that only adds an assertion when bounds checks are
+-- enabled via the flag bounds-checks.
+--
+-- This function may be removed in the future and replaced by the regular
+-- 'assert', if we decide to turn bounds checks on by default.
+--
+assertBounds :: Assert a => (a -> Exp Bool) -> a -> a
+#ifdef ACCELERATE_BOUNDS_CHECKS
+assertBounds = assert
+#else
+assertBounds _ a = a
+#endif
+
+instance Elt t => Assert (Exp t) where
+  assert f (Exp e) = mkExp $ Assert (mkCoerce' g) e
+    where Exp g = f $ Exp e
+  assume f (Exp e) = mkExp $ Assume (mkCoerce' g) e
+    where Exp g = f $ Exp e
+
+instance Arrays t => Assert (Acc t) where
+  assert f (Acc a) = Acc $ SmartAcc $ Aassert (mkCoerce' g) a
+    where Exp g = f $ Acc a
+  assume f (Acc a) = Acc $ SmartAcc $ Aassume (mkCoerce' g) a
+    where Exp g = f $ Acc a
+
+-- Some conditions for assertions that we use for the built-in functions of Accelerate
+
+-- | Checks whether the innermost dimension is non-empty,
+-- or if the other dimensions are empty. fold1 requires this:
+-- It folds per row, so the rows must be non-empty.
+-- However, if there are no rows, the size of rows is irrelevant,
+-- hence we also check for that.
+innerNonEmpty :: ShapeR sh -> SmartExp (sh, Int) -> Exp Bool
+innerNonEmpty shr sh = isEmpty shr (prjTail sh) ||! (Exp (prj0 sh) :: Exp Int) > 0
+
+isEmpty :: ShapeR sh -> SmartExp sh -> Exp Bool
+isEmpty ShapeRz _ = False_
+isEmpty (ShapeRsnoc shr) sh = isEmpty shr (prjTail sh) ||! (Exp (prj0 sh) :: Exp Int) == 0
+
+isNonNegative :: forall sh. Shape sh => Exp sh -> Exp Bool
+isNonNegative (Exp sh) = isNonNegative' (shapeR @sh) sh
+
+isNonNegative' :: ShapeR sh -> SmartExp sh -> Exp Bool
+isNonNegative' ShapeRz _ = True_
+isNonNegative' (ShapeRsnoc shr) sh = isNonNegative' shr (prjTail sh) &&! (Exp (prj0 sh) :: Exp Int) >= 0
+
+-- | Given the size (of an array), checks whether an index is in bounds.
+inbounds :: forall sh. Shape sh => Exp sh -> Exp sh -> Exp Bool
+inbounds (Exp shape') (Exp index) = go (shapeR @sh) shape' index
+  where
+    go :: ShapeR s -> SmartExp s -> SmartExp s -> Exp Bool
+    go ShapeRz _ _ = True_
+    go (ShapeRsnoc shr) sh ix =
+      go shr (prjTail sh) (prjTail ix) &&! 0 <= (Exp (prj0 ix) :: Exp Int) &&! (Exp (prj0 ix) :: Exp Int) < Exp (prj0 sh)
+
+inboundsOf :: (Shape sh, Elt e) => Acc (Array sh e) -> Exp sh -> Exp Bool
+inboundsOf = inbounds . shape
 
 -- Array operations with a scalar result
 -- -------------------------------------
@@ -1300,7 +1392,8 @@ while c f (Exp e) =
 --
 infixl 9 !
 (!) :: forall sh e. (Shape sh, Elt e) => Acc (Array sh e) -> Exp sh -> Exp e
-Acc a ! Exp ix = mkExp $ Index (eltR @e) a ix
+a@(Acc a') ! ix = mkExp $ Index (eltR @e) a' ix'
+  where Exp ix' = assertBounds (inboundsOf a) ix
 
 -- | Extract the value from an array at the specified linear index.
 -- Multidimensional arrays in Accelerate are stored in row-major order with
@@ -1320,7 +1413,8 @@ Acc a ! Exp ix = mkExp $ Index (eltR @e) a ix
 --
 infixl 9 !!
 (!!) :: forall sh e. (Shape sh, Elt e) => Acc (Array sh e) -> Exp Int -> Exp e
-Acc a !! Exp ix = mkExp $ LinearIndex (eltR @e) a ix
+a@(Acc a') !! ix = mkExp $ LinearIndex (eltR @e) a' ix'
+  where Exp ix' = assertBounds (\i -> 0 <= i &&! i < size a) ix
 
 -- | Extract the shape (extent) of an array.
 --
@@ -1447,4 +1541,11 @@ bitcast
     => Exp a
     -> Exp b
 bitcast = mkBitcast
+
+-- | Returns 'True' if the argument is of the form @Just _@
+--
+isJust :: Elt a => Exp (Maybe a) -> Exp Bool
+isJust (Exp x) = Exp $ SmartExp $ (SmartExp $ Prj PairIdxLeft x) `Pair` SmartExp Nil
+  -- TLM: This is a sneaky hack because we know that the tag bits for Just
+  -- and True are identical.
 

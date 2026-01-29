@@ -33,7 +33,7 @@ module Data.Array.Accelerate.Interpreter.Simple (
   run, run1, runN,
 
   -- Internal (hidden)
-  evalPrim, evalPrimConst, evalCoerceScalar, atraceOp,
+  evalPrim, evalCoerceScalar, atraceOp,
 
 ) where
 
@@ -206,6 +206,12 @@ evalOpenAcc (OpenAcc pacc) aenv =
         go !x
           | toBool (linearIndexArray (Sugar.eltR @Word8) (p x) 0) = go (f x)
           | otherwise                                             = x
+
+    Aassert cond acc
+      | toBool (evalE cond)       -> manifest acc
+      | otherwise                 -> error "Assertion failed"
+
+    Aassume _ acc                 -> manifest acc
 
     Atrace msg as bs              -> unsafePerformIO $ manifest bs <$ atraceOp msg (snd $ manifest as)
 
@@ -906,7 +912,6 @@ evalOpenExp pexp runarr env =
     Evar (Var _ ix)             -> prj ix env
     Const _ c                   -> c
     Undef tp                    -> undefElt (TupRsingle tp)
-    PrimConst c                 -> evalPrimConst c
     PrimApp f x                 -> evalPrim f (evalE x)
     Nil                         -> ()
     Pair e1 e2                  -> let !x1 = evalE e1
@@ -914,29 +919,6 @@ evalOpenExp pexp runarr env =
                                    in  (x1, x2)
     VecPack   vecR e            -> pack   vecR $! evalE e
     VecUnpack vecR e            -> unpack vecR $! evalE e
-    IndexSlice slice slix sh    -> restrict slice (evalE slix)
-                                                  (evalE sh)
-      where
-        restrict :: SliceIndex slix sl co sh -> slix -> sh -> sl
-        restrict SliceNil              ()        ()         = ()
-        restrict (SliceAll sliceIdx)   (slx, ()) (sl, sz)   =
-          let sl' = restrict sliceIdx slx sl
-          in  (sl', sz)
-        restrict (SliceFixed sliceIdx) (slx, _i)  (sl, _sz) =
-          restrict sliceIdx slx sl
-
-    IndexFull slice slix sh     -> extend slice (evalE slix)
-                                                (evalE sh)
-      where
-        extend :: SliceIndex slix sl co sh -> slix -> sl -> sh
-        extend SliceNil              ()        ()       = ()
-        extend (SliceAll sliceIdx)   (slx, ()) (sl, sz) =
-          let sh' = extend sliceIdx slx sl
-          in  (sh', sz)
-        extend (SliceFixed sliceIdx) (slx, sz) sl       =
-          let sh' = extend sliceIdx slx sl
-          in  (sh', sz)
-
     ToIndex shr sh ix           -> toIndex shr (evalE sh) (evalE ix)
     FromIndex shr sh ix         -> fromIndex shr (evalE sh) (evalE ix)
     Case e rhs def              -> evalE (caseof (evalE e) rhs)
@@ -968,6 +950,12 @@ evalOpenExp pexp runarr env =
     ShapeSize shr sh            -> size shr (evalE sh)
     Foreign _ _ f e             -> evalOpenFun f (\case {}) Empty $ evalE e
     Coerce t1 t2 e              -> evalCoerceScalar t1 t2 (evalE e)
+
+    Assert c e
+      | toBool (evalE c)        -> evalE e
+      | otherwise               -> error "Assertion failed"
+    
+    Assume _ e                  -> evalE e
 
 runArrayInstr :: forall aenv a b. HasCallStack => Val aenv -> ArrayInstr aenv (a -> b) -> a -> b
 runArrayInstr aenv instr arg =
@@ -1059,11 +1047,6 @@ evalCoerceScalar VectorScalarType{} (SingleScalarType tb) a = scalar tb a
 -- Scalar primitives
 -- -----------------
 
-evalPrimConst :: PrimConst a -> a
-evalPrimConst (PrimMinBound ty) = evalMinBound ty
-evalPrimConst (PrimMaxBound ty) = evalMaxBound ty
-evalPrimConst (PrimPi       ty) = evalPi ty
-
 evalPrim :: PrimFun (a -> r) -> (a -> r)
 evalPrim (PrimAdd                ty) = evalAdd ty
 evalPrim (PrimSub                ty) = evalSub ty
@@ -1114,12 +1097,10 @@ evalPrim (PrimCeiling         ta tb) = evalCeiling ta tb
 evalPrim (PrimAtan2              ty) = evalAtan2 ty
 evalPrim (PrimIsNaN              ty) = evalIsNaN ty
 evalPrim (PrimIsInfinite         ty) = evalIsInfinite ty
-evalPrim (PrimLt                 ty) = evalLt ty
-evalPrim (PrimGt                 ty) = evalGt ty
-evalPrim (PrimLtEq               ty) = evalLtEq ty
-evalPrim (PrimGtEq               ty) = evalGtEq ty
-evalPrim (PrimEq                 ty) = evalEq ty
-evalPrim (PrimNEq                ty) = evalNEq ty
+evalPrim (PrimCmp ty CmpLt         ) = evalLt ty
+evalPrim (PrimCmp ty CmpGtEq       ) = evalGtEq ty
+evalPrim (PrimCmp ty CmpEq         ) = evalEq ty
+evalPrim (PrimCmp ty CmpNEq        ) = evalNEq ty
 evalPrim (PrimMax                ty) = evalMax ty
 evalPrim (PrimMin                ty) = evalMin ty
 evalPrim PrimLAnd                    = evalLAnd
@@ -1175,24 +1156,8 @@ evalToFloating (FloatingNumType ta) tb
 -- Extract methods from reified dictionaries
 --
 
--- Constant methods of Bounded
---
-
-evalMinBound :: BoundedType a -> a
-evalMinBound (IntegralBoundedType ty)
-  | IntegralDict <- integralDict ty
-  = minBound
-
-evalMaxBound :: BoundedType a -> a
-evalMaxBound (IntegralBoundedType ty)
-  | IntegralDict <- integralDict ty
-  = maxBound
-
 -- Constant method of floating
 --
-
-evalPi :: FloatingType a -> a
-evalPi ty | FloatingDict <- floatingDict ty = pi
 
 evalSin :: FloatingType a -> (a -> a)
 evalSin ty | FloatingDict <- floatingDict ty = sin
@@ -1367,14 +1332,6 @@ evalRecip ty | FloatingDict <- floatingDict ty = recip
 evalLt :: SingleType a -> ((a, a) -> PrimBool)
 evalLt (NumSingleType (IntegralNumType ty)) | IntegralDict <- integralDict ty = fromBool . uncurry (<)
 evalLt (NumSingleType (FloatingNumType ty)) | FloatingDict <- floatingDict ty = fromBool . uncurry (<)
-
-evalGt :: SingleType a -> ((a, a) -> PrimBool)
-evalGt (NumSingleType (IntegralNumType ty)) | IntegralDict <- integralDict ty = fromBool . uncurry (>)
-evalGt (NumSingleType (FloatingNumType ty)) | FloatingDict <- floatingDict ty = fromBool . uncurry (>)
-
-evalLtEq :: SingleType a -> ((a, a) -> PrimBool)
-evalLtEq (NumSingleType (IntegralNumType ty)) | IntegralDict <- integralDict ty = fromBool . uncurry (<=)
-evalLtEq (NumSingleType (FloatingNumType ty)) | FloatingDict <- floatingDict ty = fromBool . uncurry (<=)
 
 evalGtEq :: SingleType a -> ((a, a) -> PrimBool)
 evalGtEq (NumSingleType (IntegralNumType ty)) | IntegralDict <- integralDict ty = fromBool . uncurry (>=)

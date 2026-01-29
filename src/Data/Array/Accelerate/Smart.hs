@@ -75,6 +75,7 @@ module Data.Array.Accelerate.Smart (
   ($$), ($$$), ($$$$), ($$$$$),
   ApplyAcc(..),
   unAcc, unAccFunction, mkExp, unExp, unExpFunction, unExpBinaryFunction, unPair, mkPairToTuple,
+  prj0, prj1, prjTail,
 
   -- ** Miscellaneous
   formatPreAccOp,
@@ -104,8 +105,7 @@ import qualified Data.Array.Accelerate.Sugar.Shape                  as Sugar
 
 import Data.Array.Accelerate.AST                                    ( Direction(..), Message(..)
                                                                     , PrimBool, PrimMaybe
-                                                                    , PrimFun(..), primFunType
-                                                                    , PrimConst(..), primConstType )
+                                                                    , PrimFun(..), Cmp(..), primFunType  )
 import Data.Primitive.Vec
 
 import Data.Kind
@@ -356,6 +356,14 @@ data PreSmartAcc acc exp as where
                 -> acc arrs2
                 -> PreSmartAcc acc exp arrs2
 
+  Aassert       :: exp PrimBool
+                -> acc as
+                -> PreSmartAcc acc exp as
+
+  Aassume       :: exp PrimBool
+                -> acc as
+                -> PreSmartAcc acc exp as
+
   Use           :: ArrayR (Array sh e)
                 -> Array sh e
                 -> PreSmartAcc acc exp (Array sh e)
@@ -539,9 +547,6 @@ data PreSmartExp acc exp t where
                 -> exp t
                 -> PreSmartExp acc exp t
 
-  PrimConst     :: PrimConst t
-                -> PreSmartExp acc exp t
-
   PrimApp       :: PrimFun (a -> r)
                 -> exp a
                 -> PreSmartExp acc exp r
@@ -579,6 +584,14 @@ data PreSmartExp acc exp t where
                 -> ScalarType b
                 -> exp a
                 -> PreSmartExp acc exp b
+
+  Assert        :: exp PrimBool
+                -> exp a
+                -> PreSmartExp acc exp a
+
+  Assume        :: exp PrimBool
+                -> exp a
+                -> PreSmartExp acc exp a
 
 
 -- Smart constructors for stencils
@@ -832,6 +845,8 @@ instance HasArraysR acc => HasArraysR (PreSmartAcc acc exp) where
                                    PairIdxRight -> t2
     Aprj _ _                  -> error "Ejector seat? You're joking!"
     Atrace _ _ a              -> arraysR a
+    Aassert _ a               -> arraysR a
+    Aassume _ a               -> arraysR a
     Use repr _                -> TupRsingle repr
     Unit tp _                 -> TupRsingle $ ArrayR ShapeRz $ tp
     Generate repr _ _         -> TupRsingle repr
@@ -884,7 +899,6 @@ instance HasTypeR exp => HasTypeR (PreSmartExp acc exp) where
     Case{}                          -> internalError "encountered empty case"
     Cond _ e _                      -> typeR e
     While t _ _ _                   -> t
-    PrimConst c                     -> TupRsingle $ SingleScalarType $ primConstType c
     PrimApp f _                     -> snd $ primFunType f
     Index tp _ _                    -> tp
     LinearIndex tp _ _              -> tp
@@ -893,6 +907,8 @@ instance HasTypeR exp => HasTypeR (PreSmartExp acc exp) where
     Foreign tp _ _ _                -> tp
     Undef tp                        -> TupRsingle tp
     Coerce _ tp _                   -> TupRsingle tp
+    Assert _ e                      -> typeR e
+    Assume _ e                      -> typeR e
 
 
 -- Smart constructors
@@ -920,6 +936,14 @@ constant = Exp . go (eltR @e) . fromElt
 
 -- | 'undef' can be used anywhere a constant is expected, and indicates that the
 -- consumer of the value can receive an unspecified bit pattern.
+--
+-- 'undef' is not a pure value: each observation of it may yield a different
+-- result (or not), depending on unpredictable optimisation choices in the
+-- compiler, and computing with 'undef' produces 'undef'. However, computing with
+-- 'undef' /is/ valid as long as each possible bit pattern would be a valid input
+-- to that computation. For example, @'undef' - 'undef'@ may have any result, but
+-- will not crash. This is even the case after binding 'undef' to a variable, and
+-- thus @let x = 'undef' in x - x@ need not evaluate to zero.
 --
 -- This is useful because a store of an undefined value can be assumed to not
 -- have any effect; we can assume that the value is overwritten with bits that
@@ -971,15 +995,23 @@ indexTail (Exp x) = mkExp $ Prj PairIdxLeft x
 -- Smart constructor for constants
 --
 
-mkMinBound :: (Elt t, IsBounded (EltR t)) => Exp t
-mkMinBound = mkExp $ PrimConst (PrimMinBound boundedType)
+mkMinBound :: forall t. (Elt t, IsBounded (EltR t)) => Exp t
+mkMinBound
+  | IntegralBoundedType tp <- boundedType @(EltR t)
+  , IntegralDict <- integralDict tp
+  = Exp $ SmartExp $ Const (SingleScalarType $ NumSingleType $ IntegralNumType tp) minBound
 
-mkMaxBound :: (Elt t, IsBounded (EltR t)) => Exp t
-mkMaxBound = mkExp $ PrimConst (PrimMaxBound boundedType)
+mkMaxBound :: forall t. (Elt t, IsBounded (EltR t)) => Exp t
+mkMaxBound
+  | IntegralBoundedType tp <- boundedType @(EltR t)
+  , IntegralDict <- integralDict tp
+  = Exp $ SmartExp $ Const (SingleScalarType $ NumSingleType $ IntegralNumType tp) maxBound
 
-mkPi :: (Elt r, IsFloating (EltR r)) => Exp r
-mkPi = mkExp $ PrimConst (PrimPi floatingType)
-
+mkPi :: forall r. (Elt r, IsFloating (EltR r)) => Exp r
+mkPi
+  | tp <- floatingType @(EltR r)
+  , FloatingDict <- floatingDict tp
+  = Exp $ SmartExp $ Const (SingleScalarType $ NumSingleType $ FloatingNumType tp) pi
 
 -- Smart constructors for primitive applications
 --
@@ -1155,22 +1187,22 @@ mkIsInfinite = mkPrimUnaryBool $ PrimIsInfinite floatingType
 -- Relational and equality operators
 
 mkLt :: (Elt t, IsSingle (EltR t)) => Exp t -> Exp t -> Exp Bool
-mkLt = mkPrimBinaryBool $ PrimLt singleType
+mkLt = mkPrimBinaryBool $ PrimCmp singleType CmpLt
 
 mkGt :: (Elt t, IsSingle (EltR t)) => Exp t -> Exp t -> Exp Bool
-mkGt = mkPrimBinaryBool $ PrimGt singleType
+mkGt = flip mkLt
 
 mkLtEq :: (Elt t, IsSingle (EltR t)) => Exp t -> Exp t -> Exp Bool
-mkLtEq = mkPrimBinaryBool $ PrimLtEq singleType
+mkLtEq = flip mkGtEq
 
 mkGtEq :: (Elt t, IsSingle (EltR t)) => Exp t -> Exp t -> Exp Bool
-mkGtEq = mkPrimBinaryBool $ PrimGtEq singleType
+mkGtEq = mkPrimBinaryBool $ PrimCmp singleType CmpGtEq
 
 mkEq :: (Elt t, IsSingle (EltR t)) => Exp t -> Exp t -> Exp Bool
-mkEq = mkPrimBinaryBool $ PrimEq singleType
+mkEq = mkPrimBinaryBool $ PrimCmp singleType CmpEq
 
 mkNEq :: (Elt t, IsSingle (EltR t)) => Exp t -> Exp t -> Exp Bool
-mkNEq = mkPrimBinaryBool $ PrimNEq singleType
+mkNEq = mkPrimBinaryBool $ PrimCmp singleType CmpNEq
 
 mkMax :: (Elt t, IsSingle (EltR t)) => Exp t -> Exp t -> Exp t
 mkMax = mkPrimBinary $ PrimMax singleType
@@ -1348,6 +1380,8 @@ formatPreAccOp = later $ \case
   Anil{}              -> "Anil"
   Aprj{}              -> "Aprj"
   Atrace{}            -> "Atrace"
+  Aassert{}           -> "Aassert"
+  Aassume{}           -> "Aassume"
   Unit{}              -> "Unit"
   Generate{}          -> "Generate"
   Reshape{}           -> "Reshape"
@@ -1381,7 +1415,6 @@ formatPreExpOp = later $ \case
   Case{}        -> "Case"
   Cond{}        -> "Cond"
   While{}       -> "While"
-  PrimConst{}   -> "PrimConst"
   PrimApp{}     -> "PrimApp"
   Index{}       -> "Index"
   LinearIndex{} -> "LinearIndex"
@@ -1389,4 +1422,6 @@ formatPreExpOp = later $ \case
   ShapeSize{}   -> "ShapeSize"
   Foreign{}     -> "Foreign"
   Coerce{}      -> "Coerce"
+  Assert{}      -> "Assert" 
+  Assume{}      -> "Assume"
 

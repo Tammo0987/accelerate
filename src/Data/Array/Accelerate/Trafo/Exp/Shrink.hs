@@ -41,10 +41,13 @@ module Data.Array.Accelerate.Trafo.Exp.Shrink (
   -- Occurrence counting
   usesOfExp, usesOfFun,
 
+  -- Utilities
   arrayInstrsInExp, arrayInstrsInFun,
+  strengthenShrunkLHS,
 
 ) where
 
+import Data.Array.Accelerate.AST.Environment
 import Data.Array.Accelerate.AST.Exp
 import Data.Array.Accelerate.AST.Idx
 import Data.Array.Accelerate.AST.LeftHandSide
@@ -53,6 +56,7 @@ import Data.Array.Accelerate.Analysis.Match
 import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.Representation.Type
 import Data.Array.Accelerate.Trafo.Substitution
+import Data.Array.Accelerate.Trafo.Exp.Substitution
 
 import qualified Data.Array.Accelerate.Debug.Internal.Stats                  as Stats
 
@@ -197,12 +201,10 @@ shrinkLhs (Impossible usages) lhs = case go usages lhs of
     go _ _ = internalError "Empty array, mismatch in length of usages array and LHS"
 shrinkLhs _ _ = Nothing
 
--- The first LHS should be 'larger' than the second, eg the second may have
--- a wildcard if the first LHS does bind variables there, but not the other
--- way around.
---
+-- Converts a strengthening from before a binding, to a strengthening after a binding.
+-- The two LeftHandSides may have different structures.
 strengthenShrunkLHS
-    :: HasCallStack
+    :: Distributes s
     => LeftHandSide s t env1 env2
     -> LeftHandSide s t env1' env2'
     -> env1 :?> env1'
@@ -212,15 +214,13 @@ strengthenShrunkLHS (LeftHandSideSingle _)   (LeftHandSideSingle _)   k = \ix ->
   ZeroIdx     -> Just ZeroIdx
   SuccIdx ix' -> SuccIdx <$> k ix'
 strengthenShrunkLHS (LeftHandSidePair lA hA) (LeftHandSidePair lB hB) k = strengthenShrunkLHS hA hB $ strengthenShrunkLHS lA lB k
-strengthenShrunkLHS (LeftHandSideSingle _)   (LeftHandSideWildcard _) k = \ix -> case ix of
-  ZeroIdx     -> Nothing
-  SuccIdx ix' -> k ix'
-strengthenShrunkLHS (LeftHandSidePair l h)   (LeftHandSideWildcard t) k = strengthenShrunkLHS h (LeftHandSideWildcard t2) $ strengthenShrunkLHS l (LeftHandSideWildcard t1) k
-  where
-    TupRpair t1 t2 = t
-strengthenShrunkLHS (LeftHandSideWildcard _) _                        _ = internalError "Second LHS defines more variables"
-strengthenShrunkLHS _                        _                        _ = internalError "Mismatch LHS single with LHS pair"
+strengthenShrunkLHS lhs (LeftHandSideWildcard _) k = \ix -> strengthenWithLHS lhs ix >>= k
+strengthenShrunkLHS (LeftHandSideWildcard _) lhs k = \ix -> k ix >>= strengthenFromWeaken (weakenWithLHS lhs)
+strengthenShrunkLHS (LeftHandSideSingle t) (LeftHandSidePair _ _) _ = pairImpossible t
+strengthenShrunkLHS (LeftHandSidePair _ _) (LeftHandSideSingle t) _ = pairImpossible t
 
+strengthenFromWeaken :: env1 :> env2 -> env1 :?> env2
+strengthenFromWeaken k ix = Just $ k >:> ix
 
 -- Shrinking
 -- =========
@@ -229,7 +229,7 @@ strengthenShrunkLHS _                        _                        _ = intern
 -- instance of beta-reduction to cases where the bound variable is used zero
 -- (dead-code elimination) or one (linear inlining) times.
 --
-shrinkExp :: HasCallStack => PreOpenExp arr env t -> (Bool, PreOpenExp arr env t)
+shrinkExp :: (HasCallStack, IsArrayInstr arr) => PreOpenExp arr env t -> (Bool, PreOpenExp arr env t)
 shrinkExp = Stats.substitution "shrinkE" . first getAny . shrinkE
   where
     -- If the bound variable is used at most this many times, it will be inlined
@@ -239,17 +239,17 @@ shrinkExp = Stats.substitution "shrinkE" . first getAny . shrinkE
     lIMIT :: Int
     lIMIT = 1
 
-    cheap :: PreOpenExp arr env t -> Bool
+    cheap :: IsArrayInstr arr => PreOpenExp arr env t -> Bool
     cheap (Evar _)       = True
     cheap (Pair e1 e2)   = cheap e1 && cheap e2
     cheap Nil            = True
     cheap Const{}        = True
-    cheap PrimConst{}    = True
     cheap Undef{}        = True
     cheap (Coerce _ _ e) = cheap e
+    cheap (ArrayInstr arr Nil) = inlineArrayInstr arr
     cheap _              = False
 
-    shrinkE :: HasCallStack => PreOpenExp arr env t -> (Any, PreOpenExp arr env t)
+    shrinkE :: (HasCallStack, IsArrayInstr arr) => PreOpenExp arr env t -> (Any, PreOpenExp arr env t)
     shrinkE exp = case exp of
       Let (LeftHandSideSingle _) bnd@Evar{} body -> Stats.inline "Var"   . yes $ shrinkE (inline body bnd)
       Let lhs bnd body
@@ -293,24 +293,23 @@ shrinkExp = Stats.substitution "shrinkE" . first getAny . shrinkE
       Pair x y                  -> Pair <$> shrinkE x <*> shrinkE y
       VecPack   vec e           -> VecPack   vec <$> shrinkE e
       VecUnpack vec e           -> VecUnpack vec <$> shrinkE e
-      IndexSlice x ix sh        -> IndexSlice x <$> shrinkE ix <*> shrinkE sh
-      IndexFull x ix sl         -> IndexFull x <$> shrinkE ix <*> shrinkE sl
       ToIndex shr sh ix         -> ToIndex shr <$> shrinkE sh <*> shrinkE ix
       FromIndex shr sh i        -> FromIndex shr <$> shrinkE sh <*> shrinkE i
       Case e rhs def            -> Case <$> shrinkE e <*> sequenceA [ (t,) <$> shrinkE c | (t,c) <- rhs ] <*> shrinkMaybeE def
       Cond p t e                -> Cond <$> shrinkE p <*> shrinkE t <*> shrinkE e
       While p f x               -> While <$> shrinkF p <*> shrinkF f <*> shrinkE x
-      PrimConst c               -> pure (PrimConst c)
       PrimApp f x               -> PrimApp f <$> shrinkE x
       ArrayInstr arr e          -> ArrayInstr arr <$> shrinkE e
       ShapeSize shr sh          -> ShapeSize shr <$> shrinkE sh
       Foreign repr ff f e       -> Foreign repr ff <$> shrinkF f <*> shrinkE e
       Coerce t1 t2 e            -> Coerce t1 t2 <$> shrinkE e
+      Assert e1 e2              -> Assert <$> shrinkE e1 <*> shrinkE e2
+      Assume e1 e2              -> Assume <$> shrinkE e1 <*> shrinkE e2
 
-    shrinkF :: HasCallStack => PreOpenFun arr env t -> (Any, PreOpenFun arr env t)
+    shrinkF :: (HasCallStack, IsArrayInstr arr) => PreOpenFun arr env t -> (Any, PreOpenFun arr env t)
     shrinkF = first Any . shrinkFun
 
-    shrinkMaybeE :: HasCallStack => Maybe (PreOpenExp arr env t) -> (Any, Maybe (PreOpenExp arr env t))
+    shrinkMaybeE :: (HasCallStack, IsArrayInstr arr) => Maybe (PreOpenExp arr env t) -> (Any, Maybe (PreOpenExp arr env t))
     shrinkMaybeE Nothing  = pure Nothing
     shrinkMaybeE (Just e) = Just <$> shrinkE e
 
@@ -320,7 +319,7 @@ shrinkExp = Stats.substitution "shrinkE" . first getAny . shrinkE
     yes :: (Any, x) -> (Any, x)
     yes (_, x) = (Any True, x)
 
-shrinkFun :: HasCallStack => PreOpenFun arr env f -> (Bool, PreOpenFun arr env f)
+shrinkFun :: (HasCallStack, IsArrayInstr arr) => PreOpenFun arr env f -> (Bool, PreOpenFun arr env f)
 shrinkFun (Lam lhs f) = case lhsVarsRange lhs of
   Left Refl ->
     let b' = case lhs of
@@ -363,19 +362,18 @@ usesOfExp range = countE
       Pair e1 e2                -> countE e1 <> countE e2
       VecPack   _ e             -> countE e
       VecUnpack _ e             -> countE e
-      IndexSlice _ ix sh        -> countE ix <> countE sh
-      IndexFull _ ix sl         -> countE ix <> countE sl
       FromIndex _ sh i          -> countE sh <> countE i
       ToIndex _ sh e            -> countE sh <> countE e
       Case e rhs def            -> countE e  <> mconcat [ countE c | (_,c) <- rhs ] <> maybe (Finite 0) countE def
       Cond p t e                -> countE p  <> countE t <> countE e
       While p f x               -> countE x  <> loopCount (usesOfFun range p) <> loopCount (usesOfFun range f)
-      PrimConst _               -> Finite 0
       PrimApp _ x               -> countE x
       ArrayInstr _ e            -> countE e
       ShapeSize _ sh            -> countE sh
       Foreign _ _ _ e           -> countE e
       Coerce _ _ e              -> countE e
+      Assert e1 e2              -> countE e1 <> countE e2
+      Assume e1 e2              -> countE e1 <> countE e2
 
 usesOfFun :: VarsRange env -> PreOpenFun arr env f -> Count
 usesOfFun range (Lam lhs f) = usesOfFun (weakenVarsRange lhs range) f
@@ -394,19 +392,18 @@ arrayInstrsInExp = (`travE` [])
       Pair x y                   -> travE x $ travE y acc
       VecPack   _ e              -> travE e acc
       VecUnpack _ e              -> travE e acc
-      IndexSlice _ ix sh         -> travE ix $ travE sh acc
-      IndexFull _ ix sl          -> travE ix $ travE sl acc
       ToIndex _ sh ix            -> travE sh $ travE ix acc
       FromIndex _ sh i           -> travE sh $ travE i acc
       Case e rhs def             -> travE e $ travAE rhs $ travME def acc
       Cond p t e                 -> travE p $ travE t $ travE e acc
       While p f x                -> travF p $ travF f $ travE x acc
-      PrimConst _                -> acc
       PrimApp _ x                -> travE x acc
       ArrayInstr arr e           -> Exists arr : travE e acc
       ShapeSize _ sh             -> travE sh acc
       Foreign _ _ _ e            -> travE e acc
       Coerce _ _ e               -> travE e acc
+      Assert e1 e2               -> travE e1 $ travE e2 acc
+      Assume e1 e2               -> travE e1 $ travE e2 acc
 
     travME :: Maybe (PreOpenExp arr env e) -> [Exists arr] -> [Exists arr]
     travME Nothing  acc = acc

@@ -23,10 +23,12 @@ import Data.Array.Accelerate.AST.LeftHandSide
 import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.Representation.Array
 import Data.Array.Accelerate.Trafo.Substitution
+import Data.Array.Accelerate.Trafo.Exp.Substitution
 import Data.Array.Accelerate.Type
 
 import Data.Array.Accelerate.Debug.Internal.Stats                   as Stats
 
+import Data.Maybe
 
 -- An environment that holds let-bound scalar expressions. The second
 -- environment variable env' is used to project out the corresponding
@@ -44,6 +46,16 @@ data WeakOpenExp arr env t where
            -> PreOpenExp  arr env  t
            -> PreOpenExp  arr env' t {- LAZY -}
            -> WeakOpenExp arr env' t
+
+instance SinkExp (WeakOpenExp arr) where
+  weakenE k (Subst k' e1 _) = Subst
+    (k .> k')
+    e1
+    (weakenE (k .> k') e1)
+
+instance SinkExp (Gamma arr) where
+  weakenE _ EmptyExp = EmptyExp
+  weakenE k (PushExp env e) = weakenE k env `PushExp` weakenE k e
 
 -- XXX: The simplifier calls this function every time it moves under a let
 -- binding. This means we have a number of calls to 'weakenE' exponential in the
@@ -148,4 +160,3 @@ bindExps :: Extend ScalarType (OpenExp' aenv) env env'
          -> OpenExp env  aenv e
 bindExps BaseEnv = id
 bindExps (PushEnv g lhs (OpenExp' b)) = bindExps g . Let lhs b
-

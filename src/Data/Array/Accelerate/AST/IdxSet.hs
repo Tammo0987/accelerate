@@ -23,7 +23,7 @@ module Data.Array.Accelerate.AST.IdxSet (
   push, push', empty, isEmpty, drop, drop', remove, partialEnvRemoveSet, partialEnvFilterSet,
   fromList, fromList', fromVarList, fromVars, map,
   singleton, singletonVar, first, null,
-  toList
+  toList, rnfIdxSet
 ) where
 
 import Prelude hiding (drop, (>>=), map, null)
@@ -44,6 +44,13 @@ member idx (IdxSet set) = isJust $ prjPartial idx set
 
 varMember :: Var s env t -> IdxSet env -> Bool
 varMember (Var _ idx) = member idx
+
+instance Eq (IdxSet env) where
+  (IdxSet PEnd) == b = isEmpty b
+  a == (IdxSet PEnd) = isEmpty a
+  (IdxSet (PPush a _)) == (IdxSet (PPush b _)) = IdxSet a == IdxSet b
+  (IdxSet (PNone a)) == (IdxSet (PNone b)) = IdxSet a == IdxSet b
+  _ == _ = False
 
 overlaps :: IdxSet env -> IdxSet env -> Bool
 overlaps (IdxSet (PPush _ _)) (IdxSet (PPush _ _)) = True
@@ -163,6 +170,9 @@ null :: IdxSet env -> Bool
 null (IdxSet (PPush _ _)) = False
 null (IdxSet (PNone env)) = null (IdxSet env)
 null _ = True
+
+rnfIdxSet :: IdxSet env -> ()
+rnfIdxSet = foldr (\(Exists ix) () -> rnfIdx ix) () . toList
 
 instance Show (IdxSet env) where
   showsPrec p = showsPrec p . fmap (\(Exists idx) -> idxToInt idx) . toList

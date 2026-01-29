@@ -163,20 +163,19 @@ inlineVars lhsBound expr bound
       Nil                 -> Just Nil
       VecPack   vec e1    -> VecPack   vec <$> travE e1
       VecUnpack vec e1    -> VecUnpack vec <$> travE e1
-      IndexSlice si e1 e2 -> IndexSlice si <$> travE e1 <*> travE e2
-      IndexFull  si e1 e2 -> IndexFull  si <$> travE e1 <*> travE e2
       ToIndex   shr e1 e2 -> ToIndex   shr <$> travE e1 <*> travE e2
       FromIndex shr e1 e2 -> FromIndex shr <$> travE e1 <*> travE e2
       Case e1 rhs def     -> Case <$> travE e1 <*> mapM (\(t,c) -> (t,) <$> travE c) rhs <*> travMaybeE def
       Cond e1 e2 e3       -> Cond <$> travE e1 <*> travE e2 <*> travE e3
       While f1 f2 e1      -> While <$> travF f1 <*> travF f2 <*> travE e1
       Const t c           -> Just $ Const t c
-      PrimConst c         -> Just $ PrimConst c
       PrimApp p e1        -> PrimApp p <$> travE e1
       ArrayInstr arr e1   -> ArrayInstr arr <$> travE e1
       ShapeSize shr e1    -> ShapeSize shr <$> travE e1
       Undef t             -> Just $ Undef t
       Coerce t1 t2 e1     -> Coerce t1 t2 <$> travE e1
+      Assert e1 e2        -> Assert <$> travE e1 <*> travE e2
+      Assume e1 e2        -> Assume <$> travE e1 <*> travE e2
 
       where
         travE :: PreOpenExp arr env1 s -> Maybe (PreOpenExp arr env2 s)
@@ -448,7 +447,6 @@ rebuildOpenExp
 rebuildOpenExp v exp =
   case exp of
     Const t c           -> pure $ Const t c
-    PrimConst c         -> pure $ PrimConst c
     Undef t             -> pure $ Undef t
     Evar var            -> expOut          <$> v var
     Let lhs a b
@@ -458,8 +456,6 @@ rebuildOpenExp v exp =
     Nil                 -> pure Nil
     VecPack   vec e     -> VecPack   vec   <$> rebuildOpenExp v e
     VecUnpack vec e     -> VecUnpack vec   <$> rebuildOpenExp v e
-    IndexSlice x ix sh  -> IndexSlice x    <$> rebuildOpenExp v ix <*> rebuildOpenExp v sh
-    IndexFull x ix sl   -> IndexFull x     <$> rebuildOpenExp v ix <*> rebuildOpenExp v sl
     ToIndex shr sh ix   -> ToIndex shr     <$> rebuildOpenExp v sh <*> rebuildOpenExp v ix
     FromIndex shr sh ix -> FromIndex shr   <$> rebuildOpenExp v sh <*> rebuildOpenExp v ix
     Case e rhs def      -> Case            <$> rebuildOpenExp v e  <*> sequenceA [ (t,) <$> rebuildOpenExp v c | (t,c) <- rhs ] <*> rebuildMaybeExp v def
@@ -470,6 +466,8 @@ rebuildOpenExp v exp =
     ShapeSize shr sh    -> ShapeSize shr   <$> rebuildOpenExp v sh
     Foreign tp ff f e   -> Foreign tp ff f <$> rebuildOpenExp v e
     Coerce t1 t2 e      -> Coerce t1 t2    <$> rebuildOpenExp v e
+    Assert e1 e2        -> Assert          <$> rebuildOpenExp v e1 <*> rebuildOpenExp v e2
+    Assume e1 e2        -> Assume          <$> rebuildOpenExp v e1 <*> rebuildOpenExp v e2
 
 {-# INLINEABLE rebuildFun #-}
 rebuildFun
@@ -532,20 +530,20 @@ rebuildArrayInstrOpenExp v = \case
     Nil                      -> pure Nil
     VecPack   vecr e         -> VecPack   vecr <$> travE e
     VecUnpack vecr e         -> VecUnpack vecr <$> travE e
-    IndexSlice slice slix sh -> IndexSlice slice <$> travE slix <*> travE sh
-    IndexFull  slice slix sl -> IndexFull  slice <$> travE slix <*> travE sl
     ToIndex   shr sh ix      -> ToIndex   shr <$> travE sh <*> travE ix
     FromIndex shr sh ix      -> FromIndex shr <$> travE sh <*> travE ix
     Case e rhs def           -> Case <$> travE e <*> sequenceA [ (t,) <$> travE c | (t,c) <- rhs ] <*> travME def
     Cond e1 e2 e3            -> Cond <$> travE e1 <*> travE e2 <*> travE e3
     While c f x              -> While <$> travF c <*> travF f <*> travE x
     Const tp c               -> pure $ Const tp c
-    PrimConst prim           -> pure $ PrimConst prim
     PrimApp f x              -> PrimApp f <$> travE x
     ArrayInstr arr x         -> v arr <*> travE x
     ShapeSize shr sh         -> ShapeSize shr <$> travE sh
     Undef tp                 -> pure $ Undef tp
     Coerce t1 t2 e           -> Coerce t1 t2 <$> travE e
+    Assert e1 e2             -> Assert <$> travE e1 <*> travE e2
+    Assume e1 e2             -> Assume <$> travE e1 <*> travE e2
+    
   where
     travE :: PreOpenExp arr env' t' -> f (PreOpenExp arr' env' t')
     travE = rebuildArrayInstrOpenExp v

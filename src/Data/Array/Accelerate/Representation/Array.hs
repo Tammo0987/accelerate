@@ -134,7 +134,7 @@ fromFunctionM (ArrayR shR tp) sh f = do
 -- | Convert a list into an Accelerate 'Array' in dense row-major order.
 --
 fromList :: forall sh e. ArrayR (Array sh e) -> sh -> [e] -> Array sh e
-fromList (ArrayR shR tp) sh xs = buffers `seq` Array sh buffers
+fromList (ArrayR shR tp) sh xs = assertShapeNonNegative shR sh `seq` buffers `seq` Array sh buffers
   where
     -- Assume the array is in dense row-major order. This is safe because
     -- otherwise backends would not be able to directly memcpy.
@@ -149,6 +149,11 @@ fromList (ArrayR shR tp) sh xs = buffers `seq` Array sh buffers
                   go 0 xs
                   return (mbuffers, undefined)
 
+assertShapeNonNegative :: ShapeR sh -> sh -> ()
+assertShapeNonNegative ShapeRz () = ()
+assertShapeNonNegative (ShapeRsnoc shr) (sh, sz)
+  | sz < 0 = error "Data.Array.Accelerate.fromList: negative size"
+  | otherwise = assertShapeNonNegative shr sh
 
 -- | Convert an accelerated 'Array' to a list in row-major order.
 --

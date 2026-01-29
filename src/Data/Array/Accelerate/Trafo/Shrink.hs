@@ -217,6 +217,8 @@ usesOfPreAcc withShape countAcc idx = count
       Anil                       -> 0
       Atrace _ a1 a2             -> countA a1 + countA a2
       Manifest as                -> countA as
+      Aassert c as               -> countE c + countA as
+      Aassume c as               -> countE c + countA as
       Aforeign _ _ _ a           -> countA a
       Acond p t e                -> countE p + countA t + countA e
       -- Body and condition of the while loop may be evaluated multiple times.

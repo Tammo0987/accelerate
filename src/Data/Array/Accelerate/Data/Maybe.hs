@@ -67,13 +67,6 @@ import Data.Typeable
 isNothing :: Elt a => Exp (Maybe a) -> Exp Bool
 isNothing = not . isJust
 
--- | Returns 'True' if the argument is of the form @Just _@
---
-isJust :: Elt a => Exp (Maybe a) -> Exp Bool
-isJust (Exp x) = Exp $ SmartExp $ (SmartExp $ Prj PairIdxLeft x) `Pair` SmartExp Nil
-  -- TLM: This is a sneaky hack because we know that the tag bits for Just
-  -- and True are identical.
-
 -- | The 'fromMaybe' function takes a default value and a 'Maybe' value. If the
 -- 'Maybe' is 'Nothing', the default value is returned; otherwise, it returns
 -- the value contained in the 'Maybe'.

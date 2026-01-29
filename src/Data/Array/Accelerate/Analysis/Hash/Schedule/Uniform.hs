@@ -130,6 +130,9 @@ encodeEffect = \case
     intHost $(hashQ "RefWrite")
     <> encodeIdx ref
     <> encodeIdx var
+  Aassert cond ->
+    intHost $(hashQ "Aassert")
+    <> encodeOpenExp cond
 
 encodeIO :: InputOutputR input output -> Builder
 encodeIO = \case

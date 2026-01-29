@@ -86,12 +86,16 @@ prettySeqSchedule env = \case
           ]
         ]
   Awhile us condition step initial
-    -> "awhile" <+> prettyTupR (const prettyGroundRWithUniqueness) 10 (groundsRWithUniquenesses (mapTupR varType initial) us)
+    -> annotate Statement "awhile" <+> prettyTupR (const prettyGroundRWithUniqueness) 10 (groundsRWithUniquenesses (mapTupR varType initial) us)
         <> hardline <> hang 4 ("  ( " <> prettySeqScheduleFun env condition)
         <> hardline <> "  )"
         <> hardline <> hang 4 ("  ( " <> prettySeqScheduleFun env step)
         <> hardline <> "  )"
         <> hardline <> indent 2 (prettyVars (val env) 10 initial)
+  Aassert cond
+    -> hang 2 $ group $ vsep [annotate Statement "assert", prettyExp (val env) cond]
+  Aassume cond
+    -> hang 2 $ group $ vsep [annotate Statement "assume", prettyExp (val env) cond]
   where
     notReturn Return{} = False
     notReturn _        = True
