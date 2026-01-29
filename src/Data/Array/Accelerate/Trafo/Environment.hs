@@ -30,7 +30,6 @@ import Data.Array.Accelerate.Debug.Internal.Stats                   as Stats
 
 import Data.Maybe
 
-
 -- An environment that holds let-bound scalar expressions. The second
 -- environment variable env' is used to project out the corresponding
 -- index when looking up in the environment congruent expressions.
@@ -161,4 +160,3 @@ bindExps :: Extend ScalarType (OpenExp' aenv) env env'
          -> OpenExp env  aenv e
 bindExps BaseEnv = id
 bindExps (PushEnv g lhs (OpenExp' b)) = bindExps g . Let lhs b
-
