@@ -28,6 +28,8 @@ module Data.Array.Accelerate.Trafo.Operation.Bounds (
   -- Default implementations for OperationBounds
   boundsOptimizeOpDefault, boundsOptimizeGenerate,
   boundsOptimizeBackpermute, boundsOptimizeMap,
+  boundsOptimizeFold, boundsOptimizeFold1,
+  boundsOptimizeScan, boundsOptimizeScan1, boundsOptimizeScan',
   -- Utilities for implementing OperationBounds
   InputBounds(..), OutputBounds(..), InputBoundArgs, OutputBoundArgs,
   boundsOptimizeFun, boundsOptimizeFun1, boundsOptimizeFun2, boundsOptimizeExp,
@@ -359,8 +361,12 @@ boundsOptimizeExp env@(BoundsEnv _ _ zero _) expr = detectConst env $ case expr 
     | (argBounds, arg') <- boundsOptimizeExp env arg ->
       app zero f arg' argBounds (makeTransitives env argBounds)
 
-  -- TODO: If 'a' is in range of 't2' (based on the bounds in the graph or the size of their types), keep the information of 'a'
-  Coerce t1 t2 a -> bottomExpr $ Coerce t1 t2 $ travE a
+  Coerce t1 t2 a -> case boundsOptimizeExp env a of
+    (TupRsingle bound, a') ->
+      ( TupRsingle $ cast zero t1 t2 bound
+      , Coerce t1 t2 a' )
+    (TupRunit, _) -> unitImpossible t1
+    (TupRpair _ _, _) -> pairImpossible t1
 
   where
     travE :: OpenExp env benv s -> OpenExp env benv s
@@ -444,7 +450,7 @@ envWriteArgs (arg :>: args) (output :>: outputs) env
     OutputOut b -> Just b
     OutputMut b -> Just b
     OutputNone -> Nothing
-  = go tp buffers bounds env
+  = envWriteArgs args outputs $ go tp buffers bounds env
   | otherwise = envWriteArgs args outputs env
   where
     go :: forall t. TypeR t -> GroundVars benv (Buffers t) -> TermBounds (UniformEnv benv ()) t -> BoundsEnv benv () -> BoundsEnv benv ()
@@ -580,4 +586,137 @@ boundsOptimizeBackpermute env (_ :>: InputIn _ inBounds :>: InputOut shBounds :>
     ( OutputNone :>: OutputNone :>: OutputOut inBounds :>: ArgsNil
     , f' :>: input :>: output :>: ArgsNil )
 
--- TODO: Add default implementations for fold, scan and permute
+-- TODO: Add default implementations for permute and permuteUnique
+
+boundsOptimizeFold
+  :: args ~ (Fun' (e -> e -> e) -> Exp' e -> In (sh, Int) e -> Out sh e -> ())
+  => BoundsEnv benv ()
+  -> InputBoundArgs benv args
+  -> Args benv args
+  -> (OutputBoundArgs benv args, Args benv args)
+boundsOptimizeFold env (_ :>: _ :>: inBounds :>: _) (f :>: ArgExp seed :>: input :>: output :>: _)
+  | (seedBounds, seed') <- boundsOptimizeExp env seed
+  , f' <- boundsOptimizeArg env f
+  , (_, foldBounds) <-
+    boundsOptimizeScanlike env
+      (InputFun :>: inBounds :>: ArgsNil)
+      (f' :>: input :>: ArgsNil)
+      (Just (seedBounds, ArgExp seed'))
+  =
+    ( OutputNone :>: OutputNone :>: OutputNone :>: OutputOut foldBounds :>: ArgsNil
+    , f' :>: ArgExp seed' :>: input :>: output :>: ArgsNil
+    )
+
+boundsOptimizeFold1
+  :: args ~ (Fun' (e -> e -> e) -> In (sh, Int) e -> Out sh e -> ())
+  => BoundsEnv benv ()
+  -> InputBoundArgs benv args
+  -> Args benv args
+  -> (OutputBoundArgs benv args, Args benv args)
+boundsOptimizeFold1 env (_ :>: inBounds :>: _) (f :>: input :>: output :>: _)
+  | f' <- boundsOptimizeArg env f
+  , (_, foldBounds) <-
+    boundsOptimizeScanlike env
+      (InputFun :>: inBounds :>: ArgsNil)
+      (f' :>: input :>: ArgsNil)
+      Nothing
+  =
+    ( OutputNone :>: OutputNone :>: OutputOut foldBounds :>: ArgsNil
+    , f' :>: input :>: output :>: ArgsNil
+    )
+
+boundsOptimizeScan
+  :: args ~ (Fun' (e -> e -> e) -> Exp' e -> In (sh, Int) e -> Out (sh, Int) e -> ())
+  => BoundsEnv benv ()
+  -> InputBoundArgs benv args
+  -> Args benv args
+  -> (OutputBoundArgs benv args, Args benv args)
+boundsOptimizeScan env (_ :>: _ :>: inBounds :>: _) (f :>: ArgExp seed :>: input :>: output :>: _)
+  | (seedBounds, seed') <- boundsOptimizeExp env seed
+  , f' <- boundsOptimizeArg env f
+  , (scanBounds, foldBounds) <-
+    boundsOptimizeScanlike env
+      (InputFun :>: inBounds :>: ArgsNil)
+      (f' :>: input :>: ArgsNil)
+      (Just (seedBounds, ArgExp seed'))
+  =
+    ( OutputNone :>: OutputNone :>: OutputNone :>: OutputOut (unions scanBounds foldBounds) :>: ArgsNil
+    , f' :>: ArgExp seed' :>: input :>: output :>: ArgsNil
+    )
+
+boundsOptimizeScan'
+  :: args ~ (Fun' (e -> e -> e) -> Exp' e -> In (sh, Int) e -> Out (sh, Int) e -> Out sh e -> ())
+  => BoundsEnv benv ()
+  -> InputBoundArgs benv args
+  -> Args benv args
+  -> (OutputBoundArgs benv args, Args benv args)
+boundsOptimizeScan' env (_ :>: _ :>: inBounds :>: _) (f :>: ArgExp seed :>: input :>: outputScan :>: outputFold :>: _)
+  | (seedBounds, seed') <- boundsOptimizeExp env seed
+  , f' <- boundsOptimizeArg env f
+  , (scanBounds, foldBounds) <-
+    boundsOptimizeScanlike env
+      (InputFun :>: inBounds :>: ArgsNil)
+      (f' :>: input :>: ArgsNil)
+      (Just (seedBounds, ArgExp seed'))
+  =
+    ( OutputNone :>: OutputNone :>: OutputNone :>: OutputOut scanBounds :>: OutputOut foldBounds :>: ArgsNil
+    , f' :>: ArgExp seed' :>: input :>: outputScan :>: outputFold :>: ArgsNil
+    )
+
+boundsOptimizeScan1
+  :: args ~ (Fun' (e -> e -> e) -> In (sh, Int) e -> Out (sh, Int) e -> ())
+  => BoundsEnv benv ()
+  -> InputBoundArgs benv args
+  -> Args benv args
+  -> (OutputBoundArgs benv args, Args benv args)
+boundsOptimizeScan1 env (_ :>: inBounds :>: _) (f :>: input :>: output :>: _)
+  | f' <- boundsOptimizeArg env f
+  , (scanBounds, foldBounds) <-
+    boundsOptimizeScanlike env
+      (InputFun :>: inBounds :>: ArgsNil)
+      (f' :>: input :>: ArgsNil)
+      Nothing
+  =
+    ( OutputNone :>: OutputNone :>: OutputOut (unions scanBounds foldBounds) :>: ArgsNil
+    , f' :>: input :>: output :>: ArgsNil
+    )
+
+boundsOptimizeScanlike
+  :: args ~ (Fun' (e -> e -> e) -> In (sh, Int) e -> ())
+  => BoundsEnv benv ()
+  -> InputBoundArgs benv args
+  -> Args benv args
+  -> Maybe (TermBounds (UniformEnv benv ()) e, Arg benv (Exp' e))
+  -> (TermBounds (UniformEnv benv ()) e, TermBounds (UniformEnv benv ()) e)
+boundsOptimizeScanlike env (_ :>: InputIn inShape inBounds :>: _) (f :>: input :>: _) seed
+  -- Detect a scan (+) over an array of zeros and ones.
+  | ArgArray _ (ArrayR _ (TupRsingle tp)) _ _ <- input
+  , SingleScalarType (NumSingleType (IntegralNumType TypeInt)) <- tp
+  , ArgFun (Lam LeftHandSideSingle{} (Lam LeftHandSideSingle{} (Body expr))) <- f
+  , PrimApp PrimAdd{} (Pair (Evar (Var _ (SuccIdx ZeroIdx))) (Evar (Var _ ZeroIdx))) <- expr
+  , TupRsingle inBound <- inBounds
+  , (l, u) <- getBoundRange (boundsZero env) TypeInt $ makeTransitive env inBound
+  , 0 <= l && u <= 1
+  , case seed of
+      Nothing -> True
+      Just (_, ArgExp (Const _ 0)) -> True
+      _ -> False
+  , TupRpair _ (TupRsingle inSize) <- inShape
+  -- Yes, this is a scan with addition, whose input consists of zeros and ones.
+  -- Elements in the output are bounded by the input size
+  , scanBound <- TermBound
+    (lower $ boundConst (boundsZero env) 0)
+    (mapPartialEnv (\(Edge d) -> Edge (d - 1)) $ upper inSize)
+  , foldBound <- TermBound
+    (lower $ boundConst (boundsZero env) 0)
+    (upper inSize)
+  =
+    ( TupRsingle scanBound
+    , TupRsingle foldBound
+    )
+-- TODO: Detect operators that only return values from the left or right argument,
+-- like min and max
+boundsOptimizeScanlike env _ (_ :>: ArgArray _ (ArrayR _ tp) _ _ :>: _) _ =
+  ( bottoms (boundsZero env) tp
+  , bottoms (boundsZero env) tp
+  )

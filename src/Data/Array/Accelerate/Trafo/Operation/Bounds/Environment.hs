@@ -180,7 +180,7 @@ makeTransitive env = makeTransitiveLower env . makeTransitiveUpper env
 -- | Make the lowerbound transitively closed
 makeTransitiveLower :: BoundsEnv benv env -> TermBound (UniformEnv benv env) t -> TermBound (UniformEnv benv env) t
 makeTransitiveLower env b = TermBound
-  (mapPartialEnv (\(Functor.Const d) -> InEdge $ Edge $ negate d) $ partialEnvTail dists)
+  (mapPartialEnv (\(Functor.Const d) -> InEdge $ Edge d) $ partialEnvTail dists)
   (upper b)
   where
     BoundsEnv g _ _ _ = pushScalar env b

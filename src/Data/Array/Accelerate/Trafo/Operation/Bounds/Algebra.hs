@@ -36,6 +36,7 @@ import Data.Array.Accelerate.Representation.Shape hiding (union)
 import Data.Array.Accelerate.Type
 import Data.Array.Accelerate.Error
 
+import Data.Maybe
 import Data.Typeable ( (:~:)(..) )
 
 -- x <= y becomes an edge from x to y with distance 0.
@@ -108,6 +109,17 @@ boundRange zero lowerB upperB = TermBound
 
 boundConst :: Idx env Int -> Integer -> TermBound env t
 boundConst zero value = boundRange zero value value
+
+getBoundRange :: forall t env. Idx env Int -> IntegralType t -> TermBound env t -> (Integer, Integer)
+getBoundRange zero tp bound
+  | IntegralDict <- integralDict tp =
+    ( case prjPartial zero $ lower bound of
+        Just (InEdge (Edge distance)) -> negate distance
+        Nothing -> fromIntegral (minBound :: t)
+    , case prjPartial zero $ upper bound of
+        Just (Edge distance) -> distance
+        Nothing -> fromIntegral (maxBound :: t)
+    )
 
 boundVar :: Idx env Int -> Idx env t -> TermBound env t
 boundVar zero ix = TermBound
@@ -190,6 +202,8 @@ app1 zero f arg bound closed = case f of
       -- overflow. Hence abs x >= 0 is not true for all x.
       (TupRsingle $ bottom zero $ SingleScalarType $ NumSingleType tp, PrimApp (PrimAbs tp) arg)
   -- TODO: PrimSig
+  PrimFromIntegral source (IntegralNumType target) ->
+    withBounds $ TupRsingle $ castIntegral zero source target closed
   _ -> withBounds $ bottoms zero $ snd $ primFunType f
   where
     withBounds :: TermBounds env t -> (TermBounds env t, OpenExp env' benv t)
@@ -235,12 +249,19 @@ app2 zero f arg1 arg2 bound1 bound2 closed1 closed2 = case f of
   PrimCmp _ CmpNEq
     | closed1 `equal` bound2 -> false zero
     | closed1 `notEqual` bound2 -> true zero
-  PrimCmp _ CmpLt
+  PrimCmp (NumSingleType (IntegralNumType tp)) CmpLt
     | closed1 `lessThan` bound2 -> true zero
     | closed1 `greaterThanEqual` bound2 -> false zero
-  PrimCmp _ CmpGtEq
+  PrimCmp (NumSingleType (IntegralNumType tp)) CmpGtEq
     | closed1 `lessThan` bound2 -> false zero
     | closed1 `greaterThanEqual` bound2 -> true zero
+  PrimCmp _ _ -> bool
+  -- Other boolean operations
+  PrimIsNaN _ -> bool
+  PrimIsInfinite _ -> bool
+  PrimLAnd -> bool
+  PrimLOr -> bool
+  PrimLNot -> bool
   -- Div, Mod, Quot and rem
   PrimIDiv tp
     | Just (divBounds, _, divExpr, _, _) <- divModOrQuotRem tp
@@ -266,6 +287,9 @@ app2 zero f arg1 arg2 bound1 bound2 closed1 closed2 = case f of
   where
     withBounds :: TermBounds env t -> (TermBounds env t, OpenExp env' benv t)
     withBounds retBounds = (retBounds, PrimApp f $ Pair arg1 arg2)
+    
+    bool :: t ~ PrimBool => (TermBounds env t, OpenExp env' benv t)
+    bool = withBounds $ TupRsingle $ boundRange zero 0 1
 
     -- TODO: For rem, always set bounds, also if we only know that arg2 is positive?
     divModOrQuotRem :: a ~ b => IntegralType a -> Maybe (TermBounds env a, TermBounds env a, OpenExp env' benv a, OpenExp env' benv a, OpenExp env' benv (a, a))
@@ -329,12 +353,13 @@ greaterThanEqual :: TermBound env a -> TermBound env a -> Bool
 -- x <= arg1 + a
 -- and
 -- arg2 <= x + b
--- Thus if b <= a, then arg2 <= arg1
+-- Thus arg2 <= x + b <= arg1 + a + b
+-- Thus if a + b <= 0, then arg2 <= arg1
 greaterThanEqual (TermBound low _) (TermBound _ up) =
   or
   $ partialEnvValues
   $ intersectPartialEnv
-    (\(InEdge (Edge a)) (Edge b) -> IdentityF $ b <= a)
+    (\(InEdge (Edge a)) (Edge b) -> IdentityF $ a + b <= 0)
     low
     up
 
@@ -344,7 +369,7 @@ lessThan (TermBound _ up) (TermBound low _) =
   or
   $ partialEnvValues
   $ intersectPartialEnv
-    (\(InEdge (Edge a)) (Edge b) -> IdentityF $ b < a)
+    (\(InEdge (Edge a)) (Edge b) -> IdentityF $ a + b < 0)
     low
     up
 
@@ -353,6 +378,22 @@ equal a b = greaterThanEqual a b && greaterThanEqual b a
 
 notEqual :: TermBound env a -> TermBound env a -> Bool
 notEqual a b = lessThan a b || lessThan b a
+
+cast :: Idx env Int -> ScalarType s -> ScalarType t -> TermBound env s -> TermBound env t
+cast zero (SingleScalarType (NumSingleType (IntegralNumType source))) (SingleScalarType (NumSingleType (IntegralNumType target))) bound
+  = castIntegral zero source target bound
+cast zero _ target _ = bottom zero target
+
+castIntegral :: Idx env Int -> IntegralType s -> IntegralType t -> TermBound env s -> TermBound env t
+castIntegral zero source target bound
+  | (sourceMin, sourceMax) <- getBoundRange zero source bound
+  , (targetMin, targetMax) <- intRange target
+  , targetMin <= sourceMin -- Check if the source fits in the target
+  , sourceMax <= targetMax
+  = castTermBound bound -- It fits, we can preserve all information
+  | otherwise
+  -- It might not fit, we can't preserve bound information due to possible overflow or underflow
+  = bottom zero $ SingleScalarType $ NumSingleType $ IntegralNumType target
 
 intRange :: forall t. IntegralType t -> (Integer, Integer)
 intRange tp
