@@ -225,8 +225,14 @@ module Data.Array.Accelerate (
 
   -- *** Zipping
   zipWith, zipWith3, zipWith4, zipWith5, zipWith6, zipWith7, zipWith8, zipWith9,
+  zipWithChecked, zipWithChecked3, zipWithChecked4, zipWithChecked5,
+  zipWithChecked6, zipWithChecked7, zipWithChecked8, zipWithChecked9,
   izipWith, izipWith3, izipWith4, izipWith5, izipWith6, izipWith7, izipWith8, izipWith9,
+  izipWithChecked, izipWithChecked3, izipWithChecked4, izipWithChecked5,
+  izipWithChecked6, izipWithChecked7, izipWithChecked8, izipWithChecked9,
   zip, zip3, zip4, zip5, zip6, zip7, zip8, zip9,
+  zipChecked, zipChecked3, zipChecked4, zipChecked5,
+  zipChecked6, zipChecked7, zipChecked8, zipChecked9,
 
   -- *** Unzipping
   unzip, unzip3, unzip4, unzip5, unzip6, unzip7, unzip8, unzip9,

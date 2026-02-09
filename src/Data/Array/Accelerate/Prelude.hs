@@ -39,8 +39,14 @@ module Data.Array.Accelerate.Prelude (
 
   -- * Zipping
   zipWith3, zipWith4, zipWith5, zipWith6, zipWith7, zipWith8, zipWith9,
+  zipWithChecked, zipWithChecked3, zipWithChecked4, zipWithChecked5,
+  zipWithChecked6, zipWithChecked7, zipWithChecked8, zipWithChecked9,
   izipWith, izipWith3, izipWith4, izipWith5, izipWith6, izipWith7, izipWith8, izipWith9,
+  izipWithChecked, izipWithChecked3, izipWithChecked4, izipWithChecked5,
+  izipWithChecked6, izipWithChecked7, izipWithChecked8, izipWithChecked9,
   zip, zip3, zip4, zip5, zip6, zip7, zip8, zip9,
+  zipChecked, zipChecked3, zipChecked4, zipChecked5,
+  zipChecked6, zipChecked7, zipChecked8, zipChecked9,
 
   -- * Unzipping
   unzip, unzip3, unzip4, unzip5, unzip6, unzip7, unzip8, unzip9,
@@ -129,7 +135,7 @@ import Data.Array.Accelerate.Lift
 import Data.Array.Accelerate.Pattern
 import Data.Array.Accelerate.Pattern.Maybe
 import Data.Array.Accelerate.Smart
-import Data.Array.Accelerate.Sugar.Array                            ( Arrays, Array, Scalar, Vector, Segments,  fromList )
+import Data.Array.Accelerate.Sugar.Array                            ( Arrays, Array, Scalar, Vector, Segments )
 import Data.Array.Accelerate.Sugar.Elt
 import Data.Array.Accelerate.Sugar.Shape                            ( Shape, Slice, Z(..), (:.)(..), All(..), DIM1, DIM2, empty )
 import Data.Array.Accelerate.Type
@@ -318,6 +324,8 @@ zipWithInduction prev f as bs = prev (\(T2 a b) -> f a b) (zip as bs)
 
 
 -- | Zip three arrays with the given function, analogous to 'zipWith'.
+-- If the input arrays are expected to have the same shape, use
+-- 'zipWithChecked3'.
 --
 zipWith3
     :: (Shape sh, Elt a, Elt b, Elt c, Elt d)
@@ -329,6 +337,8 @@ zipWith3
 zipWith3 = zipWithInduction zipWith
 
 -- | Zip four arrays with the given function, analogous to 'zipWith'.
+-- If the input arrays are expected to have the same shape, use
+-- 'zipWithChecked4'.
 --
 zipWith4
     :: (Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e)
@@ -341,6 +351,8 @@ zipWith4
 zipWith4 = zipWithInduction zipWith3
 
 -- | Zip five arrays with the given function, analogous to 'zipWith'.
+-- If the input arrays are expected to have the same shape, use
+-- 'zipWithChecked5'.
 --
 zipWith5
     :: (Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e, Elt f)
@@ -354,6 +366,8 @@ zipWith5
 zipWith5 = zipWithInduction zipWith4
 
 -- | Zip six arrays with the given function, analogous to 'zipWith'.
+-- If the input arrays are expected to have the same shape, use
+-- 'zipWithChecked6'.
 --
 zipWith6
     :: (Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e, Elt f, Elt g)
@@ -368,6 +382,8 @@ zipWith6
 zipWith6 = zipWithInduction zipWith5
 
 -- | Zip seven arrays with the given function, analogous to 'zipWith'.
+-- If the input arrays are expected to have the same shape, use
+-- 'zipWithChecked7'.
 --
 zipWith7
     :: (Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e, Elt f, Elt g, Elt h)
@@ -383,6 +399,8 @@ zipWith7
 zipWith7 = zipWithInduction zipWith6
 
 -- | Zip eight arrays with the given function, analogous to 'zipWith'.
+-- If the input arrays are expected to have the same shape, use
+-- 'zipWithChecked8'.
 --
 zipWith8
     :: (Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e, Elt f, Elt g, Elt h, Elt i)
@@ -399,6 +417,8 @@ zipWith8
 zipWith8 = zipWithInduction zipWith7
 
 -- | Zip nine arrays with the given function, analogous to 'zipWith'.
+-- If the input arrays are expected to have the same shape, use
+-- 'zipWithChecked9'.
 --
 zipWith9
     :: (Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e, Elt f, Elt g, Elt h, Elt i, Elt j)
@@ -415,45 +435,191 @@ zipWith9
     -> Acc (Array sh j)
 zipWith9 = zipWithInduction zipWith8
 
-
--- | Used to define the izipWith functions on two or more arrays
+-- | Checks whether the shapes of two arrays are equal.
 --
-izipWithInduction
-    :: (Shape sh, Elt a, Elt b)
-    => ((Exp sh -> Exp (a,b) -> rest) -> Acc (Array sh (a,b)) -> result) -- The zipWith function operating on one fewer array
-    -> (Exp sh -> Exp a -> Exp b -> rest)
+assertShapeEq
+  :: forall sh a b. (Shape sh, Elt a, Elt b)
+  => Acc (Array sh a) -> Acc (Array sh b) -> Acc (Array sh b)
+assertShapeEq a = assert $ shapeEq (shape a) . shape
+
+-- | Zip two __equal-shaped__ arrays with the given function. In contrast to
+-- 'zipWith', this function does check whether the input arrays have the same
+-- shape.
+--
+zipWithChecked
+    :: (Shape sh, Elt a, Elt b, Elt c)
+    => (Exp a -> Exp b -> Exp c)
     -> Acc (Array sh a)
     -> Acc (Array sh b)
-    -> result
-izipWithInduction prev f as bs = prev (\ix (T2 a b) -> f ix a b) (zip as bs)
+    -> Acc (Array sh c)
+zipWithChecked fun a b = zipWith fun a (assertShapeEq a b)
 
-
--- | Zip two arrays with a function that also takes the element index
+-- | Zip three __equal-shaped__ arrays with the given function. In contrast to
+-- 'zipWith3', this function does check whether the input arrays have the same
+-- shape.
 --
-izipWith
+zipWithChecked3
+    :: (Shape sh, Elt a, Elt b, Elt c, Elt d)
+    => (Exp a -> Exp b -> Exp c -> Exp d)
+    -> Acc (Array sh a)
+    -> Acc (Array sh b)
+    -> Acc (Array sh c)
+    -> Acc (Array sh d)
+zipWithChecked3 fun a b c =
+  zipWith3 fun a (assertShapeEq a b) (assertShapeEq a c)
+
+-- | Zip four __equal-shaped__ arrays with the given function. In contrast to
+-- 'zipWith4', this function does check whether the input arrays have the same
+-- shape.
+--
+zipWithChecked4
+    :: (Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e)
+    => (Exp a -> Exp b -> Exp c -> Exp d -> Exp e)
+    -> Acc (Array sh a)
+    -> Acc (Array sh b)
+    -> Acc (Array sh c)
+    -> Acc (Array sh d)
+    -> Acc (Array sh e)
+zipWithChecked4 fun a b c d =
+  zipWith4 fun a (assertShapeEq a b) (assertShapeEq a c) (assertShapeEq a d)
+
+-- | Zip five __equal-shaped__ arrays with the given function. In contrast to
+-- 'zipWith5', this function does check whether the input arrays have the same
+-- shape.
+--
+zipWithChecked5
+    :: (Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e, Elt f)
+    => (Exp a -> Exp b -> Exp c -> Exp d -> Exp e -> Exp f)
+    -> Acc (Array sh a)
+    -> Acc (Array sh b)
+    -> Acc (Array sh c)
+    -> Acc (Array sh d)
+    -> Acc (Array sh e)
+    -> Acc (Array sh f)
+zipWithChecked5 fun a b c d e =
+  zipWith5 fun a (assertShapeEq a b) (assertShapeEq a c) (assertShapeEq a d)
+    (assertShapeEq a e)
+
+-- | Zip six __equal-shaped__ arrays with the given function. In contrast to
+-- 'zipWith6', this function does check whether the input arrays have the same
+-- shape.
+--
+zipWithChecked6
+    :: (Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e, Elt f, Elt g)
+    => (Exp a -> Exp b -> Exp c -> Exp d -> Exp e -> Exp f -> Exp g)
+    -> Acc (Array sh a)
+    -> Acc (Array sh b)
+    -> Acc (Array sh c)
+    -> Acc (Array sh d)
+    -> Acc (Array sh e)
+    -> Acc (Array sh f)
+    -> Acc (Array sh g)
+zipWithChecked6 fun a b c d e f =
+  zipWith6 fun a (assertShapeEq a b) (assertShapeEq a c) (assertShapeEq a d)
+    (assertShapeEq a e) (assertShapeEq a f)
+
+-- | Zip seven __equal-shaped__ arrays with the given function. In contrast to
+-- 'zipWith7', this function does check whether the input arrays have the same
+-- shape.
+--
+zipWithChecked7
+    :: (Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e, Elt f, Elt g, Elt h)
+    => (Exp a -> Exp b -> Exp c -> Exp d -> Exp e -> Exp f -> Exp g -> Exp h)
+    -> Acc (Array sh a)
+    -> Acc (Array sh b)
+    -> Acc (Array sh c)
+    -> Acc (Array sh d)
+    -> Acc (Array sh e)
+    -> Acc (Array sh f)
+    -> Acc (Array sh g)
+    -> Acc (Array sh h)
+zipWithChecked7 fun a b c d e f g =
+  zipWith7 fun a (assertShapeEq a b) (assertShapeEq a c) (assertShapeEq a d)
+    (assertShapeEq a e) (assertShapeEq a f) (assertShapeEq a g)
+
+-- | Zip eight __equal-shaped__ arrays with the given function. In contrast to
+-- 'zipWith8', this function does check whether the input arrays have the same
+-- shape.
+--
+zipWithChecked8
+    :: (Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e, Elt f, Elt g, Elt h, Elt i)
+    => (Exp a -> Exp b -> Exp c -> Exp d -> Exp e -> Exp f -> Exp g -> Exp h -> Exp i)
+    -> Acc (Array sh a)
+    -> Acc (Array sh b)
+    -> Acc (Array sh c)
+    -> Acc (Array sh d)
+    -> Acc (Array sh e)
+    -> Acc (Array sh f)
+    -> Acc (Array sh g)
+    -> Acc (Array sh h)
+    -> Acc (Array sh i)
+zipWithChecked8 fun a b c d e f g h =
+  zipWith8 fun a (assertShapeEq a b) (assertShapeEq a c) (assertShapeEq a d)
+    (assertShapeEq a e) (assertShapeEq a f) (assertShapeEq a g)
+    (assertShapeEq a h)
+
+-- | Zip nine __equal-shaped__ arrays with the given function. In contrast to
+-- 'zipWith9', this function does check whether the input arrays have the same
+-- shape.
+--
+zipWithChecked9
+    :: (Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e, Elt f, Elt g, Elt h, Elt i, Elt j)
+    => (Exp a -> Exp b -> Exp c -> Exp d -> Exp e -> Exp f -> Exp g -> Exp h -> Exp i -> Exp j)
+    -> Acc (Array sh a)
+    -> Acc (Array sh b)
+    -> Acc (Array sh c)
+    -> Acc (Array sh d)
+    -> Acc (Array sh e)
+    -> Acc (Array sh f)
+    -> Acc (Array sh g)
+    -> Acc (Array sh h)
+    -> Acc (Array sh i)
+    -> Acc (Array sh j)
+zipWithChecked9 fun a b c d e f g h i =
+  zipWith9 fun a (assertShapeEq a b) (assertShapeEq a c) (assertShapeEq a d)
+    (assertShapeEq a e) (assertShapeEq a f) (assertShapeEq a g)
+    (assertShapeEq a h) (assertShapeEq a i)
+
+-- | Variant of 'curry', without the lift type classes. Used for the
+-- implementation of izipWith(Checked)(N)
+--
+curry' :: (Elt x, Elt y) => (Exp x -> Exp y -> z) -> Exp (x, y) -> z
+curry' f (T2 x y) = f x y
+
+-- | Zip two arrays with a function that also takes the element index.
+-- The checked variant, 'izipWithChecked', checks that the input arrays
+-- have the same shape.
+--
+izipWith, izipWithChecked
     :: (Shape sh, Elt a, Elt b, Elt c)
     => (Exp sh -> Exp a -> Exp b -> Exp c)
     -> Acc (Array sh a)
     -> Acc (Array sh b)
     -> Acc (Array sh c)
-izipWith = izipWithInduction imap
+izipWith        f = zipWith        (curry' f) . indexed
+izipWithChecked f = zipWithChecked (curry' f) . indexed
 
 -- | Zip three arrays with a function that also takes the element index,
 -- analogous to 'izipWith'.
+-- The checked variant, 'izipWithChecked3', checks that the input arrays
+-- have the same shape.
 --
-izipWith3
+izipWith3, izipWithChecked3
     :: (Shape sh, Elt a, Elt b, Elt c, Elt d)
     => (Exp sh -> Exp a -> Exp b -> Exp c -> Exp d)
     -> Acc (Array sh a)
     -> Acc (Array sh b)
     -> Acc (Array sh c)
     -> Acc (Array sh d)
-izipWith3 = izipWithInduction izipWith
+izipWith3        f = zipWith3        (curry' f) . indexed
+izipWithChecked3 f = zipWithChecked3 (curry' f) . indexed
 
 -- | Zip four arrays with the given function that also takes the element index,
--- analogous to 'zipWith'.
+-- analogous to 'izipWith'.
+-- The checked variant, 'izipWithChecked4', checks that the input arrays
+-- have the same shape.
 --
-izipWith4
+izipWith4, izipWithChecked4
     :: (Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e)
     => (Exp sh -> Exp a -> Exp b -> Exp c -> Exp d -> Exp e)
     -> Acc (Array sh a)
@@ -461,12 +627,15 @@ izipWith4
     -> Acc (Array sh c)
     -> Acc (Array sh d)
     -> Acc (Array sh e)
-izipWith4 = izipWithInduction izipWith3
+izipWith4        f = zipWith4        (curry' f) . indexed
+izipWithChecked4 f = zipWithChecked4 (curry' f) . indexed
 
 -- | Zip five arrays with the given function that also takes the element index,
--- analogous to 'zipWith'.
+-- analogous to 'izipWith'.
+-- The checked variant, 'izipWithChecked5', checks that the input arrays
+-- have the same shape.
 --
-izipWith5
+izipWith5, izipWithChecked5
     :: (Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e, Elt f)
     => (Exp sh -> Exp a -> Exp b -> Exp c -> Exp d -> Exp e -> Exp f)
     -> Acc (Array sh a)
@@ -475,12 +644,15 @@ izipWith5
     -> Acc (Array sh d)
     -> Acc (Array sh e)
     -> Acc (Array sh f)
-izipWith5 = izipWithInduction izipWith4
+izipWith5        f = zipWith5        (curry' f) . indexed
+izipWithChecked5 f = zipWithChecked5 (curry' f) . indexed
 
 -- | Zip six arrays with the given function that also takes the element index,
--- analogous to 'zipWith'.
+-- analogous to 'izipWith'.
+-- The checked variant, 'izipWithChecked6', checks that the input arrays
+-- have the same shape.
 --
-izipWith6
+izipWith6, izipWithChecked6
     :: (Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e, Elt f, Elt g)
     => (Exp sh -> Exp a -> Exp b -> Exp c -> Exp d -> Exp e -> Exp f -> Exp g)
     -> Acc (Array sh a)
@@ -490,12 +662,15 @@ izipWith6
     -> Acc (Array sh e)
     -> Acc (Array sh f)
     -> Acc (Array sh g)
-izipWith6 = izipWithInduction izipWith5
+izipWith6        f = zipWith6        (curry' f) . indexed
+izipWithChecked6 f = zipWithChecked6 (curry' f) . indexed
 
 -- | Zip seven arrays with the given function that also takes the element
--- index, analogous to 'zipWith'.
+-- index, analogous to 'izipWith'.
+-- The checked variant, 'izipWithChecked7', checks that the input arrays
+-- have the same shape.
 --
-izipWith7
+izipWith7, izipWithChecked7
     :: (Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e, Elt f, Elt g, Elt h)
     => (Exp sh -> Exp a -> Exp b -> Exp c -> Exp d -> Exp e -> Exp f -> Exp g -> Exp h)
     -> Acc (Array sh a)
@@ -506,12 +681,15 @@ izipWith7
     -> Acc (Array sh f)
     -> Acc (Array sh g)
     -> Acc (Array sh h)
-izipWith7 = izipWithInduction izipWith6
+izipWith7        f = zipWith7        (curry' f) . indexed
+izipWithChecked7 f = zipWithChecked7 (curry' f) . indexed
 
 -- | Zip eight arrays with the given function that also takes the element
--- index, analogous to 'zipWith'.
+-- index, analogous to 'izipWith'.
+-- The checked variant, 'izipWithChecked8', checks that the input arrays
+-- have the same shape.
 --
-izipWith8
+izipWith8, izipWithChecked8
     :: (Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e, Elt f, Elt g, Elt h, Elt i)
     => (Exp sh -> Exp a -> Exp b -> Exp c -> Exp d -> Exp e -> Exp f -> Exp g -> Exp h -> Exp i)
     -> Acc (Array sh a)
@@ -523,12 +701,15 @@ izipWith8
     -> Acc (Array sh g)
     -> Acc (Array sh h)
     -> Acc (Array sh i)
-izipWith8 = izipWithInduction izipWith7
+izipWith8        f = zipWith8        (curry' f) . indexed
+izipWithChecked8 f = zipWithChecked8 (curry' f) . indexed
 
 -- | Zip nine arrays with the given function that also takes the element index,
--- analogous to 'zipWith'.
+-- analogous to 'izipWith'.
+-- The checked variant, 'izipWithChecked9', checks that the input arrays
+-- have the same shape.
 --
-izipWith9
+izipWith9, izipWithChecked9
     :: (Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e, Elt f, Elt g, Elt h, Elt i, Elt j)
     => (Exp sh -> Exp a -> Exp b -> Exp c -> Exp d -> Exp e -> Exp f -> Exp g -> Exp h -> Exp i -> Exp j)
     -> Acc (Array sh a)
@@ -541,11 +722,14 @@ izipWith9
     -> Acc (Array sh h)
     -> Acc (Array sh i)
     -> Acc (Array sh j)
-izipWith9 = izipWithInduction izipWith8
+izipWith9        f = zipWith9        (curry' f) . indexed
+izipWithChecked9 f = zipWithChecked9 (curry' f) . indexed
 
 
 -- | Combine the elements of two arrays pairwise. The shape of the result is the
 -- intersection of the two argument shapes.
+-- 'zipChecked' is the checked variant of 'zip', and checks that the input
+-- arrays have the same shape.
 --
 -- >>> let m1 = fromList (Z:.5:.10) [0..] :: Matrix Int
 -- >>> let m2 = fromList (Z:.10:.5) [0..] :: Matrix Float
@@ -557,95 +741,137 @@ izipWith9 = izipWithInduction izipWith8
 --     (30,15.0), (31,16.0), (32,17.0), (33,18.0), (34,19.0),
 --     (40,20.0), (41,21.0), (42,22.0), (43,23.0), (44,24.0)]
 --
-zip :: (Shape sh, Elt a, Elt b)
-    => Acc (Array sh a)
-    -> Acc (Array sh b)
-    -> Acc (Array sh (a, b))
+zip
+  :: (Shape sh, Elt a, Elt b)
+  => Acc (Array sh a)
+  -> Acc (Array sh b)
+  -> Acc (Array sh (a, b))
 zip = zipWith T2
 
--- | Take three arrays and return an array of triples, analogous to zip.
+
+
+-- | Combine the elements of two __equal-sized__ arrays pairwise. In contrast
+-- to 'zip', this function does check whether the input arrays have the same
+-- shape.
 --
-zip3 :: (Shape sh, Elt a, Elt b, Elt c)
-     => Acc (Array sh a)
-     -> Acc (Array sh b)
-     -> Acc (Array sh c)
-     -> Acc (Array sh (a, b, c))
+zipChecked
+  :: (Shape sh, Elt a, Elt b)
+  => Acc (Array sh a)
+  -> Acc (Array sh b)
+  -> Acc (Array sh (a, b))
+zipChecked = zipWithChecked T2
+
+-- | Take three arrays and return an array of triples, analogous to 'zip'.
+-- 'zipChecked3' is the checked variant of 'zip3', and checks that the input
+-- arrays have the same shape.
+--
+zip3, zipChecked3
+  :: (Shape sh, Elt a, Elt b, Elt c)
+  => Acc (Array sh a)
+  -> Acc (Array sh b)
+  -> Acc (Array sh c)
+  -> Acc (Array sh (a, b, c))
 zip3 = zipWith3 T3
+zipChecked3 = zipWithChecked3 T3
 
--- | Take four arrays and return an array of quadruples, analogous to zip.
+-- | Take four arrays and return an array of quadruples, analogous to 'zip'.
+-- 'zipChecked4' is the checked variant of 'zip4', and checks that the input
+-- arrays have the same shape.
 --
-zip4 :: (Shape sh, Elt a, Elt b, Elt c, Elt d)
-     => Acc (Array sh a)
-     -> Acc (Array sh b)
-     -> Acc (Array sh c)
-     -> Acc (Array sh d)
-     -> Acc (Array sh (a, b, c, d))
+zip4, zipChecked4
+  :: (Shape sh, Elt a, Elt b, Elt c, Elt d)
+  => Acc (Array sh a)
+  -> Acc (Array sh b)
+  -> Acc (Array sh c)
+  -> Acc (Array sh d)
+  -> Acc (Array sh (a, b, c, d))
 zip4 = zipWith4 T4
+zipChecked4 = zipWithChecked4 T4
 
--- | Take five arrays and return an array of five-tuples, analogous to zip.
+-- | Take five arrays and return an array of five-tuples, analogous to 'zip'.
+-- 'zipChecked5' is the checked variant of 'zip5', and checks that the input
+-- arrays have the same shape.
 --
-zip5 :: (Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e)
-     => Acc (Array sh a)
-     -> Acc (Array sh b)
-     -> Acc (Array sh c)
-     -> Acc (Array sh d)
-     -> Acc (Array sh e)
-     -> Acc (Array sh (a, b, c, d, e))
+zip5, zipChecked5
+  :: (Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e)
+  => Acc (Array sh a)
+  -> Acc (Array sh b)
+  -> Acc (Array sh c)
+  -> Acc (Array sh d)
+  -> Acc (Array sh e)
+  -> Acc (Array sh (a, b, c, d, e))
 zip5 = zipWith5 T5
+zipChecked5 = zipWithChecked5 T5
 
--- | Take six arrays and return an array of six-tuples, analogous to zip.
+-- | Take six arrays and return an array of six-tuples, analogous to 'zip'.
+-- 'zipChecked6' is the checked variant of 'zip6', and checks that the input
+-- arrays have the same shape.
 --
-zip6 :: (Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e, Elt f)
-     => Acc (Array sh a)
-     -> Acc (Array sh b)
-     -> Acc (Array sh c)
-     -> Acc (Array sh d)
-     -> Acc (Array sh e)
-     -> Acc (Array sh f)
-     -> Acc (Array sh (a, b, c, d, e, f))
+zip6, zipChecked6
+  :: (Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e, Elt f)
+  => Acc (Array sh a)
+  -> Acc (Array sh b)
+  -> Acc (Array sh c)
+  -> Acc (Array sh d)
+  -> Acc (Array sh e)
+  -> Acc (Array sh f)
+  -> Acc (Array sh (a, b, c, d, e, f))
 zip6 = zipWith6 T6
+zipChecked6 = zipWithChecked6 T6
 
--- | Take seven arrays and return an array of seven-tuples, analogous to zip.
+-- | Take seven arrays and return an array of seven-tuples, analogous to 'zip'.
+-- 'zipChecked7' is the checked variant of 'zip7', and checks that the input
+-- arrays have the same shape.
 --
-zip7 :: (Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e, Elt f, Elt g)
-     => Acc (Array sh a)
-     -> Acc (Array sh b)
-     -> Acc (Array sh c)
-     -> Acc (Array sh d)
-     -> Acc (Array sh e)
-     -> Acc (Array sh f)
-     -> Acc (Array sh g)
-     -> Acc (Array sh (a, b, c, d, e, f, g))
+zip7, zipChecked7
+  :: (Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e, Elt f, Elt g)
+  => Acc (Array sh a)
+  -> Acc (Array sh b)
+  -> Acc (Array sh c)
+  -> Acc (Array sh d)
+  -> Acc (Array sh e)
+  -> Acc (Array sh f)
+  -> Acc (Array sh g)
+  -> Acc (Array sh (a, b, c, d, e, f, g))
 zip7 = zipWith7 T7
+zipChecked7 = zipWithChecked7 T7
 
--- | Take eight arrays and return an array of eight-tuples, analogous to zip.
+-- | Take eight arrays and return an array of eight-tuples, analogous to 'zip'.
+-- 'zipChecked8' is the checked variant of 'zip8', and checks that the input
+-- arrays have the same shape.
 --
-zip8 :: (Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e, Elt f, Elt g, Elt h)
-     => Acc (Array sh a)
-     -> Acc (Array sh b)
-     -> Acc (Array sh c)
-     -> Acc (Array sh d)
-     -> Acc (Array sh e)
-     -> Acc (Array sh f)
-     -> Acc (Array sh g)
-     -> Acc (Array sh h)
-     -> Acc (Array sh (a, b, c, d, e, f, g, h))
+zip8, zipChecked8
+  :: (Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e, Elt f, Elt g, Elt h)
+  => Acc (Array sh a)
+  -> Acc (Array sh b)
+  -> Acc (Array sh c)
+  -> Acc (Array sh d)
+  -> Acc (Array sh e)
+  -> Acc (Array sh f)
+  -> Acc (Array sh g)
+  -> Acc (Array sh h)
+  -> Acc (Array sh (a, b, c, d, e, f, g, h))
 zip8 = zipWith8 T8
+zipChecked8 = zipWithChecked8 T8
 
--- | Take nine arrays and return an array of nine-tuples, analogous to zip.
+-- | Take nine arrays and return an array of nine-tuples, analogous to 'zip'.
+-- 'zipChecked9' is the checked variant of 'zip9', and checks that the input
+-- arrays have the same shape.
 --
-zip9 :: (Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e, Elt f, Elt g, Elt h, Elt i)
-     => Acc (Array sh a)
-     -> Acc (Array sh b)
-     -> Acc (Array sh c)
-     -> Acc (Array sh d)
-     -> Acc (Array sh e)
-     -> Acc (Array sh f)
-     -> Acc (Array sh g)
-     -> Acc (Array sh h)
-     -> Acc (Array sh i)
-     -> Acc (Array sh (a, b, c, d, e, f, g, h, i))
+zip9, zipChecked9
+  :: (Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e, Elt f, Elt g, Elt h, Elt i)
+  => Acc (Array sh a)
+  -> Acc (Array sh b)
+  -> Acc (Array sh c)
+  -> Acc (Array sh d)
+  -> Acc (Array sh e)
+  -> Acc (Array sh f)
+  -> Acc (Array sh g)
+  -> Acc (Array sh h)
+  -> Acc (Array sh i)
+  -> Acc (Array sh (a, b, c, d, e, f, g, h, i))
 zip9 = zipWith9 T9
+zipChecked9 = zipWithChecked9 T9
 
 
 -- | The converse of 'zip', but the shape of the two results is identical to the
@@ -668,7 +894,6 @@ unzip3 xs = (map get1 xs, map get2 xs, map get3 xs)
     get1 (T3 a _ _) = a
     get2 (T3 _ b _) = b
     get3 (T3 _ _ c) = c
-
 
 -- | Take an array of quadruples and return four arrays, analogous to 'unzip'.
 --

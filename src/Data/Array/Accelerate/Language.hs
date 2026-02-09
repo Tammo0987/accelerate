@@ -90,6 +90,9 @@ module Data.Array.Accelerate.Language (
   cond,  while,
   Assert(..), assertBounds,
 
+  -- * Utilities for bounds and shape checks
+  inbounds, inboundsOf, shapeEq,
+
   -- * Array operations with a scalar result
   (!), (!!), shape, size, shapeSize,
 
@@ -453,6 +456,9 @@ map = Acc $$ applyAcc (Map (eltR @a) (eltR @b))
 --     16, 18, 20, 22, 24,
 --     31, 33, 35, 37, 39]
 --
+-- If the input arrays are expected to have the same shape, use
+-- 'zipWithChecked'.
+--
 zipWith :: forall sh a b c.
            (Shape sh, Elt a, Elt b, Elt c)
         => (Exp a -> Exp b -> Exp c)
@@ -460,7 +466,6 @@ zipWith :: forall sh a b c.
         -> Acc (Array sh b)
         -> Acc (Array sh c)
 zipWith = Acc $$$ applyAcc (ZipWith (eltR @a) (eltR @b) (eltR @c))
--- TODO: zipWithChecked
 
 -- Reductions
 -- ----------
@@ -1361,6 +1366,7 @@ isNonNegative' ShapeRz _ = True_
 isNonNegative' (ShapeRsnoc shr) sh = isNonNegative' shr (prjTail sh) &&! (Exp (prj0 sh) :: Exp Int) >= 0
 
 -- | Given the size (of an array), checks whether an index is in bounds.
+--
 inbounds :: forall sh. Shape sh => Exp sh -> Exp sh -> Exp Bool
 inbounds (Exp shape') (Exp index) = go (shapeR @sh) shape' index
   where
@@ -1369,8 +1375,22 @@ inbounds (Exp shape') (Exp index) = go (shapeR @sh) shape' index
     go (ShapeRsnoc shr) sh ix =
       go shr (prjTail sh) (prjTail ix) &&! 0 <= (Exp (prj0 ix) :: Exp Int) &&! (Exp (prj0 ix) :: Exp Int) < Exp (prj0 sh)
 
+-- | Given an array, checks whether an index is in bounds of that array.
+--
 inboundsOf :: (Shape sh, Elt e) => Acc (Array sh e) -> Exp sh -> Exp Bool
 inboundsOf = inbounds . shape
+
+-- | Checks whether two shapes are equal.
+-- This function is equal to (==), but has a Shape constraint instead of an Eq
+-- constraint.
+--
+shapeEq :: forall sh. Shape sh => Exp sh -> Exp sh -> Exp Bool
+shapeEq (Exp sh1) (Exp sh2) = shapeEq' (shapeR @sh) sh1 sh2
+
+shapeEq' :: ShapeR sh -> SmartExp sh -> SmartExp sh -> Exp Bool
+shapeEq' ShapeRz _ _ = True_
+shapeEq' (ShapeRsnoc shr) sh1 sh2 =
+  shapeEq' shr (prjTail sh1) (prjTail sh2) &&! (Exp (prj0 sh1) :: Exp Int) == (Exp (prj0 sh2) :: Exp Int)
 
 -- Array operations with a scalar result
 -- -------------------------------------
