@@ -5,6 +5,11 @@
 #include "./parlaylib/include/parlay/alloc.h"
 #endif
 
+// Windows uses `_aligned_malloc` and `_aligned_free` from MinGW rather than ParlayLib.
+// ParlayLib should compile with MinGW, see: https://github.com/cmuparlay/parlaylib
+// But we have not gotten it to work.
+// TODO: Maybe try getting Parlaylib to work on windows.
+
 extern "C" {
 
   void* accelerate_raw_alloc(uint64_t size, uint64_t align) {
