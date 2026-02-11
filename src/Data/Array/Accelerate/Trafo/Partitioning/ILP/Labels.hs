@@ -71,6 +71,8 @@ data Node t where
 
 
 -- | The parent of a node is either 'Nothing' (the root node) or 'Just' (a parent computation).
+-- Parent nodes are set when a computation is nested within for instance an Acond or Awhile.
+-- See the use of 'zoom (scope ...)' in Graph.hs
 type Parent = Maybe (Node Comp)
 
 

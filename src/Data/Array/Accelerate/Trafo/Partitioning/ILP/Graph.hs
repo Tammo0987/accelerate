@@ -183,7 +183,7 @@ insertValue v = valueNodes %~ S.insert v
 insertStrict :: (HasCallStack, HasFusionGraph g) => StrictEdge -> g -> g
 insertStrict (c1, c2) g
   | c1 == c2                           = internalError "reflexive edge"
-  -- | c1^.parent /= c2^.parent           = internalError "different scopes"
+  | c1^.parent /= c2^.parent           = internalError "different scopes"
   | S.member (c2, c1) (g^.strictEdges) = internalError "cyclic edge"
   | otherwise = g & strictEdges %~ S.insert (c1, c2)
 
@@ -199,7 +199,7 @@ insertFusible (c1, b, c2) g
 insertInfusible :: (HasCallStack, HasFusionGraph g) => DataflowEdge -> g -> g
 insertInfusible (c1, b, c2) g
   | c1 == c2                            = internalError "reflexive edge"
-  -- | c1^.parent /= c2^.parent            = internalError "different scopes"
+  | c1^.parent /= c2^.parent            = internalError "different scopes"
   | S.member (c2, c1) (g^.strictEdges)  = internalError "cyclic edge"
   | otherwise = g & dataflowEdges %~ S.insert (c1, b, c2)
                   & strictEdges   %~ S.insert (c1,    c2)
@@ -312,13 +312,23 @@ before c1 c2 = maybe id insertStrict (ancestors c1 c2)
 -- If in the same subgraph, add a fusible edge, otherwise add an infusible edge.
 fusible :: HasCallStack => Node Comp -> Node GVal -> Node Comp -> FusionILP op -> FusionILP op
 fusible prod buff cons = if prod^.parent == cons^.parent
+  -- Same subgraph, so we can fuse things.
   then insertFusible (prod, buff, cons)
-  else insertInfusible (prod, buff, cons)
+  -- Different subgraph. This may for instance happen if either 'prod' or
+  -- 'cons' is placed in an Acond. We cannot fuse over an Acond (or in general,
+  -- between subgraphs). Hence we mark this edge as infusible.
+  -- Note that 'infusible' needs to do some additional work to find nodes that
+  -- are in the same subgraph on which we can add the infusible edge.
+  else infusible prod buff cons
 
 -- | Safely add an infusible edge between two computations.
 --
--- If in the same subgraph, add a fusible edge, otherwise add an infusible edge.
 infusible :: HasCallStack => Node Comp -> Node GVal -> Node Comp -> FusionILP op -> FusionILP op
+-- We must add the edge on nodes in the same subgraph. 'prod' and 'cons' might
+-- be in different subgraphs (if their 'parent' is different), which for
+-- instance happens when one of them is nested in an Acond or Awhile. Using
+-- 'ancestors', we find the first parent nodes that are in the same subgraph,
+-- and we add the infusible edge between these nodes.
 infusible prod buff cons = case ancestors prod cons of
   Just (prod', cons') -> insertInfusible (prod', buff, cons')
   Nothing -> id
@@ -777,8 +787,8 @@ local env' f s = (environment .~ s^.environment) <$> f (s & environment .~ env')
 freshComp :: State (FusionGraphState op env) (Node Comp)
 freshComp = do
   c <- zoom currComp freshL'
-  assertion' <- use currFence
-  case assertion' of
+  fence' <- use currFence
+  case fence' of
     Nothing -> return ()
     Just a -> fusionILP %= a `before` c
   fusionILP %= insertComputation c
