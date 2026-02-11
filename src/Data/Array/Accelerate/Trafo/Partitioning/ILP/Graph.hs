@@ -191,7 +191,7 @@ insertStrict (c1, c2) g
 insertFusible :: (HasCallStack, HasFusionGraph g) => DataflowEdge -> g -> g
 insertFusible (c1, b, c2) g
   | c1 == c2                            = internalError "reflexive edge"
-  -- | c1^.parent /= c2^.parent            = internalError "different scopes"
+  | c1^.parent /= c2^.parent            = internalError "different scopes"
   | S.member (c2, c1) (g^.strictEdges)  = internalError "cyclic edge"
   | otherwise = g & dataflowEdges %~ S.insert (c1, b, c2)
 
