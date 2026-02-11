@@ -58,6 +58,7 @@ import Control.Applicative                                          hiding ( Con
 import Control.Monad
 import Data.List                                                    ( partition )
 import Data.Maybe
+import Data.Text                                                    ( Text )
 import Data.Monoid
 import Data.Text.Lazy.Builder
 import Data.Primitive.Vec
@@ -243,7 +244,7 @@ simplifyOpenExp env = first getAny . cvtE
       Foreign tp ff f e         -> hoist (\e' -> Foreign tp ff <$> first Any (simplifyOpenFun EmptyExp f) <*> pure e') (cvtE e)
       While p f x               -> While <$> cvtF env p <*> cvtF env f <*> cvtE x
       Coerce t1 t2 e            -> hoist (pure . Coerce t1 t2) (cvtE e)
-      Assert e1 e2              -> join (assert <$> cvtE e1 <*> cvtE e2)
+      Assert msg e1 e2          -> join (assert msg <$> cvtE e1 <*> cvtE e2)
       Assume e1 e2              -> join (assume <$> cvtE e1 <*> cvtE e2)
 
     cvtE' :: Gamma arr env' env' -> PreOpenExp arr env' e' -> (Any, PreOpenExp arr env' e')
@@ -261,7 +262,7 @@ simplifyOpenExp env = first getAny . cvtE
            -> PreOpenExp arr env' bnd -- Optimized
            -> WeakOpenExp arr env'' t -- Not optimized
            -> (Any, PreOpenExp arr env' t)
-    cvtLet env' lhs (Assert c bnd) body = yes $ Assert c $ snd $ cvtLet env' lhs bnd body
+    cvtLet env' lhs (Assert msg c bnd) body = yes $ Assert msg c $ snd $ cvtLet env' lhs bnd body
     cvtLet env' lhs (Assume c bnd) body = yes $ Assume c $ snd $ cvtLet env' lhs bnd body
     -- Let rotation
     cvtLet env' lhs1 (Let lhs2 bnd expr) body
@@ -409,14 +410,14 @@ simplifyOpenExp env = first getAny . cvtE
       | Just Refl <- matchVecR vecR vecR' = yes v
     vecUnpack vecR e = pure $ VecUnpack vecR e
 
-    assert :: PreOpenExp arr env PrimBool -> PreOpenExp arr env t -> (Any, PreOpenExp arr env t)
-    assert (Const _ 1) b = yes b
-    assert c@(Const _ 0) b =
+    assert :: Text -> PreOpenExp arr env PrimBool -> PreOpenExp arr env t -> (Any, PreOpenExp arr env t)
+    assert _ (Const _ 1) b = yes b
+    assert msg c@(Const _ 0) b =
       let u = undefs $ expType b
-      in (Any (isJust $ matchOpenExp b u), Assert c u)
-    assert (Assert c a) b = yes $ Assert c $ snd $ assert a b
-    assert (Assume c a) b = yes $ Assume c $ snd $ assert a b
-    assert c b = (Any False, Assert c b)
+      in (Any (isJust $ matchOpenExp b u), Assert msg c u)
+    assert msg1 (Assert msg2 c a) b = yes $ Assert msg2 c $ snd $ assert msg1 a b
+    assert msg (Assume c a) b = yes $ Assume c $ snd $ assert msg a b
+    assert msg c b = (Any False, Assert msg c b)
 
     assume :: PreOpenExp arr env PrimBool -> PreOpenExp arr env t -> (Any, PreOpenExp arr env t)
     assume (Const _ 1) b = yes b
@@ -436,7 +437,7 @@ hoist'
   -> PreOpenExp arr env a
   -> (Any, PreOpenExp arr env t)
 hoist' f = \case
-  Assert c a -> yes $ Assert c $ snd $ hoist' f a
+  Assert msg c a -> yes $ Assert msg c $ snd $ hoist' f a
   Assume c a -> yes $ Assume c $ snd $ hoist' f a
   e -> f e
   -- TODO: Should we also hoist let-bindings here?
@@ -656,7 +657,7 @@ summariseOpenExp = (terms +~ 1) . goE
         ShapeSize _ sh        -> travE sh
         PrimApp f x           -> travPrimFun f +++ travE x
         Coerce _ _ e          -> travE e
-        Assert e1 e2          -> travE e1 +++ travE e2
+        Assert _ e1 e2        -> travE e1 +++ travE e2
         Assume e1 e2          -> travE e1 +++ travE e2
 
     travPrimFun :: PrimFun f -> Stats

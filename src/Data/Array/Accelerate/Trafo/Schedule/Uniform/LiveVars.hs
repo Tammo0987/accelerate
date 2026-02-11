@@ -201,7 +201,7 @@ analyseEffect (Exec _ _ args) liveness = setIdxSetLive (IdxSet.fromList $ argsIn
 analyseEffect (SignalAwait signals) liveness = setIdxSetLive (IdxSet.fromList $ map Exists signals) liveness
 analyseEffect (SignalResolve _) liveness = liveness
 analyseEffect (RefWrite ref value) liveness = addLiveImplies (varIdx ref) (varIdx value) liveness
-analyseEffect (Aassert cond) liveness = setIdxSetLive (IdxSet.fromList free) liveness
+analyseEffect (Aassert _ cond) liveness = setIdxSetLive (IdxSet.fromList free) liveness
   where free = map (\(Exists (Var _ idx)) -> Exists idx) $ expGroundVars cond
 
 reEnvEffect :: ReEnv env subenv -> Effect kernel env -> UniformSchedule kernel subenv -> UniformSchedule kernel subenv
@@ -213,7 +213,7 @@ reEnvEffect re = \case
     (Just ref', Just value') -> Effect $ RefWrite ref' value'
     (Nothing  , _          ) -> id
     (Just _   , Nothing    ) -> internalError "Substitution in live variable analysis failed. A reference was live, but the value written to it was dead."
-  Aassert cond -> Effect $ Aassert $ mapArrayInstr (reEnvArrayInstr re) cond
+  Aassert msg cond -> Effect $ Aassert msg $ mapArrayInstr (reEnvArrayInstr re) cond
 
 reEnvArg :: ReEnv env subenv -> SArg env t -> SArg subenv t
 reEnvArg re (SArgScalar   var) = SArgScalar   $ expectJust $ reEnvVar re var

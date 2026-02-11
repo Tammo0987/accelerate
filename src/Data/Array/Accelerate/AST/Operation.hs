@@ -80,6 +80,7 @@ import Data.Array.Accelerate.Type
 import Data.Array.Accelerate.Error
 import Data.Typeable                                                ( (:~:)(..) )
 import Data.Maybe
+import Data.Text                                                    ( Text )
 
 import Language.Haskell.TH.Extra                                    ( CodeQ )
 import Data.Kind (Type)
@@ -193,7 +194,8 @@ data PreOpenAcc (op :: Type -> Type) env a where
   -- Forgetting to use the return value in a Fence may cause that the assertion
   -- is removed from the program (and thus not evaluated).
   --
-  Aassert :: Exp env PrimBool
+  Aassert :: Text
+          -> Exp env PrimBool
           -> PreOpenAcc op env Word8
 
   -- | Assumes that the given expression evaluates to true,
@@ -399,7 +401,7 @@ class HasGroundsR f where
   groundsR :: f a -> GroundsR a
 
 instance HasGroundsR (PreOpenAcc op env) where
-  groundsR (Exec _ _)          = TupRunit
+  groundsR (Exec _ _)        = TupRunit
   groundsR (Return vars)     = groundsR vars
   groundsR (Manifest var)    = groundsR var     
   groundsR (Compute e)       = groundsR e
@@ -409,7 +411,7 @@ instance HasGroundsR (PreOpenAcc op env) where
   groundsR (Unit (Var tp _)) = TupRsingle $ GroundRbuffer tp
   groundsR (Acond _ a _)     = groundsR a
   groundsR (Awhile _ _ _ a)  = groundsR a
-  groundsR (Aassert _)       = TupRsingle $ GroundRscalar scalarTypeWord8
+  groundsR (Aassert _ _)     = TupRsingle $ GroundRscalar scalarTypeWord8
   groundsR (Aassume _)       = TupRsingle $ GroundRscalar scalarTypeWord8
   groundsR (Fence _ a)       = groundsR a
 
@@ -566,7 +568,7 @@ reindexAcc _ (Use st n bu) = pure $ Use st n bu
 reindexAcc r (Unit var) = Unit <$> reindexVar r var
 reindexAcc r (Acond var poa poa') = Acond <$> reindexVar r var <*> reindexAcc r poa <*> reindexAcc r poa'
 reindexAcc r (Awhile tr poa poa' tr') = Awhile tr <$> reindexAfun r poa <*> reindexAfun r poa' <*> reindexVars r tr'
-reindexAcc r (Aassert cond) = Aassert <$> reindexExp r cond
+reindexAcc r (Aassert msg cond) = Aassert msg <$> reindexExp r cond
 reindexAcc r (Aassume cond) = Aassume <$> reindexExp r cond
 reindexAcc r (Fence set e) = Fence <$> reindexIdxSet r set <*> reindexAcc r e
 
@@ -651,7 +653,7 @@ mapAccExecutable f = \case
   Unit vars                     -> Unit vars
   Acond var a1 a2               -> Acond var (mapAccExecutable f a1) (mapAccExecutable f a2)
   Awhile uniqueness c g a       -> Awhile uniqueness (mapAfunExecutable f c) (mapAfunExecutable f g) a
-  Aassert cond                  -> Aassert cond
+  Aassert msg cond              -> Aassert msg cond
   Aassume cond                  -> Aassume cond
   Fence set e                   -> Fence set (mapAccExecutable f e)
 
@@ -684,7 +686,7 @@ instance NFData' op => NFData (OperationAcc op env a) where
   rnf (Unit var)                    = rnfVar rnfScalarType var
   rnf (Acond cond true false)       = rnfVar rnfScalarType cond `seq` rnf true `seq` rnf false
   rnf (Awhile us cond step initial) = rnfTupR rnfUniqueness us `seq` rnf cond `seq` rnf step `seq` rnfGroundVars initial
-  rnf (Aassert cond)                = rnfOpenExp cond
+  rnf (Aassert _ cond)              = rnfOpenExp cond
   rnf (Aassume cond)                = rnfOpenExp cond
   rnf (Fence set a)                 = IdxSet.rnfIdxSet set `seq` rnf a
 

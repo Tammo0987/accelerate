@@ -127,7 +127,7 @@ boundsOptimizeAcc env@(BoundsEnv _ _ zero bindings) acc = case acc of
     , env3 <- case lhs of
       LeftHandSideSingle _
         | Compute expr <- bnd -> env2{ boundsBindings = boundsBindings env1 `WPushB` weaken (weakenSucc weakenId) (BindExp expr) }
-        | Aassert expr <- bnd -> env2{ boundsBindings = boundsBindings env1 `WPushB` weaken (weakenSucc weakenId) (BindAssertAssume expr) }
+        | Aassert _ expr <- bnd -> env2{ boundsBindings = boundsBindings env1 `WPushB` weaken (weakenSucc weakenId) (BindAssertAssume expr) }
         | Aassume expr <- bnd -> env2{ boundsBindings = boundsBindings env1 `WPushB` weaken (weakenSucc weakenId) (BindAssertAssume expr) }
       _ -> env2
     , (modified2, env4, bodyBounds, body') <- boundsOptimizeAcc env3 body
@@ -184,14 +184,14 @@ boundsOptimizeAcc env@(BoundsEnv _ _ zero bindings) acc = case acc of
     , env'' <- env{ boundsGraph = boundsGraphClearNodes (boundsGraph env) $ accIdxSet modified }
     -> (IdxSet.empty, env'', bottomsGround zero $ groundsR acc, Fence set $ body')
 
-  Aassert expr
+  Aassert msg expr
     | (_, expr') <- boundsOptimizeExp env expr
     , expr'' <- simplifyExp expr'
     -> case expr'' of
       Const _ 1 -> (IdxSet.empty, env, TupRsingle $ bottom zero $ scalarTypeWord8, Compute $ Const scalarTypeWord8 1)
       _ | Just idx <- lookupAssertion bindings expr'' ->
         (IdxSet.empty, env, TupRsingle $ bottom zero $ scalarTypeWord8, Fence (IdxSet.singleton idx) $ Compute $ Const scalarTypeWord8 1)
-      _ -> (IdxSet.empty, env, TupRsingle $ bottom zero $ scalarTypeWord8, Aassert expr')
+      _ -> (IdxSet.empty, env, TupRsingle $ bottom zero $ scalarTypeWord8, Aassert msg expr')
 
   Aassume expr
     | (_, expr') <- boundsOptimizeExp env expr
@@ -326,15 +326,15 @@ boundsOptimizeExp env@(BoundsEnv _ _ zero _) expr = detectConst env $ case expr 
         ( unions (makeTransitives env trueBounds) (makeTransitives env falseBounds)
         , Cond c' true' false' )
 
-  Assert c body -> case travE c of
+  Assert msg c body -> case travE c of
     Const _ 1 -> boundsOptimizeExp env body
-    c'@(Const _ 0) -> Assert c' <$> boundsOptimizeExp env (undefs $ expType body)
+    c'@(Const _ 0) -> Assert msg c' <$> boundsOptimizeExp env (undefs $ expType body)
     c'
       | (_, body') <- boundsOptimizeExp (assumeTrue env c') body ->
         -- Don't propagate the bounds of the body,
         -- as acting on them could cause this expression to not be used any more,
         -- and that could cause that the assertion is not ran at all.
-        bottomExpr $ Assert c' body'
+        bottomExpr $ Assert msg c' body'
 
   Assume c body -> case travE c of
     Const _ 1 -> boundsOptimizeExp env body

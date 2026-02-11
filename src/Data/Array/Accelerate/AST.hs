@@ -250,7 +250,8 @@ data PreOpenAcc (acc :: Type -> Type -> Type) aenv a where
               -> acc            aenv as
               -> PreOpenAcc acc aenv as
 
-  Aassert     :: Exp            aenv PrimBool
+  Aassert     :: Text
+              -> Exp            aenv PrimBool
               -> acc            aenv as
               -> PreOpenAcc acc aenv as
 
@@ -556,7 +557,7 @@ instance HasArraysR acc => HasArraysR (PreOpenAcc acc) where
   arraysR Anil                        = TupRunit
   arraysR (Atrace _ _ bs)             = arraysR bs
   arraysR (Manifest as)               = arraysR as
-  arraysR (Aassert _ as)              = arraysR as
+  arraysR (Aassert _ _ as)              = arraysR as
   arraysR (Aassume _ as)              = arraysR as
   arraysR (Aforeign r _ _ _)          = r
   arraysR (Acond _ a _)               = arraysR a
@@ -643,7 +644,7 @@ rnfPreOpenAcc rnfA pacc =
     Anil                      -> ()
     Atrace msg as bs          -> rnfM msg `seq` rnfA as `seq` rnfA bs
     Manifest as               -> rnfA as
-    Aassert cond as           -> rnfE cond `seq` rnfA as
+    Aassert _ cond as         -> rnfE cond `seq` rnfA as
     Aassume cond as           -> rnfE cond `seq` rnfA as
     Aforeign repr asm afun a  -> rnfTupR rnfArrayR repr `seq` rnf (strForeign asm) `seq` rnfAF afun `seq` rnfA a
     Acond p a1 a2             -> rnfE p `seq` rnfA a1 `seq` rnfA a2
@@ -728,7 +729,7 @@ liftPreOpenAcc liftA pacc =
     Anil                      -> [|| Anil ||]
     Atrace msg as bs          -> [|| Atrace $$(liftMessage (arraysR as) msg) $$(liftA as) $$(liftA bs) ||]
     Manifest as               -> [|| Manifest $$(liftA as) ||]
-    Aassert cond as           -> [|| Aassert $$(liftE cond) $$(liftA as) ||]
+    Aassert msg cond as       -> [|| Aassert msg $$(liftE cond) $$(liftA as) ||]
     Aassume cond as           -> [|| Aassume $$(liftE cond) $$(liftA as) ||]
     Aforeign repr asm f a     -> [|| Aforeign $$(liftArraysR repr) $$(liftForeign asm) $$(liftPreOpenAfun liftA f) $$(liftA a) ||]
     Acond p t e               -> [|| Acond $$(liftE p) $$(liftA t) $$(liftA e) ||]

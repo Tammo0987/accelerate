@@ -78,6 +78,7 @@ import Data.Primitive.Vec
 import Data.String
 import Data.Typeable                                                ( (:~:) )
 import Data.ByteString.Builder                                      ( Builder )
+import Data.Text                                                    ( Text )
 
 import Control.DeepSeq
 import Language.Haskell.TH.Extra                                ( CodeQ )
@@ -170,7 +171,8 @@ data PreOpenExp arr env t where
                 -> PreOpenExp arr env t
                 -> PreOpenExp arr env t
 
-  Assert        :: PreOpenExp arr env PrimBool
+  Assert        :: Text
+                -> PreOpenExp arr env PrimBool
                 -> PreOpenExp arr env t
                 -> PreOpenExp arr env t
 
@@ -391,7 +393,7 @@ expType = \case
   ShapeSize{}                  -> TupRsingle scalarTypeInt
   Undef tR                     -> TupRsingle tR
   Coerce _ tR _                -> TupRsingle tR
-  Assert _ e2                  -> expType e2
+  Assert _ _ e2                  -> expType e2
   Assume _ e2                  -> expType e2
 
 primFunType :: PrimFun (a -> b) -> (TypeR a, TypeR b)
@@ -518,7 +520,7 @@ rnfOpenExp topExp =
     ArrayInstr arr e          -> rnfArrayInstr arr `seq` rnfE e
     ShapeSize shr sh          -> rnfShapeR shr `seq` rnfE sh
     Coerce t1 t2 e            -> rnfScalarType t1 `seq` rnfScalarType t2 `seq` rnfE e
-    Assert e1 e2              -> rnfE e1 `seq` rnfE e2
+    Assert _ e1 e2            -> rnfE e1 `seq` rnfE e2
     Assume e1 e2              -> rnfE e1 `seq` rnfE e2
 
 rnfExpVar :: ExpVar env t -> ()
@@ -642,7 +644,7 @@ liftOpenExp pexp =
     ArrayInstr arr x          -> [|| ArrayInstr $$(liftArrayInstr arr) $$(liftE x) ||]
     ShapeSize shr ix          -> [|| ShapeSize $$(liftShapeR shr) $$(liftE ix) ||]
     Coerce t1 t2 e            -> [|| Coerce $$(liftScalarType t1) $$(liftScalarType t2) $$(liftE e) ||]
-    Assert e1 e2              -> [|| Assert $$(liftE e1) $$(liftE e2) ||]
+    Assert msg e1 e2          -> [|| Assert msg $$(liftE e1) $$(liftE e2) ||]
     Assume e1 e2              -> [|| Assume $$(liftE e1) $$(liftE e2) ||]
 
 liftPrimFun :: PrimFun f -> CodeQ (PrimFun f)
@@ -781,7 +783,7 @@ expIsTrivial arrayInstr = \case
   ArrayInstr ar a         -> arrayInstr ar && trav a
   ShapeSize _ a           -> trav a
   Coerce _ _ a            -> trav a
-  Assert cond e           -> trav cond && trav e
+  Assert _ cond e         -> trav cond && trav e
   Assume _ e              -> trav e -- Condition is not executed, so does not have to be trivial
   _                       -> False
   where

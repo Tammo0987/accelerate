@@ -127,7 +127,7 @@ reindexA' k = \case
     Unit var -> Unit <$> reindexVar' k var
     Acond c t f -> Acond <$> reindexVar' k c <*> travA t <*> travA f
     Awhile uniqueness c f i -> Awhile uniqueness <$> reindexAfun' k c <*> reindexAfun' k f <*> reindexVars' k i
-    Aassert g -> Aassert <$> reindexExp' k g
+    Aassert msg g -> Aassert msg <$> reindexExp' k g
     Aassume g -> Aassume <$> reindexExp' k g
     Fence set next -> Fence <$> reindexIdxSet' k set <*> travA next
   where

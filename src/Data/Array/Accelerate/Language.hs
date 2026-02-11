@@ -120,6 +120,7 @@ import Data.Array.Accelerate.Classes.Fractional
 import Data.Array.Accelerate.Classes.Integral
 import Data.Array.Accelerate.Classes.Num
 import Data.Array.Accelerate.Classes.Ord
+import Data.Text                                                    ( Text )
 
 import Prelude                                                      ( ($), (.), Maybe(..), Char )
 #if __GLASGOW_HASKELL__ >= 904
@@ -1307,7 +1308,7 @@ class Assert a where
   -- function is used. If the result is not used, it may (or may not) be
   -- removed from the program.
   --
-  assert :: (a -> Exp Bool) -> a -> a
+  assert :: Text -> (a -> Exp Bool) -> a -> a
   
   -- | Informs the compiler that a certain property holds on the given value.
   -- The compiler may use this information to optimize the program.
@@ -1320,6 +1321,7 @@ class Assert a where
 -- This function may be removed in the future and replaced by the regular
 -- 'assert', if we decide to turn bounds checks on by default.
 --
+-- TODO: Moeten we deze ook aanpassen?
 assertBounds :: Assert a => (a -> Exp Bool) -> a -> a
 #ifdef ACCELERATE_BOUNDS_CHECKS
 assertBounds = assert
@@ -1328,13 +1330,13 @@ assertBounds _ a = a
 #endif
 
 instance Elt t => Assert (Exp t) where
-  assert f (Exp e) = mkExp $ Assert (mkCoerce' g) e
+  assert msg f (Exp e) = mkExp $ Assert msg (mkCoerce' g) e
     where Exp g = f $ Exp e
   assume f (Exp e) = mkExp $ Assume (mkCoerce' g) e
     where Exp g = f $ Exp e
 
 instance Arrays t => Assert (Acc t) where
-  assert f (Acc a) = Acc $ SmartAcc $ Aassert (mkCoerce' g) a
+  assert msg f (Acc a) = Acc $ SmartAcc $ Aassert msg (mkCoerce' g) a
     where Exp g = f $ Acc a
   assume f (Acc a) = Acc $ SmartAcc $ Aassume (mkCoerce' g) a
     where Exp g = f $ Acc a

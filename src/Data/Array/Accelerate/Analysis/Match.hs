@@ -107,8 +107,9 @@ matchPreOpenAcc matchAcc = match
     match (Manifest a1) (Manifest a2)
       = matchAcc a1 a2
     
-    match (Aassert c1 a1) (Aassert c2 a2)
+    match (Aassert msg1 c1 a1) (Aassert msg2 c2 a2)
       | Just Refl <- matchExp c1 c2
+      , msg1 == msg2
       = matchAcc a1 a2
 
     match (Aforeign _ ff1 f1 a1) (Aforeign _ ff2 f2 a2)
@@ -532,8 +533,9 @@ matchOpenExp (While p1 f1 x1) (While p2 f2 x2)
   , Just Refl <- matchOpenFun f1 f2
   = Just Refl
 
-matchOpenExp (Assert g1 e1) (Assert g2 e2)
+matchOpenExp (Assert msg1 g1 e1) (Assert msg2 g2 e2)
   | Just Refl <- matchOpenExp g1 g2
+  , msg1 == msg2
   = matchOpenExp e1 e2
 
 matchOpenExp (Assume g1 e1) (Assume g2 e2)

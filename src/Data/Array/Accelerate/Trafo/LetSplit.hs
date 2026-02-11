@@ -39,7 +39,7 @@ convertPreOpenAcc = \case
   Anil                            -> Anil
   Atrace msg as bs                -> Atrace msg (convertAcc as) (convertAcc bs)
   Manifest as                     -> Manifest (convertAcc as)
-  Aassert cond as                 -> Aassert cond (convertAcc as)
+  Aassert msg cond as             -> Aassert msg cond (convertAcc as)
   Aassume cond as                 -> Aassume cond (convertAcc as)
   Aforeign repr asm f a           -> Aforeign repr asm (convertAfun f) (convertAcc a)
   Acond e a1 a2                   -> Acond e (convertAcc a1) (convertAcc a2)

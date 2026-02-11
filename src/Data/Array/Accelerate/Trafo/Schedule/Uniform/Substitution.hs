@@ -74,7 +74,7 @@ instance Sink' (Effect kernel) where
   weaken' k (SignalAwait vars) = SignalAwait $ map (weaken k) vars
   weaken' k (SignalResolve vars) = SignalResolve $ map (weaken k) vars
   weaken' k (RefWrite ref value) = RefWrite (weaken k ref) (weaken k value)
-  weaken' k (Aassert cond) = Aassert $ mapArrayInstr (weaken k) cond
+  weaken' k (Aassert msg cond) = Aassert msg $ mapArrayInstr (weaken k) cond
 
 instance Sink SArg where
   weaken k = runIdentity . reindexSArg' (ReindexF $ \ix -> NewIdxJust <$> weakenReindex k ix)
@@ -136,7 +136,7 @@ reindexEffect' k = \case
   SignalAwait signals -> SignalAwait <$> traverse (fromNewIdxSignal <.> reindex' k) signals
   SignalResolve resolvers -> SignalResolve . mapMaybe toMaybe <$> traverse (reindex' k) resolvers
   RefWrite ref value -> RefWrite <$> reindexVar (fromNewIdxOutputRef <.> reindex' k) ref <*> reindexVar (fromNewIdxUnsafe <.> reindex' k) value
-  Aassert cond -> Aassert <$> reindexExp (fromNewIdxUnsafe <.> reindex' k) cond
+  Aassert msg cond -> Aassert msg <$> reindexExp (fromNewIdxUnsafe <.> reindex' k) cond
   where
     toMaybe :: NewIdx env' a -> Maybe (Idx env' a)
     toMaybe (NewIdxJust idx) = Just idx

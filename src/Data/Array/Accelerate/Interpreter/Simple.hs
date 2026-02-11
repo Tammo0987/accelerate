@@ -207,7 +207,7 @@ evalOpenAcc (OpenAcc pacc) aenv =
           | toBool (linearIndexArray (Sugar.eltR @Word8) (p x) 0) = go (f x)
           | otherwise                                             = x
 
-    Aassert cond acc
+    Aassert msg cond acc
       | toBool (evalE cond)       -> manifest acc
       | otherwise                 -> error "Assertion failed"
 
@@ -951,9 +951,9 @@ evalOpenExp pexp runarr env =
     Foreign _ _ f e             -> evalOpenFun f (\case {}) Empty $ evalE e
     Coerce t1 t2 e              -> evalCoerceScalar t1 t2 (evalE e)
 
-    Assert c e
+    Assert msg c e
       | toBool (evalE c)        -> evalE e
-      | otherwise               -> error "Assertion failed"
+      | otherwise               -> error $ "Assertion failed: \n" ++ show msg
     
     Assume _ e                  -> evalE e
 
