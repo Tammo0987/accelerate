@@ -42,6 +42,7 @@ import Data.Array.Accelerate.AST.Execute
 import Control.Concurrent.MVar
 import Data.Typeable                                                ( (:~:)(..) )
 import Data.Kind (Type)
+import Data.Text (Text)
 
 -- Generic schedule for a uniform memory space and uniform scheduling,
 -- without task parallelism.
@@ -124,7 +125,8 @@ data SeqSchedule (kernel :: (Type -> Type)) env t where
           -> GroundVars     env a
           -> SeqSchedule  op env a
 
-  Aassert :: Exp env PrimBool
+  Aassert :: Text
+          -> Exp env PrimBool
           -> SeqSchedule kernel env ()
 
   Aassume :: Exp env PrimBool
@@ -176,7 +178,7 @@ convertSchedule' (Operation.Use tp n buffer) = Use tp n buffer
 convertSchedule' (Operation.Unit var) = Unit var
 convertSchedule' (Operation.Acond var true false) = Acond var (convertSchedule' true) (convertSchedule' false)
 convertSchedule' (Operation.Awhile us condition step initial) = Awhile us (convertScheduleFun'' condition) (convertScheduleFun'' step) initial
-convertSchedule' (Operation.Aassert cond) = Alet (LeftHandSideWildcard TupRunit) TupRunit (Aassert cond) $ Compute $ Const scalarTypeWord8 0
+convertSchedule' (Operation.Aassert msg cond) = Alet (LeftHandSideWildcard TupRunit) TupRunit (Aassert msg cond) $ Compute $ Const scalarTypeWord8 0
 convertSchedule' (Operation.Aassume cond) = Alet (LeftHandSideWildcard TupRunit) TupRunit (Aassume cond) $ Compute $ Const scalarTypeWord8 0
 convertSchedule' (Operation.Fence _ next) = convertSchedule' next
 
@@ -198,7 +200,7 @@ rnfSchedule' (Use tp n buffer) = n `seq` buffer `seq` rnfScalarType tp
 rnfSchedule' (Unit var) = rnfExpVar var
 rnfSchedule' (Acond var true false) = rnfExpVar var `seq` rnfSchedule' true `seq` rnfSchedule' false
 rnfSchedule' (Awhile us condition step initial) = rnfTupR rnfUniqueness us `seq` rnfScheduleFun condition `seq` rnfScheduleFun step `seq` rnfGroundVars initial
-rnfSchedule' (Aassert cond) = rnfOpenExp cond
+rnfSchedule' (Aassert msg cond) = rnfOpenExp cond
 rnfSchedule' (Aassume cond) = rnfOpenExp cond
 
 rnfScheduleFun :: IsKernel kernel => SeqScheduleFun kernel env t -> ()

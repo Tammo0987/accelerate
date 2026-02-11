@@ -190,7 +190,7 @@ prettyEffect env = \case
   SignalAwait signals   -> hang 2 $ group $ vsep [annotate Statement "await",   list $ map (prettyIdx env) signals]
   SignalResolve signals -> hang 2 $ group $ vsep [annotate Statement "resolve", list $ map (prettyIdx env) signals]
   RefWrite ref value    -> hang 2 $ group $ vsep ["*" <> prettyVar env ref <+> "=", prettyVar env value]
-  Aassert cond          -> hang 2 $ group $ vsep [annotate Statement "assert", prettyExp (val env) cond]
+  Aassert msg cond      -> hang 2 $ group $ vsep [annotate Statement "assert", prettyExp (val env) cond] -- TODO: Controleren of dit nodig is voor de checkcompiler, kunnen we dan de message hier printen?!
 
 prettyKernelFun :: forall kernel env f. PrettyKernel kernel => Val' env -> KernelFun kernel f -> SArgs env f -> Adoc
 prettyKernelFun env fun args = case prettyKernel of

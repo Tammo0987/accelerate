@@ -1045,7 +1045,7 @@ mkFusionGraph (Awhile u cond body init) = do
     symbol whileN ?= SWhl env condN bodyN init u
   return res                                      -- to return a fresh value of the same type as the initial value.
 
-mkFusionGraph (Aassert cond) = do
+mkFusionGraph (Aassert _ cond) = do
   c    <- freshComp
   env  <- use environment
   c `requiresBuffers` getExpDeps cond env

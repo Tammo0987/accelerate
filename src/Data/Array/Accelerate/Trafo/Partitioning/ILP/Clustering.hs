@@ -214,12 +214,12 @@ openReconstruct' singletons labelenv graph clusterslist mlab subclustersmap symb
         SFun {} -> error "wrong type: function"
         SBod {} -> error "wrong type: function"
         SBlk {} -> error "wrong type: block"
-        SRet env' vars     -> Exists $ Return      (fromJust $ reindexVars (mkReindexPartial' env' env) vars)
-        SCmp env' expr     -> Exists $ Compute     (fromJust $ reindexExp  (mkReindexPartial' env' env) expr)
-        SAsr env' expr     -> Exists $ Aassert     (fromJust $ reindexExp  (mkReindexPartial' env' env) expr)
-        SAsu env' expr     -> Exists $ Aassume     (fromJust $ reindexExp  (mkReindexPartial' env' env) expr)
-        SAlc env' shr e sh -> Exists $ Alloc shr e (fromJust $ reindexVars (mkReindexPartial' env' env) sh)
-        SUnt env' evar     -> Exists $ Unit        (fromJust $ reindexVar  (mkReindexPartial' env' env) evar)
+        SRet env' vars     -> Exists $ Return          (fromJust $ reindexVars (mkReindexPartial' env' env) vars)
+        SCmp env' expr     -> Exists $ Compute         (fromJust $ reindexExp  (mkReindexPartial' env' env) expr)
+        SAsr env' expr     -> Exists $ Aassert "test"  (fromJust $ reindexExp  (mkReindexPartial' env' env) expr)
+        SAsu env' expr     -> Exists $ Aassume         (fromJust $ reindexExp  (mkReindexPartial' env' env) expr)
+        SAlc env' shr e sh -> Exists $ Alloc shr e     (fromJust $ reindexVars (mkReindexPartial' env' env) sh)
+        SUnt env' evar     -> Exists $ Unit            (fromJust $ reindexVar  (mkReindexPartial' env' env) evar)
         SFen {} -> Exists $ Return TupRunit -- Fence with no futher terms does nothing
     makeAST env (cluster:ctail) =
       -- TODO: use guards to fuse these two identical cases

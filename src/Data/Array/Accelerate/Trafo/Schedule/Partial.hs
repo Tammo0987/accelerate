@@ -59,6 +59,7 @@ import Data.Array.Accelerate.Type
 import qualified Data.Array.Accelerate.AST.IdxSet           as IdxSet
 import Data.Array.Accelerate.AST.Partitioned (PartitionedAcc, PartitionedAfun, Clustered)
 import qualified Data.Array.Accelerate.AST.Partitioned as C
+import Data.Text (Text)
 import Data.Kind
 import Data.Maybe
 import Prelude hiding (id, (.), read)
@@ -190,7 +191,8 @@ data PrePartialSchedule schedule kernel env t where
     -> PrePartialSchedule schedule kernel env (Loop t)
 
   PAssert
-    :: Exp env PrimBool
+    :: Text
+    -> Exp env PrimBool
     -> PrePartialSchedule schedule kernel env PrimBool
 
   PFence
@@ -440,9 +442,9 @@ toPartial' us = \case
       ( IdxSet.drop' lhs condFree `IdxSet.union` IdxSet.drop' lhs (IdxSet.drop stepFree) `IdxSet.union` IdxSet.fromList (groundBufferVars initial)
       , PartialSchedule $ PAwhile us' (Plam lhs $ Pbody fn) initial )
   C.Awhile{} -> internalError "Unary function impossible"
-  C.Aassert cond ->
+  C.Aassert msg cond ->
     ( IdxSet.fromList $ mapMaybe (\(Exists a) -> instrToSync a) $ arrayInstrsInExp cond
-    , PartialSchedule $ PAssert cond )
+    , PartialSchedule $ PAssert msg cond )
   C.Aassume _ -> toPartial' us $ C.Compute $ Const scalarTypeWord8 0 -- Assumptions are removed at this point
   C.Fence deps next
     | (nextFree, next') <- toPartial' us next ->
@@ -525,7 +527,7 @@ rebuild' (PartialSchedule schedule) = case schedule of
   PAwhile us fn initial -> buildAwhile us (rebuildUnary fn) initial
   PContinue next -> buildContinue $ rebuild' next
   PBreak us vars -> buildBreak us vars
-  PAssert cond -> buildAssert cond
+  PAssert msg cond -> buildAssert msg cond
   PFence deps next -> buildFence deps $ rebuild' next
 
 rebuildUnary :: PartialScheduleFun kernel env f -> BuildUnary kernel env f
@@ -786,16 +788,17 @@ buildBreak us vars _ =
   }
 
 buildAssert
-  :: Exp env PrimBool
+  :: Text
+  -> Exp env PrimBool
   -> Build PartialSchedule kernel env PrimBool
-buildAssert cond available =
+buildAssert msg cond available =
   Built{
     didChange = False,
     directlyAwaits = IdxSet.fromVarList vars IdxSet.\\ available,
     writes = IdxSet.empty,
     finallyReleases = IdxSet.empty,
     trivial = expIsTrivial (const True) cond,
-    term = PartialSchedule $ PAssert cond
+    term = PartialSchedule $ PAssert msg cond
   }
   where
     vars = expGroundVars cond
@@ -919,7 +922,7 @@ analyseSyncEnv' (PartialSchedule sched) = case sched of
         SyncSchedule (syncEnv next') False $ PContinue next'
   PBreak us vars ->
     ToSyncSchedule UpdateKeep $ SyncSchedule (variablesToSyncEnv us vars) False $ PBreak us vars
-  PAssert cond ->
+  PAssert msg cond ->
     let
       bindings = mapMaybe (\(Exists a) -> instrToSync a) $ arrayInstrsInExp cond
     in
@@ -927,7 +930,7 @@ analyseSyncEnv' (PartialSchedule sched) = case sched of
         $ SyncSchedule
           (partialEnvFromList const bindings)
           True
-          (PAssert cond)
+          (PAssert msg cond)
   PFence deps next
     | ToSyncSchedule up next' <- analyseSyncEnv' next ->
       ToSyncSchedule up

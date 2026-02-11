@@ -326,7 +326,7 @@ rebuildPreOpenAcc k av acc =
     Anil                      -> pure Anil
     Atrace msg as bs          -> Atrace msg      <$> k av as <*> k av bs
     Manifest as               -> Manifest        <$> k av as
-    Aassert c as              -> Aassert         <$> travE c <*> k av as
+    Aassert msg c as          -> Aassert msg     <$> travE c <*> k av as
     Aassume c as              -> Aassume         <$> travE c <*> k av as
     Acond p t e               -> Acond           <$> travE p <*> k av t <*> k av e
     Awhile p f a              -> Awhile          <$> rebuildAfun k av p <*> rebuildAfun k av f <*> k av a

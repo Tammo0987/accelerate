@@ -333,7 +333,7 @@ convertSharingAcc config alyt aenv (ScopedAcc lams (AccSharing _ preAcc))
       Aprj ix a                   -> let AST.OpenAcc a' = cvtAprj ix a
                                      in a'
       Atrace msg acc1 acc2        -> AST.Atrace msg (cvtA acc1) (cvtA acc2)
-      Aassert cond acc            -> AST.Aassert (cvtE cond) (cvtA acc)
+      Aassert msg cond acc        -> AST.Aassert msg (cvtE cond) (cvtA acc)
       Aassume cond acc            -> AST.Aassume (cvtE cond) (cvtA acc)
       Use repr array              -> AST.Use repr array
       Unit tp e                   -> AST.Unit tp (cvtE e)
@@ -770,7 +770,7 @@ convertSharingExp config lyt alyt env aenv exp@(ScopedExp lams _) = cvt exp
           ShapeSize shr e       -> AST.ShapeSize shr (cvt e)
           Foreign repr ff f e   -> AST.Foreign repr ff (cvtNoArrayInstr $ convertSmartFun config (typeR e) f) (cvt e)
           Coerce t1 t2 e        -> AST.Coerce t1 t2 (cvt e)
-          Assert g e            -> AST.Assert (cvt g) (cvt e)
+          Assert msg g e        -> AST.Assert msg (cvt g) (cvt e)
           Assume g e            -> AST.Assume (cvt g) (cvt e)
 
     cvtPrj :: forall a b c env1 aenv1. PairIdx (a, b) c -> AST.OpenExp env1 aenv1 (a, b) -> AST.OpenExp env1 aenv1 c
@@ -1522,10 +1522,10 @@ makeOccMapSharingAcc config accOccMap = traverseAcc
                                              (a', h1) <- traverseAcc lvl acc1
                                              (b', h2) <- traverseAcc lvl acc2
                                              return (Atrace msg a' b', h1 `max` h2 + 1)
-            Aassert cond acc            -> do
+            Aassert msg cond acc        -> do
                                              (cond', h1) <- traverseExp lvl cond
                                              (acc', h2)  <- traverseAcc lvl acc
-                                             return (Aassert cond' acc', h1 `max` h2 + 1)
+                                             return (Aassert msg cond' acc', h1 `max` h2 + 1)
             Aassume cond acc            -> do
                                              (cond', h1) <- traverseExp lvl cond
                                              (acc', h2)  <- traverseAcc lvl acc
@@ -1883,7 +1883,7 @@ makeOccMapSharingExp config accOccMap expOccMap = travE
                                       (e', h) <- travE lvl e
                                       return  (Foreign tp ff f e', h+1)
             Coerce t1 t2 e      -> travE1 (Coerce t1 t2) e
-            Assert g e          -> travE2 Assert g e
+            Assert msg g e      -> travE2 (Assert msg) g e
             Assume g e          -> travE2 Assume g e
 
       where
@@ -2390,11 +2390,11 @@ determineScopesSharingAcc config accOccMap = scopesAcc
                                        reconstruct (Apair a1' a2') (accCount1 +++ accCount2)
           Aprj ix a               -> travA (Aprj ix) a
 
-          Aassert cond acc        -> let
+          Aassert msg cond acc    -> let
                                        (cond', accCount1) = scopesExp cond
                                        (acc',  accCount2) = scopesAcc acc
                                      in
-                                       reconstruct (Aassert cond' acc') (accCount1 +++ accCount2)
+                                       reconstruct (Aassert msg cond' acc') (accCount1 +++ accCount2)
           Aassume cond acc        -> let
                                        (cond', accCount1) = scopesExp cond
                                        (acc',  accCount2) = scopesAcc acc
@@ -2797,7 +2797,7 @@ determineScopesSharingExp config accOccMap expOccMap = scopesExp
           ShapeSize shr e       -> travE1 (ShapeSize shr) e
           Foreign tp ff f e     -> travE1 (Foreign tp ff f) e
           Coerce t1 t2 e        -> travE1 (Coerce t1 t2) e
-          Assert g e            -> travE2 Assert g e
+          Assert msg g e        -> travE2 (Assert msg) g e
           Assume g e            -> travE2 Assume g e
 
       where

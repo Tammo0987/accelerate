@@ -130,7 +130,7 @@ encodeEffect = \case
     intHost $(hashQ "RefWrite")
     <> encodeIdx ref
     <> encodeIdx var
-  Aassert cond ->
+  Aassert msg cond -> -- TODO: Bericht printen, waar komt dit vandaan
     intHost $(hashQ "Aassert")
     <> encodeOpenExp cond
 

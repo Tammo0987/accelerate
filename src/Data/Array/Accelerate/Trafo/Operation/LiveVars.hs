@@ -136,9 +136,9 @@ stronglyLiveVariables' liveness returns us = \case
           SubTupRskip -> Right $ Return TupRunit
           SubTupRkeep -> Right $ Manifest $ expectJust $ reEnvVar re var
   Compute expr -> stronglyLiveVariablesComputeLike (const Compute) liveness returns expr
-  Aassert cond -> stronglyLiveVariablesComputeLike
+  Aassert msg cond -> stronglyLiveVariablesComputeLike
     (\s -> case s of
-      SubTupRkeep -> Aassert
+      SubTupRkeep -> Aassert msg
       SubTupRskip -> const $ Return TupRunit) -- Should not occur
     liveness returns cond
   Aassume cond -> stronglyLiveVariablesComputeLike

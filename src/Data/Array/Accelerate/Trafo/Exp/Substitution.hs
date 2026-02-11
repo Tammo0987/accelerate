@@ -174,7 +174,7 @@ inlineVars lhsBound expr bound
       ShapeSize shr e1    -> ShapeSize shr <$> travE e1
       Undef t             -> Just $ Undef t
       Coerce t1 t2 e1     -> Coerce t1 t2 <$> travE e1
-      Assert e1 e2        -> Assert <$> travE e1 <*> travE e2
+      Assert msg e1 e2    -> Assert msg <$> travE e1 <*> travE e2
       Assume e1 e2        -> Assume <$> travE e1 <*> travE e2
 
       where
@@ -466,7 +466,7 @@ rebuildOpenExp v exp =
     ShapeSize shr sh    -> ShapeSize shr   <$> rebuildOpenExp v sh
     Foreign tp ff f e   -> Foreign tp ff f <$> rebuildOpenExp v e
     Coerce t1 t2 e      -> Coerce t1 t2    <$> rebuildOpenExp v e
-    Assert e1 e2        -> Assert          <$> rebuildOpenExp v e1 <*> rebuildOpenExp v e2
+    Assert msg e1 e2    -> Assert msg      <$> rebuildOpenExp v e1 <*> rebuildOpenExp v e2
     Assume e1 e2        -> Assume          <$> rebuildOpenExp v e1 <*> rebuildOpenExp v e2
 
 {-# INLINEABLE rebuildFun #-}
@@ -541,7 +541,7 @@ rebuildArrayInstrOpenExp v = \case
     ShapeSize shr sh         -> ShapeSize shr <$> travE sh
     Undef tp                 -> pure $ Undef tp
     Coerce t1 t2 e           -> Coerce t1 t2 <$> travE e
-    Assert e1 e2             -> Assert <$> travE e1 <*> travE e2
+    Assert msg e1 e2         -> Assert msg <$> travE e1 <*> travE e2
     Assume e1 e2             -> Assume <$> travE e1 <*> travE e2
     
   where

@@ -496,9 +496,9 @@ executeEffect env = \case
     let S.OutputRef ioref = prj (varIdx ref) env
     let value = prj (varIdx valueVar) env
     writeIORef ioref value
-  S.Aassert cond
+  S.Aassert msg cond
     | runIdentity (evalExp cond $ evalArrayInstrDefault env) == 1 -> return ()
-    | otherwise -> error "Assertion failed"
+    | otherwise -> error ("Assertion failed: \n" ++ show msg)
   where
     await :: Idx env S.Signal -> IO ()
     await idx = do
@@ -873,9 +873,9 @@ evalOpenExp pexp env arr@(EvalArrayInstr runArrayInstr) =
       x <- evalE e
       return $ evalCoerceScalar t1 t2 x
 
-    Assert g e -> do
+    Assert msg g e -> do
       g' <- evalE g
-      (if toBool g' then evalE e else error "Assertion failed")
+      (if toBool g' then evalE e else error ("Assertion failed: \n" ++ show msg))
 
     Assume _ e -> evalE e
 

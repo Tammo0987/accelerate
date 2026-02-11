@@ -109,7 +109,7 @@ encodePreOpenAcc options encodeAcc pacc =
     Anil                            -> intHost $(hashQ "Anil")
     Atrace (Message _ _ msg) as bs  -> intHost $(hashQ "Atrace")      <> intHost (Hashable.hash msg) <> travA as <> travA bs
     Manifest as                     -> intHost $(hashQ "Manifest")    <> travA as
-    Aassert cond as                 -> intHost $(hashQ "Aassert")     <> travE cond <> travA as
+    Aassert msg cond as             -> intHost $(hashQ "Aassert")     <> intHost (Hashable.hash msg) <> travE cond <> travA as
     Aassume cond as                 -> intHost $(hashQ "Aassume")     <> travE cond <> travA as
     Aforeign _ _ f a                -> intHost $(hashQ "Aforeign")    <> travAF f <> travA a
     Use repr a                      -> intHost $(hashQ "Use")         <> encodeArrayType repr <> deep (encodeArray a)

@@ -372,10 +372,10 @@ lowerOpenAcc env = travA
       Named.Apair a b -> pair (travA a) (travA b)
       Named.Anil -> Return TupRunit
       Named.Manifest as -> makeManifest $ travA as
-      Named.Aassert cond as ->
+      Named.Aassert msg cond as ->
         alet
           (LeftHandSideSingle $ GroundRscalar scalarTypeWord8)
-          (Aassert $ travE cond)
+          (Aassert msg $ travE cond)
           $ Fence (IdxSet.singleton ZeroIdx)
           $ lowerOpenAcc (weakenBEnv (weakenSucc weakenId) env) as
       Named.Aassume cond as ->

@@ -103,7 +103,7 @@ prettyOpenAcc env = \case
         <> hardline <> hang 4 ("  ( " <> prettyOpenAfun env step)
         <> hardline <> "  )"
         <> hardline <> indent 2 (prettyVars (val env) 10 initial)
-  Aassert g ->
+  Aassert msg g -> -- TODO: Bericht printen, waar komt dit vandaan
     hang 2 (group $ vsep [annotate Statement "assert", prettyExp (val env) g])
   Aassume g ->
     hang 2 (group $ vsep [annotate Statement "assume", prettyExp (val env) g])

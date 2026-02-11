@@ -47,6 +47,7 @@ import Data.Array.Accelerate.Trafo.Operation.Substitution
 import Data.Array.Accelerate.Trafo.LiveVars                 ( SubTupR(..), subTupR, subTupRpair, subTupPreserves )
 import Data.Maybe                                           ( mapMaybe )
 import Data.List                                            ( foldl' )
+import Data.Text                                            ( Text )
 import Control.Monad
 import Data.Functor.Identity
 
@@ -342,11 +343,11 @@ simplify' uniquenesses = \case
               $ awhileSimplifyInvariant us (cond' env') (step' env') $ simplifyReturnVars env us initial
       )
 
-  Aassert cond ->
+  Aassert msg cond ->
     ( IdxSet.empty
     , \env ->
       fence (syncSubstitutes env $ IdxSet.fromVarList $ expGroundVars cond)
-        $ assert $ simplifyExp env cond
+        $ assert msg $ simplifyExp env cond
     )
 
   Aassume cond ->
@@ -702,19 +703,19 @@ subTupSubstitution s (LeftHandSideWildcard t) _
   = SubTupSubstitution (LeftHandSideWildcard $ subTupR s t) weakenId
 subTupSubstitution _ _ _ = internalError "Tuple mismatch"
 
-assert :: Exp env PrimBool -> OperationAcc op env Word8
-assert (Const _ 1) = Compute (Const scalarTypeWord8 1)
-assert c = Aassert c
+assert :: Text -> Exp env PrimBool -> OperationAcc op env Word8
+assert _ (Const _ 1) = Compute (Const scalarTypeWord8 1)
+assert msg c = Aassert msg c
 
 assume :: Exp env PrimBool -> OperationAcc op env Word8
 assume (Const _ 1) = Compute (Const scalarTypeWord8 1)
 assume c = Aassume c
 
 compute :: Exp env a -> OperationAcc op env a
-compute (Assert c expr) =
+compute (Assert msg c expr) =
   alet
     (LeftHandSideSingle $ GroundRscalar scalarTypeWord8)
-    (Aassert c)
+    (Aassert msg c)
   $ Fence (IdxSet.singleton ZeroIdx)
   $ compute $ mapArrayInstr (weaken $ weakenSucc weakenId) expr
 compute (Assume c expr) =

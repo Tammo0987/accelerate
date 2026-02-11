@@ -109,6 +109,7 @@ import Data.Array.Accelerate.AST                                    ( Direction(
 import Data.Primitive.Vec
 
 import Data.Kind
+import Data.Text                                                    ( Text )
 import Data.Text.Lazy.Builder
 import Formatting
 
@@ -356,7 +357,8 @@ data PreSmartAcc acc exp as where
                 -> acc arrs2
                 -> PreSmartAcc acc exp arrs2
 
-  Aassert       :: exp PrimBool
+  Aassert       :: Text
+                -> exp PrimBool
                 -> acc as
                 -> PreSmartAcc acc exp as
 
@@ -585,7 +587,8 @@ data PreSmartExp acc exp t where
                 -> exp a
                 -> PreSmartExp acc exp b
 
-  Assert        :: exp PrimBool
+  Assert        :: Text
+                -> exp PrimBool
                 -> exp a
                 -> PreSmartExp acc exp a
 
@@ -845,7 +848,7 @@ instance HasArraysR acc => HasArraysR (PreSmartAcc acc exp) where
                                    PairIdxRight -> t2
     Aprj _ _                  -> error "Ejector seat? You're joking!"
     Atrace _ _ a              -> arraysR a
-    Aassert _ a               -> arraysR a
+    Aassert _ _ a             -> arraysR a
     Aassume _ a               -> arraysR a
     Use repr _                -> TupRsingle repr
     Unit tp _                 -> TupRsingle $ ArrayR ShapeRz $ tp
@@ -907,7 +910,7 @@ instance HasTypeR exp => HasTypeR (PreSmartExp acc exp) where
     Foreign tp _ _ _                -> tp
     Undef tp                        -> TupRsingle tp
     Coerce _ tp _                   -> TupRsingle tp
-    Assert _ e                      -> typeR e
+    Assert _ _ e                    -> typeR e
     Assume _ e                      -> typeR e
 
 
