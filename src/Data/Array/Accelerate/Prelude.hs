@@ -1342,9 +1342,7 @@ scanlSeg
     -> Acc (Segments i)
     -> Acc (Array (sh:.Int) e)
 scanlSeg f z arr seg =
-  if null arr || null flags
-    then fill (sh ::. sz + length seg) z
-    else scanl1Seg f arr' seg'
+  scanl1Seg f arr' seg'
   where
     -- Segmented exclusive scan is implemented by first injecting the seed
     -- element at the head of each segment, and then performing a segmented
@@ -1415,9 +1413,7 @@ scanl'Seg
     -> Acc (Segments i)
     -> Acc (Array (sh:.Int) e, Array (sh:.Int) e)
 scanl'Seg f z arr seg =
-  if null arr
-    then T2 arr  (fill (indexTail (shape arr) ::. length seg) z)
-    else T2 body sums
+  T2 body sums
   where
     -- Segmented scan' is implemented by deconstructing a segmented exclusive
     -- scan, to separate the final value and scan body.
@@ -1563,9 +1559,7 @@ scanrSeg
     -> Acc (Segments i)
     -> Acc (Array (sh:.Int) e)
 scanrSeg f z arr seg =
-  if null arr || null flags
-    then fill (sh ::. sz + length seg) z
-    else scanr1Seg f arr' seg'
+  scanr1Seg f arr' seg'
   where
     sh ::. sz    = shape arr
 
@@ -1622,9 +1616,7 @@ scanr'Seg
     -> Acc (Segments i)
     -> Acc (Array (sh:.Int) e, Array (sh:.Int) e)
 scanr'Seg f z arr seg =
-  if null arr
-    then T2 arr  (fill (indexTail (shape arr) ::. length seg) z)
-    else T2 body sums
+  T2 body sums
   where
     -- Using technique described for scanl'Seg
     --
@@ -2057,9 +2049,7 @@ compact keep arr
         dummy           = fill (I1 (the valid)) undef
         result          = permute const dummy prj arr
     in
-    if null arr
-      then T2 emptyArray (fill sz 0)
-      else T2 result len
+    T2 result len
 
 
 -- Gather operations
@@ -3011,8 +3001,8 @@ generateSeq n f = toSeq (Z :. Split) (generate (index1 n) (f . unindex1))
 -- Utilities
 -- ---------
 
-emptyArray :: (Shape sh, Elt e) => Acc (Array sh e)
-emptyArray = fill (constant empty) undef
+-- emptyArray :: (Shape sh, Elt e) => Acc (Array sh e)
+-- emptyArray = fill (constant empty) undef
 
 
 -- Lenses
