@@ -58,7 +58,7 @@ import Data.Array.Accelerate.Representation.Shape                   hiding ( zip
 import Data.Array.Accelerate.Representation.Stencil
 import Data.Array.Accelerate.Representation.Tag
 import Data.Array.Accelerate.Representation.Type
-import Data.Array.Accelerate.Smart                                  as Smart hiding ( StencilR )
+import Data.Array.Accelerate.Smart                                  as Smart
 import Data.Array.Accelerate.Sugar.Array                            hiding ( Array, ArraysR, (!!) )
 import Data.Array.Accelerate.Sugar.Elt
 import Data.Array.Accelerate.Trafo.Config
@@ -75,6 +75,7 @@ import Control.Monad.Fix
 import Data.Function                                                ( on )
 import Data.Hashable
 import Data.List                                                    ( elemIndex, findIndex, groupBy, partition )
+import qualified Data.List.NonEmpty                                 as NE
 import Data.Maybe
 import Data.Monoid                                                  ( Any(..) )
 import Data.Text.Lazy.Builder
@@ -825,10 +826,10 @@ convertSharingExp config lyt alyt env aenv exp@(ScopedExp lams _) = cvt exp
         nested :: HasCallStack => AST.OpenExp env' aenv' a -> [(TagR a, AST.OpenExp env' aenv' b)] -> AST.OpenExp env' aenv' b
         nested _ [(_,r)] = r
         nested s rs      =
-          let groups = groupBy (eqT `on` fst) rs
-              tags   = map (firstT . fst . head) groups
+          let groups = NE.groupBy (eqT `on` fst) rs
+              tags   = map (firstT . fst . NE.head) groups
               e      = prjT (fst (head rs)) s
-              rhs    = map (nested s . map (over _1 ignore)) groups
+              rhs    = map (nested s . map (over _1 ignore) . NE.toList) groups
           in
           AST.Case e (zip tags rhs) Nothing
 
@@ -1114,8 +1115,8 @@ freezeOccMap oc
       traceChunk "OccMap" (fromString (show ocl))
 
       return . IntMap.fromList
-             . map (\kvs -> (key (head kvs), kvs))
-             . groupBy sameKey
+             . map (\kvs -> (key (NE.head kvs), NE.toList kvs))
+             . NE.groupBy sameKey
              . map dropHeight
              $ ocl
   where

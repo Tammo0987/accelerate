@@ -21,7 +21,7 @@ For more details, see our papers:
  * [Type-safe Runtime Code Generation: Accelerate to LLVM][MCGN15] ([slides][MCGN15-slides]) ([video][MCGN15-video])
  * [Streaming Irregular Arrays][CMCK17] ([video][CMCK17-video])
 
-There are also slides from some fairly recent presentations:
+There are also slides from some presentations on Accelerate:
 
  * [Embedded Languages for High-Performance Computing in Haskell][Embedded]
  * [GPGPU Programming in Haskell with Accelerate][YLJ13-slides] ([video][YLJ13-video]) ([workshop][YLJ13-workshop])
@@ -65,7 +65,7 @@ Availability
 
 Package _Accelerate_ is available from:
 
- * Hackage: [accelerate][Hackage] - install with `cabal install accelerate`
+ * Hackage: [accelerate][Hackage] - just add it to your cabal file
  * GitHub: [AccelerateHS/accelerate][GitHub] - get the source with `git clone https://github.com/AccelerateHS/accelerate.git` 
 
 To install the Haskell toolchain try [GHCup](https://www.haskell.org/ghcup/).
@@ -76,7 +76,7 @@ Additional components
 The following supported add-ons are available as separate packages:
 
   * [accelerate-llvm-native][accelerate-llvm-native]: Backend targeting multicore CPUs
-  * [accelerate-llvm-ptx][accelerate-llvm-ptx]: Backend targeting CUDA-enabled NVIDIA GPUs. Requires a GPU with compute capability 2.0 or greater (see the [table on Wikipedia][wiki-cc])
+  * [accelerate-llvm-ptx][accelerate-llvm-ptx]: Backend targeting CUDA-enabled NVIDIA GPUs. Requires a GPU with compute capability 3.0 or greater (see the [table on Wikipedia][wiki-cc])
   * [accelerate-examples][accelerate-examples]: Computational kernels and applications showcasing the use of Accelerate as well as a regression test suite (supporting function and performance testing)
   * Conversion between various formats:
     * [accelerate-io](https://hackage.haskell.org/package/accelerate-io): For copying data directly between raw pointers
@@ -102,7 +102,7 @@ The following supported add-ons are available as separate packages:
   * [numeric-prelude-accelerate][numeric-prelude-accelerate]: Lifting the [numeric-prelude][numeric-prelude] to Accelerate
   * [wigner-ville-accelerate](https://github.com/Haskell-mouse/wigner-ville-accelerate): Wigner-Ville time-frequency distribution.
 
-Install them from Hackage with `cabal install PACKAGENAME`.
+These are all available on Hackage.
 
 
 Documentation
@@ -117,7 +117,7 @@ Examples
 
 ### accelerate-examples
 
-The [accelerate-examples][accelerate-examples] package provides a range of computational kernels and a few complete applications. To install these from Hackage, issue `cabal install accelerate-examples`. The examples include:
+The [accelerate-examples][accelerate-examples] package provides a range of computational kernels and a few complete applications. The examples include:
 
   * An implementation of [canny edge detection][wiki-canny]
   * An interactive [mandelbrot set][wiki-mandelbrot] generator
@@ -127,6 +127,8 @@ The [accelerate-examples][accelerate-examples] package provides a range of compu
   * A particle based simulation of stable fluid flows
   * A cellular automata simulation
   * A "password recovery" tool, for dictionary lookup of MD5 hashes
+
+To run these, either get the source from Hackage using `cabal get accelerate-examples` or clone the [git repository][accelerate-examples], then use `cabal run` on the individual executables.
 
 [![Mandelbrot](https://i.imgur.com/5Tbsp1j.jpg "accelerate-mandelbrot")](https://i.imgur.com/RgXRqsc.jpg)
 [![Raytracer](https://i.imgur.com/7ohhKm9.jpg "accelerate-ray")](https://i.imgur.com/ZNEGEJK.jpg)

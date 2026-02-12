@@ -34,9 +34,9 @@ jobs:
           - 'windows-latest'
         arch:
           - "x64"
-          - "ARM64"
-        ghc:
-          - 'latest'
+          # - "ARM64"
+        ghc:  # at time of writing (2026-01-18), deps haven't been updated for 9.14 yet
+          - '9.12'
           - '9.10'
           - '9.8'
           - '9.6'
@@ -50,7 +50,10 @@ jobs:
         exclude:
           - os: 'windows-latest'
             mode: 'debug'
-          - arch: "ARM64"
+          - os: 'macOS-latest'  # GHC < 9.2 is broken on ARM64 macs
+            ghc: '8.10'
+          - os: 'macOS-latest'
+            ghc: '9.0'
 
     steps:
       - uses: actions/checkout@v3
@@ -68,7 +71,7 @@ jobs:
           sed -i'~' -e '/ post-if: /d' .github/actions/cache-always/action.yml
 
       - name: Set up Haskell
-        uses: haskell/actions/setup@v2
+        uses: haskell-actions/setup@v2
         id: setup-haskell
         with:
           ghc-version: ${{ matrix.ghc }}
@@ -80,6 +83,7 @@ jobs:
             echo CABAL_FLAGS=--enable-tests --test-show-details=direct --flags=nofib >> $GITHUB_ENV
           else
             if [ ${{ matrix.os }} == 'ubuntu-latest' ]; then
+              sudo apt-get update
               sudo apt-get -y install cmake pkg-config libfreetype-dev libglfw3-dev libgtk-3-dev libtbb-dev
             elif [ ${{ matrix.os }} == 'macOS-latest' ]; then
               brew install cmake pkg-config freetype glfw
