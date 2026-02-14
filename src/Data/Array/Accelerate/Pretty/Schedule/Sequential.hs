@@ -92,7 +92,7 @@ prettySeqSchedule env = \case
         <> hardline <> hang 4 ("  ( " <> prettySeqScheduleFun env step)
         <> hardline <> "  )"
         <> hardline <> indent 2 (prettyVars (val env) 10 initial)
-  Aassert msg cond -- TODO: Bericht printen, waar komt dit vandaan
+  Aassert _ cond
     -> hang 2 $ group $ vsep [annotate Statement "assert", prettyExp (val env) cond]
   Aassume cond
     -> hang 2 $ group $ vsep [annotate Statement "assume", prettyExp (val env) cond]

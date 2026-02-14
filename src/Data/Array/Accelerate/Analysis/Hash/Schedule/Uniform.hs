@@ -44,6 +44,7 @@ import Data.ByteString.Builder
 import Data.ByteString.Builder.Extra
 import Data.ByteString.Short.Internal                               ( ShortByteString(..) )
 import Data.Monoid
+import Data.Text.Encoding (encodeUtf8)
 
 hashUniformScheduleFun :: IsKernel kernel => UniformScheduleFun kernel env f -> Hash
 hashUniformScheduleFun = hashlazy . toLazyByteString . encodeUniformScheduleFun
@@ -130,7 +131,7 @@ encodeEffect = \case
     intHost $(hashQ "RefWrite")
     <> encodeIdx ref
     <> encodeIdx var
-  Aassert msg cond -> -- TODO: Bericht printen, waar komt dit vandaan
+  Aassert _ cond ->
     intHost $(hashQ "Aassert")
     <> encodeOpenExp cond
 
