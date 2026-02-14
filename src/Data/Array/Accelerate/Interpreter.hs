@@ -93,6 +93,7 @@ import Control.Monad (when)
 import Data.Array.Accelerate.Trafo.Var (DeclareVars(DeclareVars), declareVars)
 import Data.Array.Accelerate.Trafo.Operation.Substitution (alet, aletUnique, weaken, LHS (LHS), mkLHS)
 import Data.Map (Map)
+import qualified Data.Text as T 
 import Data.Functor.Identity
 import System.IO.Unsafe (unsafePerformIO)
 
@@ -498,7 +499,7 @@ executeEffect env = \case
     writeIORef ioref value
   S.Aassert msg cond
     | runIdentity (evalExp cond $ evalArrayInstrDefault env) == 1 -> return ()
-    | otherwise -> error ("Assertion failed: \n" ++ show msg)
+    | otherwise -> error ("Assertion failed:\n" ++ T.unpack msg)
   where
     await :: Idx env S.Signal -> IO ()
     await idx = do
@@ -875,7 +876,7 @@ evalOpenExp pexp env arr@(EvalArrayInstr runArrayInstr) =
 
     Assert msg g e -> do
       g' <- evalE g
-      (if toBool g' then evalE e else error ("Assertion failed: \n" ++ show msg))
+      (if toBool g' then evalE e else error ("Assertion failed:\n" ++ T.unpack msg))
 
     Assume _ e -> evalE e
 

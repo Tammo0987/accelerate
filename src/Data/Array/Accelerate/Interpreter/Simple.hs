@@ -71,6 +71,7 @@ import Control.Monad.ST
 import Data.Bits
 import Data.Primitive.ByteArray
 import Data.Primitive.Types
+import qualified Data.Text                                          as DT
 import Data.Text.Lazy.Builder
 import Formatting
 import System.IO
@@ -209,7 +210,7 @@ evalOpenAcc (OpenAcc pacc) aenv =
 
     Aassert msg cond acc
       | toBool (evalE cond)       -> manifest acc
-      | otherwise                 -> error "Assertion failed"
+      | otherwise                 -> error ("Assertion failed:\n" ++ DT.unpack msg)
 
     Aassume _ acc                 -> manifest acc
 
@@ -953,7 +954,7 @@ evalOpenExp pexp runarr env =
 
     Assert msg c e
       | toBool (evalE c)        -> evalE e
-      | otherwise               -> error $ "Assertion failed: \n" ++ show msg
+      | otherwise               -> error $ "Assertion failed:\n" ++ DT.unpack msg
     
     Assume _ e                  -> evalE e
 
