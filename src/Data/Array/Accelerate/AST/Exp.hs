@@ -393,7 +393,7 @@ expType = \case
   ShapeSize{}                  -> TupRsingle scalarTypeInt
   Undef tR                     -> TupRsingle tR
   Coerce _ tR _                -> TupRsingle tR
-  Assert _ _ e2                  -> expType e2
+  Assert _ _ e2                -> expType e2
   Assume _ e2                  -> expType e2
 
 primFunType :: PrimFun (a -> b) -> (TypeR a, TypeR b)
