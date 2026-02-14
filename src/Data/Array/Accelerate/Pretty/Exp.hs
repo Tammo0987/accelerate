@@ -148,7 +148,7 @@ prettyPreOpenExp ctx prettyArrayInstr env exp =
     ShapeSize _ sh        -> ppF1 "shapeSize"   (ppE sh)
     Coerce _ tp x         -> ppF1 (Operator (withTypeRep tp "coerce") App L 10) (ppE x)
     Undef tp              -> withTypeRep tp "undef"
-    Assert _ e1 e2        -> ppF2 "assert" (ppE e1) (ppE e2)
+    Assert msg e1 e2      -> ppF2 (fromString $ "assert " ++ show msg) (ppE e1) (ppE e2)
     Assume e1 e2          -> ppF2 "assume" (ppE e1) (ppE e2)
 
   where
