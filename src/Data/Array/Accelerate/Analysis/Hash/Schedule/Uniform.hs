@@ -43,6 +43,7 @@ import Crypto.Hash.XKCP
 import Data.ByteString.Builder
 import Data.ByteString.Builder.Extra
 import Data.ByteString.Short.Internal                               ( ShortByteString(..) )
+import qualified Data.Hashable                                      as Hashable
 import Data.Monoid
 import Data.Text.Encoding (encodeUtf8)
 
@@ -131,8 +132,9 @@ encodeEffect = \case
     intHost $(hashQ "RefWrite")
     <> encodeIdx ref
     <> encodeIdx var
-  Aassert _ cond ->
+  Aassert msg cond ->
     intHost $(hashQ "Aassert")
+    <> intHost (Hashable.hash msg)
     <> encodeOpenExp cond
 
 encodeIO :: InputOutputR input output -> Builder

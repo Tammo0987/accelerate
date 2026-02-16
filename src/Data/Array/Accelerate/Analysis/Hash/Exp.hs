@@ -62,6 +62,7 @@ import Crypto.Hash.XKCP
 import Data.ByteString.Builder
 import Data.ByteString.Builder.Extra
 import Data.ByteString.Short.Internal                               ( ShortByteString(..) )
+import qualified Data.Hashable                                      as Hashable
 import Data.Monoid
 import Prelude                                                      hiding ( exp )
 
@@ -181,7 +182,7 @@ encodeOpenExp exp =
     ShapeSize _ sh              -> intHost $(hashQ "ShapeSize")   <> travE sh
     Foreign _ _ f e             -> intHost $(hashQ "Foreign")     <> encodeOpenFun f <> travE e
     Coerce _ tp e               -> intHost $(hashQ "Coerce")      <> encodeScalarType tp <> travE e
-    Assert _ e1 e2              -> intHost $(hashQ "Assert")      <> travE e1 <> travE e2
+    Assert msg e1 e2            -> intHost $(hashQ "Assert")      <> intHost (Hashable.hash msg) <> travE e1 <> travE e2
     Assume e1 e2                -> intHost $(hashQ "Assume")      <> travE e1 <> travE e2
 
 encodeExpVar :: ExpVar env t -> Builder
