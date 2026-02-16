@@ -414,7 +414,7 @@ simplifyOpenExp env = first getAny . cvtE
     assert _ (Const _ 1) b = yes b
     assert msg c@(Const _ 0) b =
       let u = undefs $ expType b
-      in (Any (isJust $ matchOpenExp b u), Assert msg c u)
+      in (Any (isNothing $ matchOpenExp b u), Assert msg c u)
     assert msg1 (Assert msg2 c a) b = yes $ Assert msg2 c $ snd $ assert msg1 a b
     assert msg (Assume c a) b = yes $ Assume c $ snd $ assert msg a b
     assert msg c b = (Any False, Assert msg c b)
