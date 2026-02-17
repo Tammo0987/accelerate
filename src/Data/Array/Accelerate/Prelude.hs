@@ -150,6 +150,7 @@ import Data.Array.Accelerate.Data.Bits
 
 import Lens.Micro                                                   ( Lens', (&), (^.), (.~), (+~), (-~), lens, over )
 import Prelude                                                      ( (.), ($), Maybe(..), const, id, flip )
+import qualified Data.Text                                          as T
 #if __GLASGOW_HASKELL__ >= 904
 import Data.Type.Equality
 #endif
@@ -440,7 +441,7 @@ zipWith9 = zipWithInduction zipWith8
 assertShapeEq
   :: forall sh a b. (Shape sh, Elt a, Elt b)
   => Acc (Array sh a) -> Acc (Array sh b) -> Acc (Array sh b)
-assertShapeEq a = assert $ shapeEq (shape a) . shape
+assertShapeEq a = assert T.empty $ shapeEq (shape a) . shape
 
 -- | Zip two __equal-shaped__ arrays with the given function. In contrast to
 -- 'zipWith', this function does check whether the input arrays have the same
