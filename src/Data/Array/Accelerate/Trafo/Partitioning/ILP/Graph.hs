@@ -47,6 +47,7 @@ import Data.Array.Accelerate.Type
 -- Data structures
 import Data.Set (Set)
 import Data.Map (Map)
+import Data.Text (Text)
 import qualified Data.Set as S
 import qualified Data.Map as M
 
@@ -567,7 +568,7 @@ data Symbol (op :: Type -> Type) where
   SCmp  :: Env env -> Exp env a                                                        -> Symbol op
   SAlc  :: Env env -> ShapeR sh -> ScalarType e -> ExpVars env sh                      -> Symbol op
   SUnt  :: Env env -> ExpVar env e                                                     -> Symbol op
-  SAsr  :: Env env -> Exp env PrimBool                                                 -> Symbol op
+  SAsr  :: Text -> Env env -> Exp env PrimBool                                         -> Symbol op
   SAsu  :: Env env -> Exp env PrimBool                                                 -> Symbol op
   SFen  :: Env env -> IdxSet env                                                       -> Symbol op
 
@@ -1045,11 +1046,11 @@ mkFusionGraph (Awhile u cond body init) = do
     symbol whileN ?= SWhl env condN bodyN init u
   return res                                      -- to return a fresh value of the same type as the initial value.
 
-mkFusionGraph (Aassert _ cond) = do
+mkFusionGraph (Aassert msg cond) = do
   c    <- freshComp
   env  <- use environment
   c `requiresBuffers` getExpDeps cond env
-  symbol c ?= SAsr env cond
+  symbol c ?= SAsr msg env cond
   TupRsingle <$> freshVal c (GroundRscalar scalarTypeWord8)
 
 mkFusionGraph (Aassume cond) = do

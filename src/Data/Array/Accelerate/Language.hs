@@ -1327,7 +1327,6 @@ class Assert a where
 -- This function may be removed in the future and replaced by the regular
 -- 'assert', if we decide to turn bounds checks on by default.
 --
--- TODO(Mike): Moeten we deze ook aanpassen?
 assertBounds :: Assert a => (a -> Exp Bool) -> a -> a
 #ifdef ACCELERATE_BOUNDS_CHECKS
 assertBounds = assert ""
