@@ -28,12 +28,12 @@ module Data.Array.Accelerate.Pretty.Exp (
   prettyPreOpenFun, prettyPreOpenExp, PrettyArrayInstr,
   parensIf, Operator(..), Associativity, Direction(..),
   needsParens, prettyLhs, prettyLhs', prettyELhs, prettyConst,
-  prettyTupR,
+  prettyTupR, prettyText,
   primOperator, isInfix,
   Precedence, Fixity(..),
   Val(..), PrettyEnv(..), sizeEnv, prj, prjs,
   Context(..), context0, app,
-  shiftwidth, (?), 
+  shiftwidth, (?),
   IdxF(..)
   ) where
 
@@ -48,6 +48,7 @@ import Data.Array.Accelerate.Type
 
 import Data.Char
 import Data.String
+import qualified Data.Text                                          as T
 import Prettyprinter
 import Prelude                                                      hiding ( exp )
 import Control.DeepSeq (NFData)
@@ -148,7 +149,7 @@ prettyPreOpenExp ctx prettyArrayInstr env exp =
     ShapeSize _ sh        -> ppF1 "shapeSize"   (ppE sh)
     Coerce _ tp x         -> ppF1 (Operator (withTypeRep tp "coerce") App L 10) (ppE x)
     Undef tp              -> withTypeRep tp "undef"
-    Assert msg e1 e2      -> ppF2 (fromString $ "assert " ++ show msg) (ppE e1) (ppE e2)
+    Assert msg e1 e2      -> ppF3 "assert" (\_ -> prettyText msg) (ppE e1) (ppE e2)
     Assume e1 e2          -> ppF2 "assume" (ppE e1) (ppE e2)
 
   where
@@ -369,6 +370,14 @@ prettyTupR elt p tupR
     ppPair :: TupR s t' -> Adoc
     ppPair (TupRpair v1 v2) = tupled [ppPair v1, prettyTupR elt 0 v2]
     ppPair v = prettyTupR elt 0 v
+
+prettyText :: T.Text -> Adoc
+prettyText msg
+ | T.length msg >= maxLength = viaShow $ T.take maxLength msg <> ellipsis
+ | otherwise = viaShow msg
+ where
+  ellipsis = " (...)"
+  maxLength = 80 - T.length ellipsis
 
 -- Primitive operators
 -- -------------------
