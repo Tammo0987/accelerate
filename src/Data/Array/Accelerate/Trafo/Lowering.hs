@@ -919,7 +919,13 @@ lowerOpenAcc env = travA
               $ aletUnique lhsOut (lowerAlloc (ArrayR shr tp3) (valueSh weakenId))
               $ alet (LeftHandSideWildcard TupRunit) (mkStencil2 sr1 sr2 argF b1' argIn1 b2' argIn2 argOut)
               $ Return (sh `TupRpair` valueOut weakenId)
-      Named.Atrace _ _ _ -> error "implement me"
+      Named.Atrace msg as bs -> -- TODO(Mike): Hier beginnen met implementeren en dan naar beneden werken
+        alet
+          (LeftHandSideSingle $ GroundRscalar scalarTypeWord8)
+          (Atrace msg $ lowerOpenAcc env as)
+          $ Fence (IdxSet.singleton ZeroIdx)
+          $ lowerOpenAcc (weakenBEnv (weakenSucc weakenId) env) bs
+          
 
 isUndef :: Named.OpenExp aenv env a -> Bool
 isUndef (Let _ _ e) = isUndef e
