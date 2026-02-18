@@ -64,11 +64,12 @@ module Data.Array.Accelerate.AST.Operation (
   NFData'(..)
 ,reindexAcc,toGrounds,fromGrounds,weakenThroughReindex,fuseArgsWith,argsFromList,expToGroundVar) where
 
+import Data.Array.Accelerate.AST                                    (Message(..))
 import Data.Array.Accelerate.AST.Environment
 import Data.Array.Accelerate.AST.Exp
 import Data.Array.Accelerate.AST.LeftHandSide
 import Data.Array.Accelerate.AST.Idx
-import Data.Array.Accelerate.AST.Var
+import Data.Array.Accelerate.AST.Var               
 import Data.Array.Accelerate.Analysis.Hash.Exp
 import Data.Array.Accelerate.Representation.Array
 import Data.Array.Accelerate.Representation.Ground
@@ -206,6 +207,12 @@ data PreOpenAcc (op :: Type -> Type) env a where
   --
   Aassume :: Exp env PrimBool
           -> PreOpenAcc op env Word8
+
+
+  -- TODO(Mike): Hier moet ook een Atrace type komen
+  Atrace :: Message arrs1
+         -> PreOpenAcc op env t
+         -> PreOpenAcc op env Word8
 
   -- | Compiler fence, to prevent the compiler from reordering the computation
   -- of the given variables past this point.
@@ -413,6 +420,7 @@ instance HasGroundsR (PreOpenAcc op env) where
   groundsR (Awhile _ _ _ a)  = groundsR a
   groundsR (Aassert _ _)     = TupRsingle $ GroundRscalar scalarTypeWord8
   groundsR (Aassume _)       = TupRsingle $ GroundRscalar scalarTypeWord8
+  groundsR (Atrace _ _)      = TupRsingle $ GroundRscalar scalarTypeWord8 -- TODO(Mike)
   groundsR (Fence _ a)       = groundsR a
 
 instance HasGroundsR (GroundVar env) where
@@ -570,6 +578,7 @@ reindexAcc r (Acond var poa poa') = Acond <$> reindexVar r var <*> reindexAcc r 
 reindexAcc r (Awhile tr poa poa' tr') = Awhile tr <$> reindexAfun r poa <*> reindexAfun r poa' <*> reindexVars r tr'
 reindexAcc r (Aassert msg cond) = Aassert msg <$> reindexExp r cond
 reindexAcc r (Aassume cond) = Aassume <$> reindexExp r cond
+reindexAcc r (Atrace msg e) = Atrace msg <$> reindexAcc r e -- TODO(Mike)
 reindexAcc r (Fence set e) = Fence <$> reindexIdxSet r set <*> reindexAcc r e
 
 reindexAfun :: Applicative f => ReindexPartial f env env' -> PreOpenAfun op env t -> f (PreOpenAfun op env' t)
@@ -655,6 +664,7 @@ mapAccExecutable f = \case
   Awhile uniqueness c g a       -> Awhile uniqueness (mapAfunExecutable f c) (mapAfunExecutable f g) a
   Aassert msg cond              -> Aassert msg cond
   Aassume cond                  -> Aassume cond
+  Atrace msg e                  -> Atrace msg (mapAccExecutable f e) -- TODO(Mike)
   Fence set e                   -> Fence set (mapAccExecutable f e)
 
 mapAfunExecutable :: (forall args benv'. op args -> Args benv' args -> op' args) -> PreOpenAfun op benv t -> PreOpenAfun op' benv t
@@ -688,6 +698,7 @@ instance NFData' op => NFData (OperationAcc op env a) where
   rnf (Awhile us cond step initial) = rnfTupR rnfUniqueness us `seq` rnf cond `seq` rnf step `seq` rnfGroundVars initial
   rnf (Aassert _ cond)              = rnfOpenExp cond
   rnf (Aassume cond)                = rnfOpenExp cond
+  rnf (Atrace _ a)                  = rnf a -- TODO(Mike)
   rnf (Fence set a)                 = IdxSet.rnfIdxSet set `seq` rnf a
 
 instance NFData' op => NFData (OperationAfun op env a) where
