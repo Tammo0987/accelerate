@@ -762,6 +762,7 @@ convertSharingExp config lyt alyt env aenv exp@(ScopedExp lams _) = cvt exp
           FromIndex shr sh e    -> AST.FromIndex shr (cvt sh) (cvt e)
           Case e rhs            -> cvtCase (cvt e) (over (mapped . _2) cvt rhs)
           Cond e1 e2 e3         -> AST.Cond (cvt e1) (cvt e2) (cvt e3)
+          Select e1 e2 e3       -> AST.Select (cvt e1) (cvt e2) (cvt e3)
           While tp p it i       -> AST.While (cvtFun1 tp p) (cvtFun1 tp it) (cvt i)
           PrimApp f e           -> cvtPrimFun f (cvt e)
           Index _ a e           -> AST.ArrayInstr (AST.Index $ cvtAvar a) (cvt e)
@@ -1869,6 +1870,7 @@ makeOccMapSharingExp config accOccMap expOccMap = travE
                                      (rhs', h2) <- unzip <$> sequence [ travE1 (t,) c | (t,c) <- rhs ]
                                      return (Case e' rhs', h1 `max` maximum h2 + 1)
             Cond e1 e2 e3       -> travE3 Cond e1 e2 e3
+            Select e1 e2 e3     -> travE3 Select e1 e2 e3
             While t p iter init -> do
                                      (p'   , h1) <- traverseFun1 lvl t p
                                      (iter', h2) <- traverseFun1 lvl t iter
@@ -2786,6 +2788,7 @@ determineScopesSharingExp config accOccMap expOccMap = scopesExp
                                        (rhs', accCount2) = unzip [ ((t,c'), counts)| (t,c) <- rhs, let (c', counts) = scopesExp c ]
                                     in reconstruct (Case e' rhs') (foldr (+++) accCount1 accCount2)
           Cond e1 e2 e3         -> travE3 Cond e1 e2 e3
+          Select e1 e2 e3       -> travE3 Select e1 e2 e3
           While tp p it i       -> let (p' , accCount1) = scopesFun1 p
                                        (it', accCount2) = scopesFun1 it
                                        (i' , accCount3) = scopesExp i

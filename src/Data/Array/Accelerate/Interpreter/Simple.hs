@@ -938,6 +938,13 @@ evalOpenExp pexp runarr env =
       | toBool (evalE c)        -> evalE t
       | otherwise               -> evalE e
 
+    -- TODO(Daniel): should the interpreter also be branchless?
+    Select c t e ->
+      -- evaluate both branches
+      let !t' = evalE t
+          !e' = evalE e
+      in if toBool (evalE c) then t' else e'
+
     While cond body seed        -> go (evalE seed)
       where
         f       = evalF body

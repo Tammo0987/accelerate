@@ -297,6 +297,7 @@ shrinkExp = Stats.substitution "shrinkE" . first getAny . shrinkE
       FromIndex shr sh i        -> FromIndex shr <$> shrinkE sh <*> shrinkE i
       Case e rhs def            -> Case <$> shrinkE e <*> sequenceA [ (t,) <$> shrinkE c | (t,c) <- rhs ] <*> shrinkMaybeE def
       Cond p t e                -> Cond <$> shrinkE p <*> shrinkE t <*> shrinkE e
+      Select p t e              -> Select <$> shrinkE p <*> shrinkE t <*> shrinkE e
       While p f x               -> While <$> shrinkF p <*> shrinkF f <*> shrinkE x
       PrimApp f x               -> PrimApp f <$> shrinkE x
       ArrayInstr arr e          -> ArrayInstr arr <$> shrinkE e
@@ -366,6 +367,7 @@ usesOfExp range = countE
       ToIndex _ sh e            -> countE sh <> countE e
       Case e rhs def            -> countE e  <> mconcat [ countE c | (_,c) <- rhs ] <> maybe (Finite 0) countE def
       Cond p t e                -> countE p  <> countE t <> countE e
+      Select p t e              -> countE p  <> countE t <> countE e
       While p f x               -> countE x  <> loopCount (usesOfFun range p) <> loopCount (usesOfFun range f)
       PrimApp _ x               -> countE x
       ArrayInstr _ e            -> countE e
@@ -396,6 +398,7 @@ arrayInstrsInExp = (`travE` [])
       FromIndex _ sh i           -> travE sh $ travE i acc
       Case e rhs def             -> travE e $ travAE rhs $ travME def acc
       Cond p t e                 -> travE p $ travE t $ travE e acc
+      Select p t e               -> travE p $ travE t $ travE e acc
       While p f x                -> travF p $ travF f $ travE x acc
       PrimApp _ x                -> travE x acc
       ArrayInstr arr e           -> Exists arr : travE e acc

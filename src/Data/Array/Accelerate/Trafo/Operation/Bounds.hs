@@ -326,6 +326,17 @@ boundsOptimizeExp env@(BoundsEnv _ _ zero _) expr = detectConst env $ case expr 
         ( unions (makeTransitives env trueBounds) (makeTransitives env falseBounds)
         , Cond c' true' false' )
 
+  Select c t f -> case travE c of
+    -- Check if the condition is already known based on the bounds analysis
+    Const _ 1 -> boundsOptimizeExp env t
+    Const _ 0 -> boundsOptimizeExp env f
+
+    c'
+      | (trueBounds, t') <- boundsOptimizeExp (assumeTrue env c') t
+      , (falseBounds, f') <- boundsOptimizeExp (assumeFalse env c') f ->
+        ( unions (makeTransitives env trueBounds) (makeTransitives env falseBounds)
+        , Select c' t' f' )
+
   Assert msg c body -> case travE c of
     Const _ 1 -> boundsOptimizeExp env body
     c'@(Const _ 0) -> Assert msg c' <$> boundsOptimizeExp env (undefs $ expType body)

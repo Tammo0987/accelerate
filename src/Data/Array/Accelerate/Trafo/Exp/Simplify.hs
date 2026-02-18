@@ -238,6 +238,7 @@ simplifyOpenExp env = first getAny . cvtE
       FromIndex shr sh ix       -> hoist2 (fromIndex shr) (cvtE sh) (cvtE ix)
       Case e rhs def            -> hoist (\e' -> caseof e' (sequenceA [ (t,) <$> cvtE c | (t,c) <- rhs ]) (cvtMaybeE def)) (cvtE e)
       Cond p t e                -> hoist (\p' -> cond p' (cvtE t) (cvtE e)) (cvtE p)
+      Select p t e              -> pure $ Select p t e
       PrimApp f x               -> hoist (evalPrimApp env f) (cvtE x)
       ArrayInstr arr e          -> hoist (arrayInstr arr) (cvtE e)
       ShapeSize shr sh          -> hoist (shapeSize shr) (cvtE sh)
@@ -652,6 +653,7 @@ summariseOpenExp = (terms +~ 1) . goE
         FromIndex _ sh ix     -> travE sh +++ travE ix
         Case e rhs def        -> travE e +++ mconcat [ travE c | (_,c) <- rhs ] +++ maybe zero travE def
         Cond p t e            -> travE p +++ travE t +++ travE e
+        Select p t e          -> travE p +++ travE t +++ travE e
         While p f x           -> travF p +++ travF f +++ travE x
         ArrayInstr a e        -> travA a +++ travE e
         ShapeSize _ sh        -> travE sh

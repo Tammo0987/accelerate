@@ -176,6 +176,7 @@ encodeOpenExp exp =
     FromIndex _ sh i            -> intHost $(hashQ "FromIndex")   <> travE sh <> travE i
     Case e rhs def              -> intHost $(hashQ "Case")        <> travE e  <> mconcat [ word8 t <> travE c | (t,c) <- rhs ] <> encodeMaybe travE def
     Cond c t e                  -> intHost $(hashQ "Cond")        <> travE c  <> travE t  <> travE e
+    Select c t e                -> intHost $(hashQ "Select")      <> travE c  <> travE t  <> travE e
     While p f x                 -> intHost $(hashQ "While")       <> travF p  <> travF f  <> travE x
     PrimApp f x                 -> intHost $(hashQ "PrimApp")     <> encodePrimFun f <> travE x
     ArrayInstr arr e            -> intHost $(hashQ "ArrayInstr")  <> encodeArrayInstr arr <> travE e
