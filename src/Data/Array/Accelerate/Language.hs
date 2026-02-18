@@ -125,8 +125,10 @@ import Data.Array.Accelerate.Classes.Integral
 import Data.Array.Accelerate.Classes.Num
 import Data.Array.Accelerate.Classes.Ord
 import Data.Text                                                    ( Text )
+import GHC.Stack
+import Data.String                                                  ( fromString )
 
-import Prelude                                                      ( ($), (.), Maybe(..), Char )
+import Prelude                                                      ( ($), (.), (<>), Maybe(..), Char )
 #if __GLASGOW_HASKELL__ >= 904
 import Data.Type.Equality
 import Data.Array.Accelerate.Smart (unExpBinaryFunction, PreSmartExp (Tag), mkExp, mkCoerce)
@@ -310,11 +312,11 @@ replicate = Acc $$ applyAcc (Replicate $ sliceIndex @slix)
 --
 generate
     :: forall sh a.
-       (Shape sh, Elt a)
+       (HasCallStack, Shape sh, Elt a)
     => Exp sh
     -> (Exp sh -> Exp a)
     -> Acc (Array sh a)
-generate sh fun = Acc $ applyAcc (Generate $ arrayR @sh @a) (assertBounds isNonNegative sh) fun
+generate sh fun = Acc $ applyAcc (Generate $ arrayR @sh @a) (assertBounds "Shape in generate should be non-negative" isNonNegative sh) fun
 
 -- Shape manipulation
 -- ------------------
@@ -330,11 +332,11 @@ generate sh fun = Acc $ applyAcc (Generate $ arrayR @sh @a) (assertBounds isNonN
 --
 reshape
     :: forall sh sh' e.
-       (Shape sh, Shape sh', Elt e)
+       (HasCallStack, Shape sh, Shape sh', Elt e)
     => Exp sh
     -> Acc (Array sh' e)
     -> Acc (Array sh e)
-reshape sh as = Acc $ applyAcc (Reshape $ shapeR @sh) (assertBounds (\s -> shapeSize s == size as) sh) as
+reshape sh as = Acc $ applyAcc (Reshape $ shapeR @sh) (assertBounds "Reshape should preserve the size" (\s -> shapeSize s == size as) sh) as
 
 -- Extraction of sub-arrays
 -- ------------------------
@@ -551,13 +553,13 @@ fold f (Exp x) = Acc . applyAcc (Fold (eltR @a) (unExpBinaryFunction f) (Just x)
 -- efficient parallel implementation, but does not need to be commutative.
 --
 fold1 :: forall sh a.
-         (Shape sh, Elt a)
+         (HasCallStack, Shape sh, Elt a)
       => (Exp a -> Exp a -> Exp a)
       -> Acc (Array (sh:.Int) a)
       -> Acc (Array sh a)
 fold1 f =
   Acc . applyAcc (Fold (eltR @a) (unExpBinaryFunction f) Nothing)
-  . assertBounds (\xs -> let Exp sh = shape xs in innerNonEmpty (shapeR @sh) sh)
+  . assertBounds "Input of fold1 should be non-empty" (\xs -> let Exp sh = shape xs in innerNonEmpty (shapeR @sh) sh)
 
 -- | Segmented reduction along the innermost dimension of an array. The
 -- segment descriptor specifies the starting index (offset) along the
@@ -581,6 +583,7 @@ foldSeg'
     -> Acc (Segments i)
     -> Acc (Array (sh:.Int) a)
 foldSeg' f (Exp x) = Acc $$ applyAcc (FoldSeg (integralType @i) (eltR @a) (unExpBinaryFunction f) (Just x))
+-- TODO: Add assertion that segment offsets are monotone increasing (if it doesn't add too much overhead)
 
 -- | Variant of 'foldSeg'' that requires /all/ segments of the reduced
 -- array to be non-empty, and doesn't need a default value. The segment
@@ -597,6 +600,7 @@ fold1Seg'
     -> Acc (Segments i)
     -> Acc (Array (sh:.Int) a)
 fold1Seg' f = Acc $$ applyAcc (FoldSeg (integralType @i) (eltR @a) (unExpBinaryFunction f) Nothing)
+-- TODO: Add assertion that segment offsets are *strictly* monotone increasing (if it doesn't add too much overhead)
 
 -- Scan functions
 -- --------------
@@ -709,7 +713,7 @@ scanr1 :: forall sh a.
 scanr1 f (Acc a) = Acc $ SmartAcc $ Scan RightToLeft (eltR @a) (unExpBinaryFunction f) Nothing a
 
 permute'
-    :: forall sh sh' a. (Shape sh, Shape sh', Elt a)
+    :: forall sh sh' a. (HasCallStack, Shape sh, Shape sh', Elt a)
     => (Exp a -> Exp a -> Exp a)        -- ^ combination function
     -> Acc (Array sh' a)                -- ^ array of default values
     -> Acc (Array sh  (Maybe (sh', a))) -- ^ array of source values to be permuted, alongside their target index
@@ -717,17 +721,17 @@ permute'
 permute' f def src = Acc $ applyAcc
   (Permute (arrayR @sh @a) $ Just $ unExpBinaryFunction f)
   def
-  $ map (assertBounds (\s@(Exp s') -> not (isJust s) ||! inboundsOf def (Exp $ prj1 $ prj0 $ prj0 s'))) src
+  $ map (assertBounds "Write indices in permute should be in bounds of the defaults array" (\s@(Exp s') -> not (isJust s) ||! inboundsOf def (Exp $ prj1 $ prj0 $ prj0 s'))) src
 
 permuteUnique'
-    :: forall sh sh' a. (Shape sh, Shape sh', Elt a)
+    :: forall sh sh' a. (HasCallStack, Shape sh, Shape sh', Elt a)
     => Acc (Array sh' a)                -- ^ array of default values
     -> Acc (Array sh  (Maybe (sh', a))) -- ^ array of source values to be permuted, alongside their target index
     -> Acc (Array sh' a)
 permuteUnique' def src = Acc $ applyAcc
   (Permute (arrayR @sh @a) Nothing)
   def
-  $ map (assertBounds (\s@(Exp s') -> not (isJust s) ||! inboundsOf def (Exp $ prj1 $ prj0 $ prj0 s'))) src
+  $ map (assertBounds "Write indices in permute should be in bounds of the defaults array" (\s@(Exp s') -> not (isJust s) ||! inboundsOf def (Exp $ prj1 $ prj0 $ prj0 s'))) src
 
 -- | Generalised backward permutation operation (array gather).
 --
@@ -773,15 +777,15 @@ permuteUnique' def src = Acc $ applyAcc
 --     9, 19, 29, 39, 49]
 --
 backpermute
-    :: forall sh sh' a. (Shape sh, Shape sh', Elt a)
+    :: forall sh sh' a. (HasCallStack, Shape sh, Shape sh', Elt a)
     => Exp sh'                          -- ^ shape of the result array
     -> (Exp sh' -> Exp sh)              -- ^ index permutation function
     -> Acc (Array sh  a)                -- ^ source array
     -> Acc (Array sh' a)
 backpermute sz f as =
-  Acc $ applyAcc (Backpermute $ shapeR @sh') (assertBounds isNonNegative sz) f' as
+  Acc $ applyAcc (Backpermute $ shapeR @sh') (assertBounds "Shape of backpermute should be non-negative" isNonNegative sz) f' as
   where
-    f' ix = assertBounds (inboundsOf as) $ f ix
+    f' ix = assertBounds "Indices in backpermute should be in bounds of the source array" (inboundsOf as) $ f ix
 
 -- Stencil operations
 -- ------------------
@@ -1238,18 +1242,18 @@ awhile f = Acc $$ applyAcc $ Awhile (arraysR @a) (unAccFunction g)
 -- array.
 --
 toIndex
-    :: forall sh. Shape sh
+    :: forall sh. (HasCallStack, Shape sh)
     => Exp sh                     -- ^ extent of the array
     -> Exp sh                     -- ^ index to remap
     -> Exp Int
 toIndex sh@(Exp sh') ix = mkExp $ ToIndex (shapeR @sh) sh' ix'
-  where Exp ix' = assertBounds (inbounds sh) ix
+  where Exp ix' = assertBounds "Index in toIndex should be in bounds of the given shape" (inbounds sh) ix
 
 -- | Inverse of 'toIndex'
 --
-fromIndex :: forall sh. Shape sh => Exp sh -> Exp Int -> Exp sh
+fromIndex :: forall sh. (HasCallStack, Shape sh) => Exp sh -> Exp Int -> Exp sh
 fromIndex sh@(Exp sh') e = mkExp $ FromIndex (shapeR @sh) sh' e'
-  where Exp e' = assertBounds (\s -> s >= 0 &&! s < shapeSize sh) e
+  where Exp e' = assertBounds "Integer in fromIndex should be in bounds of the given shape" (\s -> s >= 0 &&! s < shapeSize sh) e
 
 -- | Intersection of two shapes
 --
@@ -1314,7 +1318,13 @@ class Assert a where
   -- function is used. If the result is not used, it may (or may not) be
   -- removed from the program.
   --
-  assert :: Text -> (a -> Exp Bool) -> a -> a
+  assert :: HasCallStack => (a -> Exp Bool) -> a -> a
+
+  -- | Verifies whether a predicate holds. Similar to 'assert', but this
+  -- function also takes a message, which is printed when the assertion
+  -- fails.
+  --
+  assertMessage :: HasCallStack => Text -> (a -> Exp Bool) -> a -> a
   
   -- | Informs the compiler that a certain property holds on the given value.
   -- The compiler may use this information to optimize the program.
@@ -1327,21 +1337,25 @@ class Assert a where
 -- This function may be removed in the future and replaced by the regular
 -- 'assert', if we decide to turn bounds checks on by default.
 --
-assertBounds :: Assert a => (a -> Exp Bool) -> a -> a
+assertBounds :: (HasCallStack, Assert a) => Text -> (a -> Exp Bool) -> a -> a
 #ifdef ACCELERATE_BOUNDS_CHECKS
-assertBounds = assert ""
+assertBounds = withFrozenCallStack assertMessage
 #else
-assertBounds _ a = a
+assertBounds _ _ a = a
 #endif
 
 instance Elt t => Assert (Exp t) where
-  assert msg f (Exp e) = mkExp $ Assert msg (mkCoerce' g) e
+  assert f (Exp e) = mkExp $ Assert (fromString (prettyCallStack callStack)) (mkCoerce' g) e
+    where Exp g = f $ Exp e
+  assertMessage msg f (Exp e) = mkExp $ Assert (msg <> "\n" <> fromString (prettyCallStack callStack)) (mkCoerce' g) e
     where Exp g = f $ Exp e
   assume f (Exp e) = mkExp $ Assume (mkCoerce' g) e
     where Exp g = f $ Exp e
 
 instance Arrays t => Assert (Acc t) where
-  assert msg f (Acc a) = Acc $ SmartAcc $ Aassert msg (mkCoerce' g) a
+  assert f (Acc a) = Acc $ SmartAcc $ Aassert (fromString (prettyCallStack callStack)) (mkCoerce' g) a
+    where Exp g = f $ Acc a
+  assertMessage msg f (Acc a) = Acc $ SmartAcc $ Aassert (msg <> "\n" <> fromString (prettyCallStack callStack)) (mkCoerce' g) a
     where Exp g = f $ Acc a
   assume f (Acc a) = Acc $ SmartAcc $ Aassume (mkCoerce' g) a
     where Exp g = f $ Acc a
@@ -1413,9 +1427,9 @@ shapeEq' (ShapeRsnoc shr) sh1 sh2 =
 -- 12
 --
 infixl 9 !
-(!) :: forall sh e. (Shape sh, Elt e) => Acc (Array sh e) -> Exp sh -> Exp e
+(!) :: forall sh e. (HasCallStack, Shape sh, Elt e) => Acc (Array sh e) -> Exp sh -> Exp e
 a@(Acc a') ! ix = mkExp $ Index (eltR @e) a' ix'
-  where Exp ix' = assertBounds (inboundsOf a) ix
+  where Exp ix' = assertBounds "Index in (!) should be in bounds of the array" (inboundsOf a) ix
 
 -- | Extract the value from an array at the specified linear index.
 -- Multidimensional arrays in Accelerate are stored in row-major order with
@@ -1434,9 +1448,9 @@ a@(Acc a') ! ix = mkExp $ Index (eltR @e) a' ix'
 -- 12
 --
 infixl 9 !!
-(!!) :: forall sh e. (Shape sh, Elt e) => Acc (Array sh e) -> Exp Int -> Exp e
+(!!) :: forall sh e. (HasCallStack, Shape sh, Elt e) => Acc (Array sh e) -> Exp Int -> Exp e
 a@(Acc a') !! ix = mkExp $ LinearIndex (eltR @e) a' ix'
-  where Exp ix' = assertBounds (\i -> 0 <= i &&! i < size a) ix
+  where Exp ix' = assertBounds "Index in (!!) should be in bounds of the array" (\i -> 0 <= i &&! i < size a) ix
 
 -- | Extract the shape (extent) of an array.
 --

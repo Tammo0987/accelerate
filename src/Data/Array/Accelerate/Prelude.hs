@@ -5,6 +5,7 @@
 {-# LANGUAGE FlexibleInstances     #-}
 {-# LANGUAGE GADTs                 #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE OverloadedStrings     #-}
 {-# LANGUAGE PatternGuards         #-}
 {-# LANGUAGE RankNTypes            #-}
 {-# LANGUAGE RebindableSyntax      #-}
@@ -137,7 +138,7 @@ import Data.Array.Accelerate.Pattern.Maybe
 import Data.Array.Accelerate.Smart
 import Data.Array.Accelerate.Sugar.Array                            ( Arrays, Array, Scalar, Vector, Segments )
 import Data.Array.Accelerate.Sugar.Elt
-import Data.Array.Accelerate.Sugar.Shape                            ( Shape, Slice, Z(..), (:.)(..), All(..), DIM1, DIM2, empty )
+import Data.Array.Accelerate.Sugar.Shape                            ( Shape, Slice, Z(..), (:.)(..), All(..), DIM1, DIM2 )
 import Data.Array.Accelerate.Type
 
 import Data.Array.Accelerate.Classes.Eq
@@ -150,7 +151,8 @@ import Data.Array.Accelerate.Data.Bits
 
 import Lens.Micro                                                   ( Lens', (&), (^.), (.~), (+~), (-~), lens, over )
 import Prelude                                                      ( (.), ($), Maybe(..), const, id, flip )
-import qualified Data.Text                                          as T
+import Data.String                                                  ( fromString )
+import GHC.Stack
 #if __GLASGOW_HASKELL__ >= 904
 import Data.Type.Equality
 #endif
@@ -439,16 +441,16 @@ zipWith9 = zipWithInduction zipWith8
 -- | Checks whether the shapes of two arrays are equal.
 --
 assertShapeEq
-  :: forall sh a b. (Shape sh, Elt a, Elt b)
+  :: forall sh a b. (HasCallStack, Shape sh, Elt a, Elt b)
   => Acc (Array sh a) -> Acc (Array sh b) -> Acc (Array sh b)
-assertShapeEq a = assert T.empty $ shapeEq (shape a) . shape
+assertShapeEq a = withFrozenCallStack $ assertMessage "Shapes in checked zip should be equal" $ shapeEq (shape a) . shape
 
 -- | Zip two __equal-shaped__ arrays with the given function. In contrast to
 -- 'zipWith', this function does check whether the input arrays have the same
 -- shape.
 --
 zipWithChecked
-    :: (Shape sh, Elt a, Elt b, Elt c)
+    :: (HasCallStack, Shape sh, Elt a, Elt b, Elt c)
     => (Exp a -> Exp b -> Exp c)
     -> Acc (Array sh a)
     -> Acc (Array sh b)
@@ -460,7 +462,7 @@ zipWithChecked fun a b = zipWith fun a (assertShapeEq a b)
 -- shape.
 --
 zipWithChecked3
-    :: (Shape sh, Elt a, Elt b, Elt c, Elt d)
+    :: (HasCallStack, Shape sh, Elt a, Elt b, Elt c, Elt d)
     => (Exp a -> Exp b -> Exp c -> Exp d)
     -> Acc (Array sh a)
     -> Acc (Array sh b)
@@ -474,7 +476,7 @@ zipWithChecked3 fun a b c =
 -- shape.
 --
 zipWithChecked4
-    :: (Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e)
+    :: (HasCallStack, Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e)
     => (Exp a -> Exp b -> Exp c -> Exp d -> Exp e)
     -> Acc (Array sh a)
     -> Acc (Array sh b)
@@ -489,7 +491,7 @@ zipWithChecked4 fun a b c d =
 -- shape.
 --
 zipWithChecked5
-    :: (Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e, Elt f)
+    :: (HasCallStack, Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e, Elt f)
     => (Exp a -> Exp b -> Exp c -> Exp d -> Exp e -> Exp f)
     -> Acc (Array sh a)
     -> Acc (Array sh b)
@@ -506,7 +508,7 @@ zipWithChecked5 fun a b c d e =
 -- shape.
 --
 zipWithChecked6
-    :: (Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e, Elt f, Elt g)
+    :: (HasCallStack, Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e, Elt f, Elt g)
     => (Exp a -> Exp b -> Exp c -> Exp d -> Exp e -> Exp f -> Exp g)
     -> Acc (Array sh a)
     -> Acc (Array sh b)
@@ -524,7 +526,7 @@ zipWithChecked6 fun a b c d e f =
 -- shape.
 --
 zipWithChecked7
-    :: (Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e, Elt f, Elt g, Elt h)
+    :: (HasCallStack, Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e, Elt f, Elt g, Elt h)
     => (Exp a -> Exp b -> Exp c -> Exp d -> Exp e -> Exp f -> Exp g -> Exp h)
     -> Acc (Array sh a)
     -> Acc (Array sh b)
@@ -543,7 +545,7 @@ zipWithChecked7 fun a b c d e f g =
 -- shape.
 --
 zipWithChecked8
-    :: (Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e, Elt f, Elt g, Elt h, Elt i)
+    :: (HasCallStack, Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e, Elt f, Elt g, Elt h, Elt i)
     => (Exp a -> Exp b -> Exp c -> Exp d -> Exp e -> Exp f -> Exp g -> Exp h -> Exp i)
     -> Acc (Array sh a)
     -> Acc (Array sh b)
@@ -564,7 +566,7 @@ zipWithChecked8 fun a b c d e f g h =
 -- shape.
 --
 zipWithChecked9
-    :: (Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e, Elt f, Elt g, Elt h, Elt i, Elt j)
+    :: (HasCallStack, Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e, Elt f, Elt g, Elt h, Elt i, Elt j)
     => (Exp a -> Exp b -> Exp c -> Exp d -> Exp e -> Exp f -> Exp g -> Exp h -> Exp i -> Exp j)
     -> Acc (Array sh a)
     -> Acc (Array sh b)
@@ -592,7 +594,7 @@ curry' f (T2 x y) = f x y
 -- have the same shape.
 --
 izipWith, izipWithChecked
-    :: (Shape sh, Elt a, Elt b, Elt c)
+    :: (HasCallStack, Shape sh, Elt a, Elt b, Elt c)
     => (Exp sh -> Exp a -> Exp b -> Exp c)
     -> Acc (Array sh a)
     -> Acc (Array sh b)
@@ -606,7 +608,7 @@ izipWithChecked f = zipWithChecked (curry' f) . indexed
 -- have the same shape.
 --
 izipWith3, izipWithChecked3
-    :: (Shape sh, Elt a, Elt b, Elt c, Elt d)
+    :: (HasCallStack, Shape sh, Elt a, Elt b, Elt c, Elt d)
     => (Exp sh -> Exp a -> Exp b -> Exp c -> Exp d)
     -> Acc (Array sh a)
     -> Acc (Array sh b)
@@ -621,7 +623,7 @@ izipWithChecked3 f = zipWithChecked3 (curry' f) . indexed
 -- have the same shape.
 --
 izipWith4, izipWithChecked4
-    :: (Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e)
+    :: (HasCallStack, Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e)
     => (Exp sh -> Exp a -> Exp b -> Exp c -> Exp d -> Exp e)
     -> Acc (Array sh a)
     -> Acc (Array sh b)
@@ -637,7 +639,7 @@ izipWithChecked4 f = zipWithChecked4 (curry' f) . indexed
 -- have the same shape.
 --
 izipWith5, izipWithChecked5
-    :: (Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e, Elt f)
+    :: (HasCallStack, Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e, Elt f)
     => (Exp sh -> Exp a -> Exp b -> Exp c -> Exp d -> Exp e -> Exp f)
     -> Acc (Array sh a)
     -> Acc (Array sh b)
@@ -654,7 +656,7 @@ izipWithChecked5 f = zipWithChecked5 (curry' f) . indexed
 -- have the same shape.
 --
 izipWith6, izipWithChecked6
-    :: (Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e, Elt f, Elt g)
+    :: (HasCallStack, Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e, Elt f, Elt g)
     => (Exp sh -> Exp a -> Exp b -> Exp c -> Exp d -> Exp e -> Exp f -> Exp g)
     -> Acc (Array sh a)
     -> Acc (Array sh b)
@@ -672,7 +674,7 @@ izipWithChecked6 f = zipWithChecked6 (curry' f) . indexed
 -- have the same shape.
 --
 izipWith7, izipWithChecked7
-    :: (Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e, Elt f, Elt g, Elt h)
+    :: (HasCallStack, Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e, Elt f, Elt g, Elt h)
     => (Exp sh -> Exp a -> Exp b -> Exp c -> Exp d -> Exp e -> Exp f -> Exp g -> Exp h)
     -> Acc (Array sh a)
     -> Acc (Array sh b)
@@ -691,7 +693,7 @@ izipWithChecked7 f = zipWithChecked7 (curry' f) . indexed
 -- have the same shape.
 --
 izipWith8, izipWithChecked8
-    :: (Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e, Elt f, Elt g, Elt h, Elt i)
+    :: (HasCallStack, Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e, Elt f, Elt g, Elt h, Elt i)
     => (Exp sh -> Exp a -> Exp b -> Exp c -> Exp d -> Exp e -> Exp f -> Exp g -> Exp h -> Exp i)
     -> Acc (Array sh a)
     -> Acc (Array sh b)
@@ -711,7 +713,7 @@ izipWithChecked8 f = zipWithChecked8 (curry' f) . indexed
 -- have the same shape.
 --
 izipWith9, izipWithChecked9
-    :: (Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e, Elt f, Elt g, Elt h, Elt i, Elt j)
+    :: (HasCallStack, Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e, Elt f, Elt g, Elt h, Elt i, Elt j)
     => (Exp sh -> Exp a -> Exp b -> Exp c -> Exp d -> Exp e -> Exp f -> Exp g -> Exp h -> Exp i -> Exp j)
     -> Acc (Array sh a)
     -> Acc (Array sh b)
@@ -749,14 +751,12 @@ zip
   -> Acc (Array sh (a, b))
 zip = zipWith T2
 
-
-
 -- | Combine the elements of two __equal-sized__ arrays pairwise. In contrast
 -- to 'zip', this function does check whether the input arrays have the same
 -- shape.
 --
 zipChecked
-  :: (Shape sh, Elt a, Elt b)
+  :: (HasCallStack, Shape sh, Elt a, Elt b)
   => Acc (Array sh a)
   -> Acc (Array sh b)
   -> Acc (Array sh (a, b))
@@ -767,7 +767,7 @@ zipChecked = zipWithChecked T2
 -- arrays have the same shape.
 --
 zip3, zipChecked3
-  :: (Shape sh, Elt a, Elt b, Elt c)
+  :: (HasCallStack, Shape sh, Elt a, Elt b, Elt c)
   => Acc (Array sh a)
   -> Acc (Array sh b)
   -> Acc (Array sh c)
@@ -780,7 +780,7 @@ zipChecked3 = zipWithChecked3 T3
 -- arrays have the same shape.
 --
 zip4, zipChecked4
-  :: (Shape sh, Elt a, Elt b, Elt c, Elt d)
+  :: (HasCallStack, Shape sh, Elt a, Elt b, Elt c, Elt d)
   => Acc (Array sh a)
   -> Acc (Array sh b)
   -> Acc (Array sh c)
@@ -794,7 +794,7 @@ zipChecked4 = zipWithChecked4 T4
 -- arrays have the same shape.
 --
 zip5, zipChecked5
-  :: (Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e)
+  :: (HasCallStack, Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e)
   => Acc (Array sh a)
   -> Acc (Array sh b)
   -> Acc (Array sh c)
@@ -809,7 +809,7 @@ zipChecked5 = zipWithChecked5 T5
 -- arrays have the same shape.
 --
 zip6, zipChecked6
-  :: (Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e, Elt f)
+  :: (HasCallStack, Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e, Elt f)
   => Acc (Array sh a)
   -> Acc (Array sh b)
   -> Acc (Array sh c)
@@ -825,7 +825,7 @@ zipChecked6 = zipWithChecked6 T6
 -- arrays have the same shape.
 --
 zip7, zipChecked7
-  :: (Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e, Elt f, Elt g)
+  :: (HasCallStack, Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e, Elt f, Elt g)
   => Acc (Array sh a)
   -> Acc (Array sh b)
   -> Acc (Array sh c)
@@ -842,7 +842,7 @@ zipChecked7 = zipWithChecked7 T7
 -- arrays have the same shape.
 --
 zip8, zipChecked8
-  :: (Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e, Elt f, Elt g, Elt h)
+  :: (HasCallStack, Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e, Elt f, Elt g, Elt h)
   => Acc (Array sh a)
   -> Acc (Array sh b)
   -> Acc (Array sh c)
@@ -860,7 +860,7 @@ zipChecked8 = zipWithChecked8 T8
 -- arrays have the same shape.
 --
 zip9, zipChecked9
-  :: (Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e, Elt f, Elt g, Elt h, Elt i)
+  :: (HasCallStack, Shape sh, Elt a, Elt b, Elt c, Elt d, Elt e, Elt f, Elt g, Elt h, Elt i)
   => Acc (Array sh a)
   -> Acc (Array sh b)
   -> Acc (Array sh c)
@@ -1067,13 +1067,13 @@ fold1All f arr = fold1 f (flatten arr)
 --     40, 170, 0, 138]
 --
 foldSeg
-    :: forall sh e i. (Shape sh, Elt e, Elt i, i ~ EltR i, IsIntegral i, Ord i, Num i)
+    :: forall sh e i. (HasCallStack, Shape sh, Elt e, Elt i, i ~ EltR i, IsIntegral i, Ord i, Num i)
     => (Exp e -> Exp e -> Exp e)
     -> Exp e
     -> Acc (Array (sh:.Int) e)
     -> Acc (Segments i)
     -> Acc (Array (sh:.Int) e)
-foldSeg f z arr seg = foldSeg' f z arr (scanl plus zero $ map (assertBounds (>= 0)) seg)
+foldSeg f z arr seg = foldSeg' f z arr (scanl plus zero $ map (assertBounds "Segment sizes in foldSeg should be non-negative" (>= 0)) seg)
   where
     (plus, zero) =
       case integralType @i of
@@ -1094,12 +1094,12 @@ foldSeg f z arr seg = foldSeg' f z arr (scanl plus zero $ map (assertBounds (>= 
 -- descriptor species the length of each of the logical sub-arrays.
 --
 fold1Seg
-    :: forall sh e i. (Shape sh, Elt e, Elt i, i ~ EltR i, IsIntegral i, Ord i, Num i)
+    :: forall sh e i. (HasCallStack, Shape sh, Elt e, Elt i, i ~ EltR i, IsIntegral i, Ord i, Num i)
     => (Exp e -> Exp e -> Exp e)
     -> Acc (Array (sh:.Int) e)
     -> Acc (Segments i)
     -> Acc (Array (sh:.Int) e)
-fold1Seg f arr seg = fold1Seg' f arr (scanl plus zero $ map (assertBounds (>= 0)) seg)
+fold1Seg f arr seg = fold1Seg' f arr (scanl plus zero $ map (assertBounds "Segments in fold1Seg should be non-empty" (> 0)) seg)
   where
     plus :: Exp i -> Exp i -> Exp i
     zero :: Exp i
@@ -1336,7 +1336,7 @@ postscanr f e = map (`f` e) . scanr1 f
 --     0, 40, 0, 41, 83, 126, 170, 0, 0, 45, 91, 138]
 --
 scanlSeg
-    :: forall sh e i. (Shape sh, Slice sh, Elt e, Integral i, Bits i, FromIntegral i Int)
+    :: forall sh e i. (HasCallStack, Shape sh, Slice sh, Elt e, Integral i, Bits i, FromIntegral i Int)
     => (Exp e -> Exp e -> Exp e)
     -> Exp e
     -> Acc (Array (sh:.Int) e)
@@ -1407,7 +1407,7 @@ scanlSeg f z arr seg =
 --     40, 170, 0, 138]
 --
 scanl'Seg
-    :: forall sh e i. (Shape sh, Slice sh, Elt e, Integral i, Bits i, FromIntegral i Int)
+    :: forall sh e i. (HasCallStack, Shape sh, Slice sh, Elt e, Integral i, Bits i, FromIntegral i Int)
     => (Exp e -> Exp e -> Exp e)
     -> Exp e
     -> Acc (Array (sh:.Int) e)
@@ -1445,7 +1445,7 @@ scanl'Seg f z arr seg =
     -- the flags align with the last element of each body section, and when
     -- scanned, this element will be incremented over.
     --
-    offset      = scanl1 (+) $ map (assertBounds (>= 0)) seg
+    offset      = scanl1 (+) $ map (assertBounds "Segment sizes in foldSeg should be non-negative" (>= 0)) seg
     inc         = scanl1 (+)
                 $ permute (+) (fill (I1 $ size arr + 1) 0)
                               (\ix -> Just_ (index1' (offset ! ix)))
@@ -1491,7 +1491,7 @@ scanl'Seg f z arr seg =
 --     40, 41, 83, 126, 170, 45, 91, 138]
 --
 scanl1Seg
-    :: (Shape sh, Slice sh, Elt e, Integral i, Bits i, FromIntegral i Int)
+    :: (HasCallStack, Shape sh, Slice sh, Elt e, Integral i, Bits i, FromIntegral i Int)
     => (Exp e -> Exp e -> Exp e)
     -> Acc (Array (sh:.Int) e)
     -> Acc (Segments i)
@@ -1504,7 +1504,7 @@ scanl1Seg f arr seg
 -- |Segmented version of 'prescanl'.
 --
 prescanlSeg
-    :: (Shape sh, Slice sh, Elt e, Integral i, Bits i, FromIntegral i Int)
+    :: (HasCallStack, Shape sh, Slice sh, Elt e, Integral i, Bits i, FromIntegral i Int)
     => (Exp e -> Exp e -> Exp e)
     -> Exp e
     -> Acc (Array (sh:.Int) e)
@@ -1517,7 +1517,7 @@ prescanlSeg f e vec seg
 -- |Segmented version of 'postscanl'.
 --
 postscanlSeg
-    :: (Shape sh, Slice sh, Elt e, Integral i, Bits i, FromIntegral i Int)
+    :: (HasCallStack, Shape sh, Slice sh, Elt e, Integral i, Bits i, FromIntegral i Int)
     => (Exp e -> Exp e -> Exp e)
     -> Exp e
     -> Acc (Array (sh:.Int) e)
@@ -1553,7 +1553,7 @@ postscanlSeg f e vec seg
 --     42, 0, 178, 135, 91, 46, 0, 0, 144, 97, 49, 0]
 --
 scanrSeg
-    :: forall sh e i. (Shape sh, Slice sh, Elt e, Integral i, Bits i, FromIntegral i Int)
+    :: forall sh e i. (HasCallStack, Shape sh, Slice sh, Elt e, Integral i, Bits i, FromIntegral i Int)
     => (Exp e -> Exp e -> Exp e)
     -> Exp e
     -> Acc (Array (sh:.Int) e)
@@ -1610,7 +1610,7 @@ scanrSeg f z arr seg =
 --     42, 178, 0, 144]
 --
 scanr'Seg
-    :: forall sh e i. (Shape sh, Slice sh, Elt e, Integral i, Bits i, FromIntegral i Int)
+    :: forall sh e i. (HasCallStack, Shape sh, Slice sh, Elt e, Integral i, Bits i, FromIntegral i Int)
     => (Exp e -> Exp e -> Exp e)
     -> Exp e
     -> Acc (Array (sh:.Int) e)
@@ -1664,7 +1664,7 @@ scanr'Seg f z arr seg =
 --     40, 170, 129, 87, 44, 138, 93, 47]
 --
 scanr1Seg
-    :: (Shape sh, Slice sh, Elt e, Integral i, Bits i, FromIntegral i Int)
+    :: (HasCallStack, Shape sh, Slice sh, Elt e, Integral i, Bits i, FromIntegral i Int)
     => (Exp e -> Exp e -> Exp e)
     -> Acc (Array (sh:.Int) e)
     -> Acc (Segments i)
@@ -1678,7 +1678,7 @@ scanr1Seg f arr seg
 -- |Segmented version of 'prescanr'.
 --
 prescanrSeg
-    :: (Shape sh, Slice sh, Elt e, Integral i, Bits i, FromIntegral i Int)
+    :: (HasCallStack, Shape sh, Slice sh, Elt e, Integral i, Bits i, FromIntegral i Int)
     => (Exp e -> Exp e -> Exp e)
     -> Exp e
     -> Acc (Array (sh:.Int) e)
@@ -1691,7 +1691,7 @@ prescanrSeg f e vec seg
 -- |Segmented version of 'postscanr'.
 --
 postscanrSeg
-    :: (Shape sh, Slice sh, Elt e, Integral i, Bits i, FromIntegral i Int)
+    :: (HasCallStack, Shape sh, Slice sh, Elt e, Integral i, Bits i, FromIntegral i Int)
     => (Exp e -> Exp e -> Exp e)
     -> Exp e
     -> Acc (Array (sh:.Int) e)
@@ -1713,14 +1713,14 @@ postscanrSeg f e vec seg
 -- data is used by exclusive segmented scan.
 --
 mkHeadFlags
-    :: (Integral i, FromIntegral i Int)
+    :: (HasCallStack, Integral i, FromIntegral i Int)
     => Acc (Segments i)
     -> Acc (Segments i)
 mkHeadFlags seg
   = init
   $ permute (+) zeros (\ix -> Just_ (index1' (offset ! ix))) ones
   where
-    T2 offset len = scanl' (+) 0 $ map (assertBounds (>= 0)) seg
+    T2 offset len = scanl' (+) 0 $ map (assertBounds "Segment sizes should be non-negative" (>= 0)) seg
     zeros         = fill (index1' $ the len + 1) 0
     ones          = fill (index1  $ size offset) 1
 
@@ -1728,14 +1728,14 @@ mkHeadFlags seg
 -- is, the flag is placed at the last place in each segment.
 --
 mkTailFlags
-    :: (Integral i, FromIntegral i Int)
+    :: (HasCallStack, Integral i, FromIntegral i Int)
     => Acc (Segments i)
     -> Acc (Segments i)
 mkTailFlags seg
   = init
   $ permute (+) zeros (\ix -> Just_ (index1' (the len - 1 - offset ! ix))) ones
   where
-    T2 offset len = scanr' (+) 0 $ map (assertBounds (>= 0)) seg
+    T2 offset len = scanr' (+) 0 $ map (assertBounds "Segment sizes should be non-negative" (>= 0)) seg
     zeros         = fill (index1' $ the len + 1) 0
     ones          = fill (index1  $ size offset) 1
 
@@ -1798,7 +1798,7 @@ flatten a
 -- >>> run $ fill (constant (Z:.10)) 0 :: Vector Float
 -- Vector (Z :. 10) [0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0]
 --
-fill :: (Shape sh, Elt e) => Exp sh -> Exp e -> Acc (Array sh e)
+fill :: (HasCallStack, Shape sh, Elt e) => Exp sh -> Exp e -> Acc (Array sh e)
 fill sh c = generate sh (const c)
 
 -- | Create an array of the given shape containing the values @x@, @x+1@, etc.
@@ -1813,7 +1813,7 @@ fill sh c = generate sh (const c)
 --     40, 41, 42, 43, 44, 45, 46, 47, 48, 49]
 --
 enumFromN
-    :: (Shape sh, Num e, FromIntegral Int e)
+    :: (HasCallStack, Shape sh, Num e, FromIntegral Int e)
     => Exp sh
     -> Exp e
     -> Acc (Array sh e)
@@ -1831,7 +1831,7 @@ enumFromN sh x = enumFromStepN sh x 1
 --     20.0, 20.5, 21.0, 21.5, 22.0, 22.5, 23.0, 23.5, 24.0, 24.5]
 --
 enumFromStepN
-    :: (Shape sh, Num e, FromIntegral Int e)
+    :: (HasCallStack, Shape sh, Num e, FromIntegral Int e)
     => Exp sh
     -> Exp e              -- ^ x: start
     -> Exp e              -- ^ y: step
@@ -2064,7 +2064,7 @@ compact keep arr
 -- Vector (Z :. 6) [9,4,1,6,2,4]
 --
 gather
-    :: (Shape sh, Elt e)
+    :: (HasCallStack, Shape sh, Elt e)
     => Acc (Array sh Int)         -- ^ index of source at each index to gather
     -> Acc (Vector e)             -- ^ source values
     -> Acc (Array sh e)
@@ -2089,19 +2089,18 @@ gather indices input = map (input !!) indices
 -- Vector (Z :. 6) [6.0,6.0,1.0,6.0,2.0,4.0]
 --
 gatherIf
-    :: (Elt a, Elt b)
+    :: (HasCallStack, Elt a, Elt b)
     => Acc (Vector Int)           -- ^ source indices to gather from
     -> Acc (Vector a)             -- ^ mask vector
     -> (Exp a -> Exp Bool)        -- ^ predicate function
     -> Acc (Vector b)             -- ^ default values
     -> Acc (Vector b)             -- ^ source values
     -> Acc (Vector b)
-gatherIf from maskV pred defaults input = zipWith zf pf gatheredV
+gatherIf from maskV pred defaults input = 
+  zipWith3 f from maskV defaults
   where
-    zf p g      = p ? (unlift g)
-    gatheredV   = zip (gather from input) defaults
-    pf          = map pred maskV
-
+    -- Note that we only read from 'input' 
+    f idx mask def = if pred mask then input ! I1 idx else def
 
 -- Scatter operations
 -- ------------------
@@ -2118,7 +2117,7 @@ gatherIf from maskV pred defaults input = zipWith zf pf gatheredV
 -- Vector (Z :. 10) [0,1,4,9,0,4,0,6,2,0]
 --
 scatter
-    :: Elt e
+    :: (HasCallStack, Elt e)
     => Acc (Vector Int)           -- ^ destination indices to scatter into
     -> Acc (Vector e)             -- ^ default values
     -> Acc (Vector e)             -- ^ source values
@@ -2127,7 +2126,7 @@ scatter to defaults input = permuteUnique defaults pf input'
   where
     pf ix   = Just_ (I1 (to ! ix))
     input'  = backpermute (shape to `intersect` shape input) id input
-
+-- TODO: Rewrite to permuteUnique' instead of permuteUnique
 
 -- | Conditionally overwrite elements of the destination by scattering values of
 -- the source array according to a given index mapping, whenever the masking
@@ -2143,7 +2142,7 @@ scatter to defaults input = permuteUnique defaults pf input'
 -- Vector (Z :. 10) [0,0,0,0,0,4,0,6,2,0]
 --
 scatterIf
-    :: (Elt a, Elt b)
+    :: (HasCallStack, Elt a, Elt b)
     => Acc (Vector Int)           -- ^ destination indices to scatter into
     -> Acc (Vector a)             -- ^ mask vector
     -> (Exp a -> Exp Bool)        -- ^ predicate function
@@ -2156,7 +2155,7 @@ scatterIf to maskV pred defaults input = permuteUnique defaults pf input'
     pf ix   = if pred (maskV ! ix)
                  then Just_ (I1 (to ! ix))
                  else Nothing_
-
+-- TODO: Rewrite to permuteUnique' instead of permuteUnique
 
 -- Permutations
 -- ------------
@@ -2728,7 +2727,7 @@ iterate n f z
 -- | Reduce along an innermost slice of an array /sequentially/, by applying a
 -- binary operator to a starting value and the array from left to right.
 --
-sfoldl :: (Shape sh, Elt a, Elt b)
+sfoldl :: (HasCallStack, Shape sh, Elt a, Elt b)
        => (Exp a -> Exp b -> Exp a)
        -> Exp a
        -> Exp sh
@@ -2910,14 +2909,14 @@ length = unindex1 . shape
 --
 -- @since 1.3.0.0
 --
-expand :: (Elt a, Elt b)
+expand :: (HasCallStack, Elt a, Elt b)
        => (Exp a -> Exp Int)
        -> (Exp a -> Exp Int -> Exp b)
        -> Acc (Vector a)
        -> Acc (Vector b)
 expand f g xs =
   let
-    szs            = map (\a -> let sz = f a in assertBounds (>= 0) sz) xs
+    szs            = map (\a -> let sz = f a in assertBounds "Each element in expand should expand to a non-negative number of elements" (>= 0) sz) xs
     T2 offsets len = scanl' (+) 0 szs
     -- TODO: Make the OperationAcc simplifier better and remove 'the $ unit $'.
     -- Our simplifier currently only knows that multiple array of size 'm' are
