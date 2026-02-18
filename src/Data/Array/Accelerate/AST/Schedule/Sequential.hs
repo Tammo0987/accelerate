@@ -43,6 +43,7 @@ import Control.Concurrent.MVar
 import Data.Typeable                                                ( (:~:)(..) )
 import Data.Kind (Type)
 import Data.Text (Text)
+import Control.DeepSeq (NFData (rnf))
 
 -- Generic schedule for a uniform memory space and uniform scheduling,
 -- without task parallelism.
@@ -200,7 +201,7 @@ rnfSchedule' (Use tp n buffer) = n `seq` buffer `seq` rnfScalarType tp
 rnfSchedule' (Unit var) = rnfExpVar var
 rnfSchedule' (Acond var true false) = rnfExpVar var `seq` rnfSchedule' true `seq` rnfSchedule' false
 rnfSchedule' (Awhile us condition step initial) = rnfTupR rnfUniqueness us `seq` rnfScheduleFun condition `seq` rnfScheduleFun step `seq` rnfGroundVars initial
-rnfSchedule' (Aassert msg cond) = rnfOpenExp cond
+rnfSchedule' (Aassert msg cond) = rnf msg `seq` rnfOpenExp cond
 rnfSchedule' (Aassume cond) = rnfOpenExp cond
 
 rnfScheduleFun :: IsKernel kernel => SeqScheduleFun kernel env t -> ()
