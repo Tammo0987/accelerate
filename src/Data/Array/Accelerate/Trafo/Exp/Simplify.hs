@@ -238,7 +238,7 @@ simplifyOpenExp env = first getAny . cvtE
       FromIndex shr sh ix       -> hoist2 (fromIndex shr) (cvtE sh) (cvtE ix)
       Case e rhs def            -> hoist (\e' -> caseof e' (sequenceA [ (t,) <$> cvtE c | (t,c) <- rhs ]) (cvtMaybeE def)) (cvtE e)
       Cond p t e                -> hoist (\p' -> cond p' (cvtE t) (cvtE e)) (cvtE p)
-      Select p t e              -> pure $ Select p t e
+      Select p t e              -> hoist (\p' -> select p' (cvtE t) (cvtE e)) (cvtE p)
       PrimApp f x               -> hoist (evalPrimApp env f) (cvtE x)
       ArrayInstr arr e          -> hoist (arrayInstr arr) (cvtE e)
       ShapeSize shr sh          -> hoist (shapeSize shr) (cvtE sh)
@@ -307,6 +307,20 @@ simplifyOpenExp env = first getAny . cvtE
     shouldInline Const{} = True
     shouldInline _ = False
 
+    -- TODO(Daniel): comment
+    select :: PreOpenExp arr env PrimBool
+           -> (Any, PreOpenExp arr env t)
+           -> (Any, PreOpenExp arr env t)
+           -> (Any, PreOpenExp arr env t)
+    select p t@(_,t') e@(_,e')
+      | Just Refl <- matchTypeR (expType t') (expType p)
+      , Const _ 0 <- e'
+      = yes $ PrimApp PrimLAnd (Pair p t')  -- p && t' = p ? t : 0
+      | Just Refl <- matchTypeR (expType e') (expType p)
+      , Const _ 1 <- t'
+      = yes $ PrimApp PrimLOr (Pair p e')   -- p || e' = p ? 1 : e
+      | otherwise = Select p <$> t <*> e
+
     -- Simplify conditional expressions, in particular by eliminating branches
     -- when the predicate is a known constant.
     --
@@ -318,7 +332,7 @@ simplifyOpenExp env = first getAny . cvtE
       | Const _ 1 <- p                  = Stats.knownBranch "True"      (yes t')
       | Const _ 0 <- p                  = Stats.knownBranch "False"     (yes e')
       | Just Refl <- matchOpenExp t' e' = Stats.knownBranch "redundant" (yes e')
-      | isCheap t' && isCheap e'        = Select p <$> t <*> e
+      | isCheap t' && isCheap e'        = yes $ Select p t' e'
       | otherwise                       = Cond p <$> t <*> e
 
     -- TODO(Daniel): when should we lower a cond to a select?
