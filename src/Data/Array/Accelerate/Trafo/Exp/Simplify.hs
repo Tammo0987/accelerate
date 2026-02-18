@@ -318,7 +318,16 @@ simplifyOpenExp env = first getAny . cvtE
       | Const _ 1 <- p                  = Stats.knownBranch "True"      (yes t')
       | Const _ 0 <- p                  = Stats.knownBranch "False"     (yes e')
       | Just Refl <- matchOpenExp t' e' = Stats.knownBranch "redundant" (yes e')
+      | isCheap t' && isCheap e'        = Select p <$> t <*> e
       | otherwise                       = Cond p <$> t <*> e
+
+    -- TODO(Daniel): when should we lower a cond to a select?
+    isCheap :: PreOpenExp arr env t -> Bool
+    isCheap e =
+      let s = summariseOpenExp e
+      in not (containsArrayInstr e)
+        && _ops s <= 3
+        && _terms s <= 5
 
     caseof :: PreOpenExp arr env TAG
            -> (Any, [(TAG, PreOpenExp arr env b)])
@@ -725,4 +734,34 @@ summariseOpenExp = (terms +~ 1) . goE
             PrimLNot                 -> zero
             PrimFromIntegral     i n -> travIntegralType i +++ travNumType n
             PrimToFloating       n f -> travNumType n +++ travFloatingType f
+
+containsArrayInstr :: PreOpenExp arr env t -> Bool
+containsArrayInstr = goE
+  where
+    goE :: PreOpenExp arr env t -> Bool
+    goE exp =
+      case exp of
+        ArrayInstr _ _        -> True
+        Let _ bnd body        -> goE bnd || goE body
+        Foreign _ _ _ x       -> goE x
+        Pair e1 e2            -> goE e1  || goE e2
+        VecPack _ e           -> goE e
+        VecUnpack _ e         -> goE e
+        ToIndex _ sh ix       -> goE sh  || goE ix
+        FromIndex _ sh ix     -> goE sh  || goE ix
+        Case e rhs (Just def) -> goE e   || any (goE . snd) rhs || goE def
+        Case e rhs Nothing    -> goE e   || any (goE . snd) rhs
+        Cond p t e            -> goE p   || goE t               || goE e
+        Select p t e          -> goE p   || goE t               || goE e
+        While p f x           -> goF p   || goF f               || goE x
+        ShapeSize _ sh        -> goE sh
+        PrimApp _ x           -> goE x
+        Coerce _ _ e          -> goE e
+        Assert e1 e2          -> goE e1  || goE e2
+        Assume e1 e2          -> goE e1  || goE e2
+        _                     -> False
+
+    goF :: PreOpenFun arr env f -> Bool
+    goF (Body e)  = goE e
+    goF (Lam _ f) = goF f
 
