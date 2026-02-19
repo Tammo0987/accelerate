@@ -214,12 +214,6 @@ data PreOpenAcc (op :: Type -> Type) env a where
   Aassume :: Exp env PrimBool
           -> PreOpenAcc op env Word8
 
-
-  -- TODO(Mike): Hier moet ook een Atrace type komen
-  Atrace :: Message arrs1
-         -> PreOpenAcc op env t
-         -> PreOpenAcc op env Word8
-
   -- | Compiler fence, to prevent the compiler from reordering the computation
   -- of the given variables past this point.
   --
