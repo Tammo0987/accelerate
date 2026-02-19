@@ -45,7 +45,6 @@ import Data.Array.Accelerate.AST.Operation hiding (OperationAcc, OperationAfun)
 import Prelude hiding ( take )
 import Data.Bifunctor
 import Data.Maybe (isJust, fromMaybe)
-import Data.Array.Accelerate.Trafo.Lowering (ArrayDescriptor(..))
 import Data.Array.Accelerate.Trafo.Operation.Simplify (SimplifyOperation(..))
 import Data.Array.Accelerate.Representation.Array (Array, Buffer, Buffers, ArrayR (..))
 import Data.Array.Accelerate.AST.LeftHandSide

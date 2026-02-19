@@ -342,15 +342,6 @@ lower = lowerOpenAcc Empty
 lowerAfun :: (HasCallStack, LowerAcc op) => Named.Afun a -> OperationAfun op () (LoweredAfun a)
 lowerAfun = lowerOpenAfun Empty
 
-data ArrayDescriptor env a where
-  ArrayDescriptor :: ShapeR sh
-                  -> GroundVars env sh
-                  -> GroundVars env (Buffers e)
-                  -> ArrayDescriptor env (Array sh e)
-
-weakenArrayDescriptor :: env :> env' -> ArrayDescriptor env a -> ArrayDescriptor env' a
-weakenArrayDescriptor k (ArrayDescriptor shr sh buffers) = ArrayDescriptor shr (weakenVars k sh) (weakenVars k buffers)
-
 type BEnv benv = Env (ArrayDescriptor benv)
 
 lowerOpenAcc :: forall op benv aenv a.
@@ -919,7 +910,15 @@ lowerOpenAcc env = travA
               $ aletUnique lhsOut (lowerAlloc (ArrayR shr tp3) (valueSh weakenId))
               $ alet (LeftHandSideWildcard TupRunit) (mkStencil2 sr1 sr2 argF b1' argIn1 b2' argIn2 argOut)
               $ Return (sh `TupRpair` valueOut weakenId)
-      Named.Atrace _ _ _ -> error "implement me"
+      Named.Atrace (Named.Message _ _ text) as bs
+        | repr <- Named.arraysR as
+        , DeclareVars lhs k value <- declareVars repr
+        , LoweredLHS env' lhs' <- lowerLHS env lhs ->
+          alet lhs' (travA as)
+            $ alet (LeftHandSideSingle $ GroundRscalar $ scalarTypeWord8)
+              (Atrace text $ mapTupR (\var -> prj' (varIdx var) env') $ value weakenId)
+            $ Fence (IdxSet.singleton ZeroIdx)
+            $ lowerOpenAcc (weakenBEnv (weakenSucc' $ weakenWithLHS lhs') env) bs
 
 isUndef :: Named.OpenExp aenv env a -> Bool
 isUndef (Let _ _ e) = isUndef e
