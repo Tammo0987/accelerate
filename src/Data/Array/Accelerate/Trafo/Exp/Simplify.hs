@@ -307,19 +307,19 @@ simplifyOpenExp env = first getAny . cvtE
     shouldInline Const{} = True
     shouldInline _ = False
 
-    -- TODO(Daniel): comment
     select :: PreOpenExp arr env PrimBool
            -> (Any, PreOpenExp arr env t)
            -> (Any, PreOpenExp arr env t)
            -> (Any, PreOpenExp arr env t)
     select p t@(_,t') e@(_,e')
-      | Just Refl <- matchTypeR (expType t') (expType p)
-      , Const _ 0 <- e'
-      = yes $ PrimApp PrimLAnd (Pair p t')  -- p && t' = p ? t : 0
-      | Just Refl <- matchTypeR (expType e') (expType p)
-      , Const _ 1 <- t'
-      = yes $ PrimApp PrimLOr (Pair p e')   -- p || e' = p ? 1 : e
-      | otherwise = Select p <$> t <*> e
+      | Just Refl <- matchTypeR (expType t') (TupRsingle scalarTypeWord8)
+      = case (t', e') of
+        (_        , Const _ 0) -> yes $ PrimApp PrimLAnd (Pair p t')                    -- p ? t : 0 => p && t
+        (Const _ 0, _        ) -> yes $ PrimApp PrimLAnd (Pair (PrimApp PrimLNot p) e') -- p ? 0 : e => (not p) && e
+        (Const _ 1, _        ) -> yes $ PrimApp PrimLOr  (Pair p e')                    -- p ? 1 : e => p || e
+        (_        , Const _ 1) -> yes $ PrimApp PrimLOr  (Pair (PrimApp PrimLNot p) t') -- p ? t : 1 => (not p) || t
+        _                      -> Select p <$> t <*> e
+      | otherwise              =  Select p <$> t <*> e
 
     -- Simplify conditional expressions, in particular by eliminating branches
     -- when the predicate is a known constant.
