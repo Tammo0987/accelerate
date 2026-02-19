@@ -39,6 +39,8 @@ module Data.Array.Accelerate.AST.Operation (
 
   Var', Exp', Fun', In, Out, Mut,
 
+  ArrayDescriptor(..), weakenArrayDescriptor,
+
   OpenExp, OpenFun, Exp, Fun, ArrayInstr(..),
   expGroundVars, funGroundVars, arrayInstrsInExp, arrayInstrsInFun,
 
@@ -185,6 +187,10 @@ data PreOpenAcc (op :: Type -> Type) env a where
           -> GroundVars     env a
           -> PreOpenAcc  op env a
 
+  Atrace :: Text
+         -> TupR (ArrayDescriptor env) t
+         -> PreOpenAcc op env Word8
+
   -- | Asserts that the given expression evaluates to true.
   --
   -- The return value of this operation is intentionally not specified.
@@ -289,6 +295,15 @@ pairUniqueness (TupRsingle Shared) = (TupRsingle Shared, TupRsingle Shared)
 rnfUniqueness :: Uniqueness t -> ()
 rnfUniqueness Unique = ()
 rnfUniqueness Shared = ()
+
+data ArrayDescriptor env a where
+  ArrayDescriptor :: ShapeR sh
+                  -> GroundVars env sh
+                  -> GroundVars env (Buffers e)
+                  -> ArrayDescriptor env (Array sh e)
+
+weakenArrayDescriptor :: env :> env' -> ArrayDescriptor env a -> ArrayDescriptor env' a
+weakenArrayDescriptor k (ArrayDescriptor shr sh buffers) = ArrayDescriptor shr (weakenVars k sh) (weakenVars k buffers)
 
 -- | The arguments to be passed to an operation of type `t`.
 -- This type is represented as a cons list, separated by (->) and ending
