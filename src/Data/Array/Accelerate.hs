@@ -375,7 +375,7 @@ module Data.Array.Accelerate (
 
   -- *** Flow control
   (?), match, cond, while, iterate,
-  Assert(assert),
+  Assert(assert, assertMessage),
 
   -- *** Scalar reduction
   sfoldl,

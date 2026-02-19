@@ -210,7 +210,7 @@ evalOpenAcc (OpenAcc pacc) aenv =
 
     Aassert msg cond acc
       | toBool (evalE cond)       -> manifest acc
-      | otherwise                 -> error ("Assertion failed:\n" ++ DT.unpack msg)
+      | otherwise                 -> error ("*** Assertion failed: " ++ DT.unpack msg)
 
     Aassume _ acc                 -> manifest acc
 
@@ -954,7 +954,7 @@ evalOpenExp pexp runarr env =
 
     Assert msg c e
       | toBool (evalE c)        -> evalE e
-      | otherwise               -> error $ "Assertion failed:\n" ++ DT.unpack msg
+      | otherwise               -> error $ "*** Assertion failed: " ++ DT.unpack msg
     
     Assume _ e                  -> evalE e
 

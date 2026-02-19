@@ -499,7 +499,7 @@ executeEffect env = \case
     writeIORef ioref value
   S.Aassert msg cond
     | runIdentity (evalExp cond $ evalArrayInstrDefault env) == 1 -> return ()
-    | otherwise -> error ("Assertion failed:\n" ++ T.unpack msg)
+    | otherwise -> error ("*** Assertion failed: " ++ T.unpack msg)
   where
     await :: Idx env S.Signal -> IO ()
     await idx = do
@@ -876,7 +876,7 @@ evalOpenExp pexp env arr@(EvalArrayInstr runArrayInstr) =
 
     Assert msg g e -> do
       g' <- evalE g
-      (if toBool g' then evalE e else error ("Assertion failed:\n" ++ T.unpack msg))
+      (if toBool g' then evalE e else error ("*** Assertion failed: " ++ T.unpack msg))
 
     Assume _ e -> evalE e
 

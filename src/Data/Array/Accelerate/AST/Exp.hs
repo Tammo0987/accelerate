@@ -520,7 +520,7 @@ rnfOpenExp topExp =
     ArrayInstr arr e          -> rnfArrayInstr arr `seq` rnfE e
     ShapeSize shr sh          -> rnfShapeR shr `seq` rnfE sh
     Coerce t1 t2 e            -> rnfScalarType t1 `seq` rnfScalarType t2 `seq` rnfE e
-    Assert _ e1 e2            -> rnfE e1 `seq` rnfE e2
+    Assert msg e1 e2          -> rnf msg `seq` rnfE e1 `seq` rnfE e2
     Assume e1 e2              -> rnfE e1 `seq` rnfE e2
 
 rnfExpVar :: ExpVar env t -> ()
