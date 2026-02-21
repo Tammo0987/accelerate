@@ -103,6 +103,11 @@ reindexArrayInstr' k (Parameter v) = Parameter <$> reindexVar' k v
 reindexExp' :: (Applicative f, RebuildableExp e) => SunkReindexPartial f benv benv' -> e (ArrayInstr benv) env t -> f (e (ArrayInstr benv') env t)
 reindexExp' k = rebuildArrayInstrPartial (rebuildArrayInstrMap $ reindexArrayInstr' k)
 
+reindexArrayDescriptor' :: (Applicative f) => SunkReindexPartial f env env' -> TupR (ArrayDescriptor env) t -> f (TupR (ArrayDescriptor env') t)
+reindexArrayDescriptor' _ TupRunit = pure $ TupRunit
+reindexArrayDescriptor' k (TupRsingle (ArrayDescriptor shape sh buffer)) = TupRsingle <$> (ArrayDescriptor shape <$> reindexVars' k sh <*> reindexVars' k buffer)
+reindexArrayDescriptor' k (TupRpair l r) = TupRpair <$> reindexArrayDescriptor' k l <*> reindexArrayDescriptor' k r
+
 reindexIdxSet'
   :: forall f env env' . Applicative f
   => SunkReindexPartial f env env'
@@ -127,6 +132,7 @@ reindexA' k = \case
     Unit var -> Unit <$> reindexVar' k var
     Acond c t f -> Acond <$> reindexVar' k c <*> travA t <*> travA f
     Awhile uniqueness c f i -> Awhile uniqueness <$> reindexAfun' k c <*> reindexAfun' k f <*> reindexVars' k i
+    Atrace msg t -> Atrace msg <$> reindexArrayDescriptor' k t
     Aassert msg g -> Aassert msg <$> reindexExp' k g
     Aassume g -> Aassume <$> reindexExp' k g
     Fence set next -> Fence <$> reindexIdxSet' k set <*> travA next
@@ -183,6 +189,7 @@ makeManifest acc = case acc of
   -- condition is evaluated at compile time.
   Acond c t f -> Acond c (makeManifest t) (makeManifest f)
   Awhile{} -> acc -- Can't fuse anyway
+  Atrace{} -> acc -- Same as compute
   Return vars -> go vars
   Fence set next -> Fence set $ makeManifest next
   where
