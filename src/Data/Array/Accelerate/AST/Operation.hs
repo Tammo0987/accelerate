@@ -429,7 +429,7 @@ instance HasGroundsR (PreOpenAcc op env) where
   groundsR (Awhile _ _ _ a)  = groundsR a
   groundsR (Aassert _ _)     = TupRsingle $ GroundRscalar scalarTypeWord8
   groundsR (Aassume _)       = TupRsingle $ GroundRscalar scalarTypeWord8
-  groundsR (Atrace _ _)      = TupRsingle $ GroundRscalar scalarTypeWord8 -- TODO(Mike)
+  groundsR (Atrace _ _)      = TupRsingle $ GroundRscalar scalarTypeWord8
   groundsR (Fence _ a)       = groundsR a
 
 instance HasGroundsR (GroundVar env) where
@@ -587,13 +587,20 @@ reindexAcc r (Acond var poa poa') = Acond <$> reindexVar r var <*> reindexAcc r 
 reindexAcc r (Awhile tr poa poa' tr') = Awhile tr <$> reindexAfun r poa <*> reindexAfun r poa' <*> reindexVars r tr'
 reindexAcc r (Aassert msg cond) = Aassert msg <$> reindexExp r cond
 reindexAcc r (Aassume cond) = Aassume <$> reindexExp r cond
-reindexAcc r (Atrace msg e) = Atrace msg <$> reindexAcc r e -- TODO(Mike)
+reindexAcc r (Atrace msg t) = Atrace msg <$> reindexTupR (reindexArrayDescriptor r) t -- TODO(Mike)
 reindexAcc r (Fence set e) = Fence <$> reindexIdxSet r set <*> reindexAcc r e
+
+reindexArrayDescriptor :: Applicative f => ReindexPartial f env env' -> ArrayDescriptor env a -> f (ArrayDescriptor env' a)
+reindexArrayDescriptor k (ArrayDescriptor shr sh buffers) = ArrayDescriptor shr <$> reindexVars k sh <*> reindexVars k buffers
+
+reindexTupR :: (Applicative f) => (forall a. s a -> f (s' a)) -> TupR s t -> f (TupR s' t)
+reindexTupR _ TupRunit = pure TupRunit
+reindexTupR f (TupRsingle a) = TupRsingle <$> f a
+reindexTupR f (TupRpair t1 t2) = TupRpair <$> reindexTupR f t1 <*> reindexTupR f t2
 
 reindexAfun :: Applicative f => ReindexPartial f env env' -> PreOpenAfun op env t -> f (PreOpenAfun op env' t)
 reindexAfun r (Abody poa) = Abody <$> reindexAcc r poa
 reindexAfun r (Alam lhs poa) = reindexLHS r lhs $ \lhs' r' -> Alam lhs' <$> reindexAfun r' poa
-
 
 reindexLHS :: Applicative f => ReindexPartial f env env' -> LeftHandSide s t env env1 -> (forall env1'. LeftHandSide s t env' env1' -> ReindexPartial f env1 env1' -> r) -> r
 reindexLHS r (LeftHandSideSingle st) k = k (LeftHandSideSingle st) $ \case
@@ -673,7 +680,7 @@ mapAccExecutable f = \case
   Awhile uniqueness c g a       -> Awhile uniqueness (mapAfunExecutable f c) (mapAfunExecutable f g) a
   Aassert msg cond              -> Aassert msg cond
   Aassume cond                  -> Aassume cond
-  Atrace msg e                  -> Atrace msg (mapAccExecutable f e) -- TODO(Mike)
+  Atrace msg t                  -> Atrace msg t
   Fence set e                   -> Fence set (mapAccExecutable f e)
 
 mapAfunExecutable :: (forall args benv'. op args -> Args benv' args -> op' args) -> PreOpenAfun op benv t -> PreOpenAfun op' benv t
@@ -707,8 +714,11 @@ instance NFData' op => NFData (OperationAcc op env a) where
   rnf (Awhile us cond step initial) = rnfTupR rnfUniqueness us `seq` rnf cond `seq` rnf step `seq` rnfGroundVars initial
   rnf (Aassert _ cond)              = rnfOpenExp cond
   rnf (Aassume cond)                = rnfOpenExp cond
-  rnf (Atrace _ a)                  = rnf a -- TODO(Mike)
+  rnf (Atrace _ t)                  = rnfTupR rnf t
   rnf (Fence set a)                 = IdxSet.rnfIdxSet set `seq` rnf a
+
+instance NFData (ArrayDescriptor env a) where
+  rnf (ArrayDescriptor shr sh buffers) = rnfShapeR shr `seq` rnfGroundVars sh `seq` rnfGroundVars buffers
 
 instance NFData' op => NFData (OperationAfun op env a) where
   rnf (Abody a) = rnf a
