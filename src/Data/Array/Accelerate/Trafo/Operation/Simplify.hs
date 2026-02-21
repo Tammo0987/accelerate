@@ -343,6 +343,16 @@ simplify' uniquenesses = \case
               $ awhileSimplifyInvariant us (cond' env') (step' env') $ simplifyReturnVars env us initial
       )
 
+  Atrace msg t ->
+    let 
+      set = arrayDescriptorIdxSet t
+    in 
+      ( set
+      , \env ->
+        fence (syncSubstitutes env set)
+        $ trace msg $ simplifyArrayDescriptor env t
+    )
+
   Aassert msg cond ->
     ( IdxSet.empty
     , \env ->
@@ -378,6 +388,16 @@ simplify' uniquenesses = \case
               deps'
               (next' env')
       )
+
+arrayDescriptorIdxSet :: TupR (ArrayDescriptor env) t -> IdxSet env
+arrayDescriptorIdxSet TupRunit = IdxSet.empty
+arrayDescriptorIdxSet (TupRsingle (ArrayDescriptor _ sh buffers)) = IdxSet.fromVars sh `IdxSet.union` IdxSet.fromVars buffers
+arrayDescriptorIdxSet (TupRpair l r) = arrayDescriptorIdxSet l `IdxSet.union` arrayDescriptorIdxSet r
+
+simplifyArrayDescriptor :: InfoEnv env -> TupR (ArrayDescriptor env) t -> TupR (ArrayDescriptor env) t
+simplifyArrayDescriptor _ TupRunit = TupRunit
+simplifyArrayDescriptor env (TupRsingle (ArrayDescriptor shape sh buffers)) = TupRsingle (ArrayDescriptor shape (mapTupR (weaken $ substitute env) sh) (mapTupR (weaken $ substitute env) buffers))
+simplifyArrayDescriptor env (TupRpair l r) = TupRpair (simplifyArrayDescriptor env l) (simplifyArrayDescriptor env r)
 
 -- Given an environment, the set of updated variables and a list of copies of
 -- an operation, checks whether the operation copies all its outputs from
@@ -702,6 +722,10 @@ subTupSubstitution (SubTupRpair s1 s2) (LeftHandSidePair l1 l2) (TupRpair v1 v2)
 subTupSubstitution s (LeftHandSideWildcard t) _
   = SubTupSubstitution (LeftHandSideWildcard $ subTupR s t) weakenId
 subTupSubstitution _ _ _ = internalError "Tuple mismatch"
+
+trace :: Text -> TupR (ArrayDescriptor env) t -> PreOpenAcc op env Word8
+trace _ TupRunit = Compute (Const scalarTypeWord8 1)
+trace msg t = Atrace msg t
 
 assert :: Text -> Exp env PrimBool -> OperationAcc op env Word8
 assert _ (Const _ 1) = Compute (Const scalarTypeWord8 1)
