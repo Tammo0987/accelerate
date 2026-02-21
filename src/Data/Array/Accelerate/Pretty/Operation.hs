@@ -103,6 +103,8 @@ prettyOpenAcc env = \case
         <> hardline <> hang 4 ("  ( " <> prettyOpenAfun env step)
         <> hardline <> "  )"
         <> hardline <> indent 2 (prettyVars (val env) 10 initial)
+  Atrace msg t ->
+    hang 2 (group $ vsep [annotate Statement "atrace", prettyText msg, prettyArrayDescriptor (val env) t])
   Aassert msg g ->
     hang 2 (group $ vsep [annotate Statement "assert", prettyText msg, prettyExp (val env) g])
   Aassume g ->
@@ -111,6 +113,11 @@ prettyOpenAcc env = \case
     hang 2 (group $ vsep [annotate Statement "fence", prettyIdxSet (val env) set])
     <> hardline
     <> prettyOpenAcc env next
+
+prettyArrayDescriptor :: Val env -> TupR (ArrayDescriptor env) t -> Adoc
+prettyArrayDescriptor _ TupRunit = "[]"
+prettyArrayDescriptor env (TupRsingle (ArrayDescriptor _ sh buffer)) = prettyShapeVars env sh <+> " " <+> prettyVars env 0 buffer
+prettyArrayDescriptor env (TupRpair l r) = prettyArrayDescriptor env l <+> " " <+> prettyArrayDescriptor env r
 
 prettyArgs :: Val benv -> Args benv f -> Adoc
 prettyArgs env args = tupled $ map (\(Exists a) -> prettyArg env a) $ argsToList args
