@@ -58,7 +58,8 @@ atrace message (Acc result)
   = Acc
   $ SmartAcc
   $ Atrace (Message (\_ -> "")
-           (Just [|| \_ -> "" ||]) message) (SmartAcc Anil :: SmartAcc ()) result
+          --  (Just [|| \_ -> "" ||]) message) (SmartAcc Anil :: SmartAcc ()) result
+            (Just [||\_ -> ""||]) message) result result --TODO(Mike): Waarom was dit?
 
 -- | Outputs the trace message and the array(s) from the second argument to
 -- the console, before the 'Acc' computation proceeds with the result of
