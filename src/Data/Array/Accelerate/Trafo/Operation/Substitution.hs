@@ -104,9 +104,7 @@ reindexExp' :: (Applicative f, RebuildableExp e) => SunkReindexPartial f benv be
 reindexExp' k = rebuildArrayInstrPartial (rebuildArrayInstrMap $ reindexArrayInstr' k)
 
 reindexArrayDescriptor' :: (Applicative f) => SunkReindexPartial f env env' -> TupR (ArrayDescriptor env) t -> f (TupR (ArrayDescriptor env') t)
-reindexArrayDescriptor' _ TupRunit = pure $ TupRunit
-reindexArrayDescriptor' k (TupRsingle (ArrayDescriptor shape sh buffer)) = TupRsingle <$> (ArrayDescriptor shape <$> reindexVars' k sh <*> reindexVars' k buffer)
-reindexArrayDescriptor' k (TupRpair l r) = TupRpair <$> reindexArrayDescriptor' k l <*> reindexArrayDescriptor' k r
+reindexArrayDescriptor' k = traverseTupR (\(ArrayDescriptor shape sh buffer) -> ArrayDescriptor shape <$> reindexVars' k sh <*> reindexVars' k buffer)
 
 reindexIdxSet'
   :: forall f env env' . Applicative f

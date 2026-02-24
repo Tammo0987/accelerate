@@ -115,9 +115,7 @@ prettyOpenAcc env = \case
     <> prettyOpenAcc env next
 
 prettyArrayDescriptor :: Val env -> TupR (ArrayDescriptor env) t -> Adoc
-prettyArrayDescriptor _ TupRunit = "[]"
-prettyArrayDescriptor env (TupRsingle (ArrayDescriptor _ sh buffer)) = prettyShapeVars env sh <+> " " <+> prettyVars env 0 buffer
-prettyArrayDescriptor env (TupRpair l r) = prettyArrayDescriptor env l <+> " " <+> prettyArrayDescriptor env r
+prettyArrayDescriptor env = foldMapTupR (\(ArrayDescriptor _ sh buffer) -> prettyShapeVars env sh <+> " " <+> prettyVars env 0 buffer)
 
 prettyArgs :: Val benv -> Args benv f -> Adoc
 prettyArgs env args = tupled $ map (\(Exists a) -> prettyArg env a) $ argsToList args

@@ -587,7 +587,7 @@ reindexAcc r (Acond var poa poa') = Acond <$> reindexVar r var <*> reindexAcc r 
 reindexAcc r (Awhile tr poa poa' tr') = Awhile tr <$> reindexAfun r poa <*> reindexAfun r poa' <*> reindexVars r tr'
 reindexAcc r (Aassert msg cond) = Aassert msg <$> reindexExp r cond
 reindexAcc r (Aassume cond) = Aassume <$> reindexExp r cond
-reindexAcc r (Atrace msg t) = Atrace msg <$> reindexTupR (reindexArrayDescriptor r) t -- TODO(Mike)
+reindexAcc r (Atrace msg t) = Atrace msg <$> reindexTupR (reindexArrayDescriptor r) t
 reindexAcc r (Fence set e) = Fence <$> reindexIdxSet r set <*> reindexAcc r e
 
 reindexArrayDescriptor :: Applicative f => ReindexPartial f env env' -> ArrayDescriptor env a -> f (ArrayDescriptor env' a)
