@@ -332,8 +332,8 @@ boundsOptimizeExp env@(BoundsEnv _ _ zero _) expr = detectConst env $ case expr 
     Const _ 0 -> boundsOptimizeExp env f
 
     c'
-      | (trueBounds, t') <- boundsOptimizeExp (assumeTrue env c') t
-      , (falseBounds, f') <- boundsOptimizeExp (assumeFalse env c') f ->
+      | (trueBounds, t') <- boundsOptimizeExp env t
+      , (falseBounds, f') <- boundsOptimizeExp env f ->
         ( unions (makeTransitives env trueBounds) (makeTransitives env falseBounds)
         , Select c' t' f' )
 
