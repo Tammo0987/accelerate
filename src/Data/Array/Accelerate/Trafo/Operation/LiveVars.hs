@@ -31,6 +31,9 @@ module Data.Array.Accelerate.Trafo.Operation.LiveVars (
   defaultSlvGenerate, defaultSlvMap, defaultSlvBackpermute,
 ) where
 
+--TODO(Mike): Is dit de oplossing?
+import Data.Array.Accelerate.Trafo.Operation.Simplify (arrayDescriptorIdxSet)
+
 import qualified Data.Array.Accelerate.AST.IdxSet as IdxSet
 import Data.Array.Accelerate.AST.Var
 import Data.Array.Accelerate.AST.LeftHandSide
@@ -211,6 +214,15 @@ stronglyLiveVariables' liveness returns us = \case
         liveness3
         $ \re _ ->
           Left $ Awhile us' (condition' re) (step' re) $ expectJust $ reEnvVars re initial
+  Atrace msg t
+    | free <- arrayDescriptorIdxSet t
+    , liveness1 <- setIdxSetLive free liveness ->
+      LVAnalysis
+        liveness1
+        $ \re s -> case s of
+          SubTupRkeep -> Right $ Atrace msg $ reEnvArrayDescriptor re t
+          SubTupRskip -> Right $ Return TupRunit
+
   Fence set next
     | liveness1 <- setIdxSetLive set liveness
     , LVAnalysis liveness2 next' <- stronglyLiveVariables' liveness1 returns us next ->
@@ -347,6 +359,9 @@ reEnvArg re (ArgVar vars) = ArgVar $ expectJust $ reEnvVars re vars
 reEnvArg re (ArgExp expr) = ArgExp $ mapArrayInstr (reEnvArrayInstr re) expr
 reEnvArg re (ArgFun f)    = ArgFun $ mapArrayInstrFun (reEnvArrayInstr re) f
 reEnvArg re (ArgArray m repr sh buffers) = ArgArray m repr (expectJust $ reEnvVars re sh) (expectJust $ reEnvVars re buffers)
+
+reEnvArrayDescriptor :: ReEnv env subenv -> TupR (ArrayDescriptor env) t ->  TupR (ArrayDescriptor subenv) t
+reEnvArrayDescriptor re = expectJust . traverseTupR (\(ArrayDescriptor shape sh buffer) -> ArrayDescriptor shape <$> reEnvVars re sh <*> reEnvVars re buffer)
 
 -- Captures existential f'
 data ReEnvSubArgs subenv f where
