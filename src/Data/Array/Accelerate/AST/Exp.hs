@@ -186,6 +186,11 @@ data PreOpenExp arr env t where
                 -> PreOpenExp arr env a               -- initial value
                 -> PreOpenExp arr env a
 
+  Trace         :: Text
+                -> PreOpenExp arr aenv arrs1
+                -> PreOpenExp arr aenv arrs2
+                -> PreOpenExp arr aenv arrs2  
+
   -- Constant values
   Const         :: ScalarType t
                 -> t
