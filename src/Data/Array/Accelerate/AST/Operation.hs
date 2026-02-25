@@ -52,7 +52,7 @@ module Data.Array.Accelerate.AST.Operation (
 
   paramIn, paramsIn, paramIn', paramsIn',
 
-  ReindexPartial, reindexArg, reindexArgs, reindexExp, reindexPreArgs, reindexVar, reindexVars,
+  ReindexPartial, reindexArg, reindexArgs, reindexExp, reindexPreArgs, reindexVar, reindexVars, reindexTupR, reindexArrayDescriptor,
   reindexIdxSet,
   weakenReindex,
   argVars, argsVars, argsInputs, argsOutputs, AccessGroundR(..),
