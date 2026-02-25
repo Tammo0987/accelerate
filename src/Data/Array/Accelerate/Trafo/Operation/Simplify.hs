@@ -344,9 +344,9 @@ simplify' uniquenesses = \case
       )
 
   Atrace msg t ->
-    let 
+    let
       set = arrayDescriptorIdxSet t
-    in 
+    in
       ( set
       , \env ->
         fence (syncSubstitutes env set)
@@ -389,15 +389,14 @@ simplify' uniquenesses = \case
               (next' env')
       )
 
+-- TODO(Mike): vragen aan Ivo of die dit ook om gezet wilt hebben en dan eventueel een monoid gebruiken?
 arrayDescriptorIdxSet :: TupR (ArrayDescriptor env) t -> IdxSet env
 arrayDescriptorIdxSet TupRunit = IdxSet.empty
 arrayDescriptorIdxSet (TupRsingle (ArrayDescriptor _ sh buffers)) = IdxSet.fromVars sh `IdxSet.union` IdxSet.fromVars buffers
 arrayDescriptorIdxSet (TupRpair l r) = arrayDescriptorIdxSet l `IdxSet.union` arrayDescriptorIdxSet r
 
 simplifyArrayDescriptor :: InfoEnv env -> TupR (ArrayDescriptor env) t -> TupR (ArrayDescriptor env) t
-simplifyArrayDescriptor _ TupRunit = TupRunit
-simplifyArrayDescriptor env (TupRsingle (ArrayDescriptor shape sh buffers)) = TupRsingle (ArrayDescriptor shape (mapTupR (weaken $ substitute env) sh) (mapTupR (weaken $ substitute env) buffers))
-simplifyArrayDescriptor env (TupRpair l r) = TupRpair (simplifyArrayDescriptor env l) (simplifyArrayDescriptor env r)
+simplifyArrayDescriptor env = mapTupR (\(ArrayDescriptor shape sh buffers) -> ArrayDescriptor shape (mapTupR (weaken $ substitute env) sh) (mapTupR (weaken $ substitute env) buffers))
 
 -- Given an environment, the set of updated variables and a list of copies of
 -- an operation, checks whether the operation copies all its outputs from
