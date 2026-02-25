@@ -331,61 +331,59 @@ simplifyOpenExp env = first getAny . cvtE
       | otherwise                       = Cond p <$> t <*> e
 
     isCheap :: PreOpenExp arr env t -> Bool
-    isCheap = maybe False (<= maxCost) . calculateCost
+    isCheap = maybe False (<= maxCost) . expCost
       where
         maxCost = 5
 
-        calculateCost :: PreOpenExp arr env' t -> Maybe Int
-        calculateCost = go
+        expCost :: PreOpenExp arr env' t -> Maybe Int
+        expCost exp = case exp of
+          ArrayInstr a _   -> if inlineArrayInstr a
+                               then Just 1
+                               else Nothing
+          Evar{}           -> Just 1
+          Nil              -> Just 1
+          Const{}          -> Just 1
+          Undef{}          -> Just 1
+          PrimApp f e      -> primCost f .+. expCost e
+          Let _ bnd body   -> Just 1     .+. expCost bnd .+. expCost body
+          Pair e1 e2       -> Just 1     .+. expCost e1  .+. expCost e2
+          VecPack _ e      -> Just 1     .+. expCost e
+          VecUnpack _ e    -> Just 1     .+. expCost e
+          Coerce _ _ e     -> Just 1     .+. expCost e
+          Assume e1 e2     -> Just 1     .+. expCost e1  .+. expCost e2
+          Foreign{}        -> Nothing
+          ToIndex{}        -> Nothing
+          FromIndex{}      -> Nothing
+          Case{}           -> Nothing
+          Cond{}           -> Nothing
+          Select{}         -> Nothing
+          While{}          -> Nothing
+          ShapeSize{}      -> Nothing
+          Assert{}         -> Nothing
 
-        go :: PreOpenExp arr env' t -> Maybe Int
-        go exp =
-          case exp of
-            ArrayInstr a _             -> if inlineArrayInstr a
-                                           then Just 1
-                                           else Nothing
-            Evar{}                     -> Just 1
-            Nil                        -> Just 1
-            Const{}                    -> Just 1
-            Undef{}                    -> Just 1
-
-            PrimApp (PrimAdd _) _      -> Just 1
-            PrimApp (PrimSub _) _      -> Just 1
-            PrimApp (PrimMul _) _      -> Just 1
-            PrimApp (PrimNeg _) _      -> Just 1
-            PrimApp (PrimAbs _) _      -> Just 1
-            PrimApp (PrimSig _) _      -> Just 1
-            PrimApp (PrimBAnd _) _     -> Just 1
-            PrimApp (PrimBOr _) _      -> Just 1
-            PrimApp (PrimBXor _) _     -> Just 1
-            PrimApp (PrimBNot _) _     -> Just 1
-            PrimApp (PrimBShiftL _) _  -> Just 1
-            PrimApp (PrimBShiftR _) _  -> Just 1
-            PrimApp (PrimBRotateL _) _ -> Just 1
-            PrimApp (PrimBRotateR _) _ -> Just 1
-            PrimApp (PrimCmp _ _) _    -> Just 1
-            PrimApp (PrimMax _) _      -> Just 1
-            PrimApp (PrimMin _) _      -> Just 1
-            PrimApp PrimLAnd _         -> Just 1
-            PrimApp PrimLOr _          -> Just 1
-            PrimApp PrimLNot _         -> Just 1
-            PrimApp{}                  -> Nothing
-
-            Let _ bnd body             -> Just 1 .+. go bnd .+. go body
-            Pair e1 e2                 -> Just 1 .+. go e1  .+. go e2
-            VecPack _ e                -> Just 1 .+. go e
-            VecUnpack _ e              -> Just 1 .+. go e
-            Coerce _ _ e               -> Just 1 .+. go e
-            Assume e1 e2               -> Just 1 .+. go e1  .+. go e2
-            Foreign{}                  -> Nothing
-            ToIndex{}                  -> Nothing
-            FromIndex{}                -> Nothing
-            Case{}                     -> Nothing
-            Cond{}                     -> Nothing
-            Select{}                   -> Nothing
-            While{}                    -> Nothing
-            ShapeSize{}                -> Nothing
-            Assert{}                   -> Nothing
+        primCost :: PrimFun f -> Maybe Int
+        primCost f = case f of
+          (PrimAdd _)      -> Just 1
+          (PrimSub _)      -> Just 1
+          (PrimMul _)      -> Just 1
+          (PrimNeg _)      -> Just 1
+          (PrimAbs _)      -> Just 1
+          (PrimSig _)      -> Just 1
+          (PrimBAnd _)     -> Just 1
+          (PrimBOr _)      -> Just 1
+          (PrimBXor _)     -> Just 1
+          (PrimBNot _)     -> Just 1
+          (PrimBShiftL _)  -> Just 1
+          (PrimBShiftR _)  -> Just 1
+          (PrimBRotateL _) -> Just 1
+          (PrimBRotateR _) -> Just 1
+          (PrimCmp _ _)    -> Just 1
+          (PrimMax _)      -> Just 1
+          (PrimMin _)      -> Just 1
+          PrimLAnd         -> Just 1
+          PrimLOr          -> Just 1
+          PrimLNot         -> Just 1
+          _                -> Nothing
 
         (.+.) :: Maybe Int -> Maybe Int -> Maybe Int
         a .+. b = (+) <$> a <*> b
