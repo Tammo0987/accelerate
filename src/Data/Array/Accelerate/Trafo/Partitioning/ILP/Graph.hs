@@ -26,6 +26,9 @@ module Data.Array.Accelerate.Trafo.Partitioning.ILP.Graph where
 import Prelude hiding ( init, reads )
 
 -- Accelerate imports
+-- TODO(Mike): Dit weghalen als dat nodig blijkt?
+import Data.Array.Accelerate.Trafo.Operation.Simplify (arrayDescriptorIdxSet)
+
 import Data.Array.Accelerate.AST.Idx
 import Data.Array.Accelerate.AST.IdxSet (IdxSet(..))
 import qualified Data.Array.Accelerate.AST.IdxSet as IdxSet
@@ -568,6 +571,7 @@ data Symbol (op :: Type -> Type) where
   SCmp  :: Env env -> Exp env a                                                        -> Symbol op
   SAlc  :: Env env -> ShapeR sh -> ScalarType e -> ExpVars env sh                      -> Symbol op
   SUnt  :: Env env -> ExpVar env e                                                     -> Symbol op
+  SAtr  :: Text -> Env env -> TupR (ArrayDescriptor env) t                             -> Symbol op
   SAsr  :: Text -> Env env -> Exp env PrimBool                                         -> Symbol op
   SAsu  :: Env env -> Exp env PrimBool                                                 -> Symbol op
   SFen  :: Env env -> IdxSet env                                                       -> Symbol op
@@ -587,6 +591,7 @@ instance Show (Symbol op) where
   show (SCmp {}) = "Cmp"
   show (SAlc {}) = "Alc"
   show (SUnt {}) = "Unt"
+  show (SAtr {}) = "Atr"
   show (SAsr {}) = "Asr"
   show (SAsu {}) = "Asu"
   show (SFen {}) = "Fen"
@@ -1045,6 +1050,13 @@ mkFusionGraph (Awhile u cond body init) = do
       (block bodyN $ mkFusionGraphU u body)
     symbol whileN ?= SWhl env condN bodyN init u
   return res                                      -- to return a fresh value of the same type as the initial value.
+
+mkFusionGraph (Atrace msg t) = do
+  c    <- freshComp
+  env  <- use environment
+  c `requiresBuffers` getIdxSetDeps (arrayDescriptorIdxSet t) env
+  symbol c ?= SAtr msg env t
+  TupRsingle <$> freshVal c (GroundRscalar scalarTypeWord8)
 
 mkFusionGraph (Aassert msg cond) = do
   c    <- freshComp
