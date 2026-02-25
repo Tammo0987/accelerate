@@ -311,9 +311,12 @@ simplifyOpenExp env = first getAny . cvtE
            -> (Any, PreOpenExp arr env t)
            -> (Any, PreOpenExp arr env t)
            -> (Any, PreOpenExp arr env t)
-    select p t e
-      | PrimApp PrimLNot c <- p = yes $ snd $ select c e t
-      | otherwise               =  Select p <$> t <*> e
+    select p t@(_,t') e@(_,e')
+      | Const _ 1 <- p                  = Stats.knownBranch "True"      (yes t')
+      | Const _ 0 <- p                  = Stats.knownBranch "False"     (yes e')
+      | Just Refl <- matchOpenExp t' e' = Stats.knownBranch "redundant" (yes e')
+      | PrimApp PrimLNot c <- p         = yes $ snd $ select c e t
+      | otherwise                       =  Select p <$> t <*> e
 
     -- Simplify conditional expressions, in particular by eliminating branches
     -- when the predicate is a known constant.
