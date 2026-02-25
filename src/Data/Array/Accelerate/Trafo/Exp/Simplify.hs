@@ -329,8 +329,8 @@ simplifyOpenExp env = first getAny . cvtE
       | Const _ 1 <- p                  = Stats.knownBranch "True"      (yes t')
       | Const _ 0 <- p                  = Stats.knownBranch "False"     (yes e')
       | Just Refl <- matchOpenExp t' e' = Stats.knownBranch "redundant" (yes e')
-      | PrimApp PrimLNot c <- p         = yes $ snd $ cond c e t
       | isCheap t' && isCheap e'        = yes $ snd $ select p t e
+      | PrimApp PrimLNot c <- p         = yes $ snd $ cond c e t
       | otherwise                       = Cond p <$> t <*> e
 
     isCheap :: PreOpenExp arr env t -> Bool
