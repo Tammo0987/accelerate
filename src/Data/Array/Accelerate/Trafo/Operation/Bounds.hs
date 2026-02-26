@@ -340,11 +340,10 @@ boundsOptimizeExp env@(BoundsEnv _ _ zero _) expr = detectConst env $ case expr 
                       (makeTransitives env falseBounds)
 
           isBoolBounds :: TermBounds (UniformEnv benv env) Word8 -> Bool
-          isBoolBounds bounds
-            | (TupRsingle bound) <- bounds
-            , (l, h) <- getBoundRange (boundsZero env) TypeWord8
-                                      (makeTransitive env bound)
-            = (l >= 0 && h <= 1) -- (0, 1) (0, 0) (1, 1)
+          isBoolBounds (TupRsingle bound) = (l >= 0 && h <= 1) -- (0, 1) (0, 0) (1, 1)
+            where
+              (l, h) = getBoundRange (boundsZero env) TypeWord8
+                                     (makeTransitive env bound)
 
           simplify
             | Just Refl <- matchTypeR (expType t') (TupRsingle scalarTypeWord8)

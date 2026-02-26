@@ -339,7 +339,7 @@ simplifyOpenExp env = first getAny . cvtE
         maxCost = 5
 
         expCost :: PreOpenExp arr env' t -> Maybe Int
-        expCost exp = case exp of
+        expCost = \case
           ArrayInstr a _   -> if inlineArrayInstr a
                                then Just 1
                                else Nothing
@@ -365,24 +365,24 @@ simplifyOpenExp env = first getAny . cvtE
           Assert{}         -> Nothing
 
         primCost :: PrimFun f -> Maybe Int
-        primCost f = case f of
-          (PrimAdd _)      -> Just 1
-          (PrimSub _)      -> Just 1
-          (PrimMul _)      -> Just 1
-          (PrimNeg _)      -> Just 1
-          (PrimAbs _)      -> Just 1
-          (PrimSig _)      -> Just 1
-          (PrimBAnd _)     -> Just 1
-          (PrimBOr _)      -> Just 1
-          (PrimBXor _)     -> Just 1
-          (PrimBNot _)     -> Just 1
-          (PrimBShiftL _)  -> Just 1
-          (PrimBShiftR _)  -> Just 1
-          (PrimBRotateL _) -> Just 1
-          (PrimBRotateR _) -> Just 1
-          (PrimCmp _ _)    -> Just 1
-          (PrimMax _)      -> Just 1
-          (PrimMin _)      -> Just 1
+        primCost = \case
+          PrimAdd _        -> Just 1
+          PrimSub _        -> Just 1
+          PrimMul _        -> Just 1
+          PrimNeg _        -> Just 1
+          PrimAbs _        -> Just 1
+          PrimSig _        -> Just 1
+          PrimBAnd _       -> Just 1
+          PrimBOr _        -> Just 1
+          PrimBXor _       -> Just 1
+          PrimBNot _       -> Just 1
+          PrimBShiftL _    -> Just 1
+          PrimBShiftR _    -> Just 1
+          PrimBRotateL _   -> Just 1
+          PrimBRotateR _   -> Just 1
+          PrimCmp _ _      -> Just 1
+          PrimMax _        -> Just 1
+          PrimMin _        -> Just 1
           PrimLAnd         -> Just 1
           PrimLOr          -> Just 1
           PrimLNot         -> Just 1
