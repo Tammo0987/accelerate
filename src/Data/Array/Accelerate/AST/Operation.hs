@@ -72,7 +72,7 @@ import Data.Array.Accelerate.AST.Environment
 import Data.Array.Accelerate.AST.Exp
 import Data.Array.Accelerate.AST.LeftHandSide
 import Data.Array.Accelerate.AST.Idx
-import Data.Array.Accelerate.AST.Var               
+import Data.Array.Accelerate.AST.Var
 import Data.Array.Accelerate.Analysis.Hash.Exp
 import Data.Array.Accelerate.Representation.Array
 import Data.Array.Accelerate.Representation.Ground
@@ -428,7 +428,7 @@ class HasGroundsR f where
 instance HasGroundsR (PreOpenAcc op env) where
   groundsR (Exec _ _)        = TupRunit
   groundsR (Return vars)     = groundsR vars
-  groundsR (Manifest var)    = groundsR var     
+  groundsR (Manifest var)    = groundsR var
   groundsR (Compute e)       = groundsR e
   groundsR (Alet _ _ _ a)    = groundsR a
   groundsR (Alloc _ tp _)    = TupRsingle $ GroundRbuffer tp
@@ -603,9 +603,7 @@ reindexArrayDescriptor :: Applicative f => ReindexPartial f env env' -> ArrayDes
 reindexArrayDescriptor k (ArrayDescriptor shr sh buffers) = ArrayDescriptor shr <$> reindexVars k sh <*> reindexVars k buffers
 
 reindexTupR :: (Applicative f) => (forall a. s a -> f (s' a)) -> TupR s t -> f (TupR s' t)
-reindexTupR _ TupRunit = pure TupRunit
-reindexTupR f (TupRsingle a) = TupRsingle <$> f a
-reindexTupR f (TupRpair t1 t2) = TupRpair <$> reindexTupR f t1 <*> reindexTupR f t2
+reindexTupR = traverseTupR 
 
 reindexAfun :: Applicative f => ReindexPartial f env env' -> PreOpenAfun op env t -> f (PreOpenAfun op env' t)
 reindexAfun r (Abody poa) = Abody <$> reindexAcc r poa

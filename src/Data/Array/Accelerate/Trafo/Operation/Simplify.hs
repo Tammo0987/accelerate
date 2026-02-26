@@ -23,7 +23,7 @@
 
 module Data.Array.Accelerate.Trafo.Operation.Simplify (
   simplify, simplifyFun, SimplifyOperation(..), CopyOperation(..), isNoOp,
-  copyOperationsForArray, detectMapCopies, detectBackpermuteCopies,
+  copyOperationsForArray, detectMapCopies, detectBackpermuteCopies
 ) where
 
 import Data.Array.Accelerate.AST.Environment
