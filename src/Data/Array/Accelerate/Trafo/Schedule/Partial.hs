@@ -772,7 +772,7 @@ buildTrace ::
 buildTrace msg t available = -- TODO(Mike): Controleren of dit wel goed is zo?
   Built{
     didChange = False,
-    directlyAwaits = arrayDescriptorsIdxSet t,
+    directlyAwaits = arrayDescriptorsIdxSet t IdxSet.\\ available,
     writes = IdxSet.empty,
     finallyReleases = IdxSet.empty,
     trivial = False,
