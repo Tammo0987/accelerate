@@ -120,7 +120,7 @@ module Data.Array.Accelerate.Prelude (
   index0, index1, unindex1, index2, unindex2, index3, unindex3,
 
   -- * Array operations with a scalar result
-  the, null, length,
+  the, length,
 
   -- * Irregular data-parallelism
   expand,
@@ -2834,11 +2834,6 @@ unindex3 (Z_ ::. k ::. j ::. i) = T3 k j i
 --
 the :: Elt e => Acc (Scalar e) -> Exp e
 the = (! index0)
-
--- | Test whether an array is empty.
---
-null :: (Shape sh, Elt e) => Acc (Array sh e) -> Exp Bool
-null arr = size arr == 0
 
 -- | Get the length of a vector.
 --

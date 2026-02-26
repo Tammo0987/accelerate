@@ -95,7 +95,7 @@ module Data.Array.Accelerate.Language (
   inbounds, inboundsOf, shapeEq,
 
   -- * Array operations with a scalar result
-  (!), (!!), shape, size, shapeSize,
+  (!), (!!), shape, size, shapeSize, null,
 
   -- * Numeric functions
   subtract, even, odd, gcd, lcm, (^), (^^),
@@ -131,10 +131,9 @@ import Data.String                                                  ( fromString
 import Prelude                                                      ( ($), (.), (<>), Maybe(..), Char )
 #if __GLASGOW_HASKELL__ >= 904
 import Data.Type.Equality
-import Data.Array.Accelerate.Smart (unExpBinaryFunction, PreSmartExp (Tag), mkExp, mkCoerce)
 #endif
 
-import qualified Prelude
+import Prelude ()
 
 -- $setup
 -- >>> :seti -XFlexibleContexts
@@ -1467,6 +1466,12 @@ size = shapeSize . shape
 shapeSize :: forall sh. Shape sh => Exp sh -> Exp Int
 shapeSize (Exp sh) = mkExp $ ShapeSize (shapeR @sh) sh
 
+-- | Test whether an array is empty.
+--
+null :: forall sh e. (Shape sh, Elt e) => Acc (Array sh e) -> Exp Bool
+null arr = isEmpty (shapeR @sh) sh
+  where
+    Exp sh = shape arr
 
 -- Numeric functions
 -- -----------------
