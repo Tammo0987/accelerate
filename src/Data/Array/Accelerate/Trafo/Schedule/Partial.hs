@@ -177,6 +177,11 @@ data PrePartialSchedule schedule kernel env t where
     -> GroundVars env t
     -> PrePartialSchedule schedule kernel env t
 
+  PAtrace
+    :: Text
+    -> TupR (ArrayDescriptor env) t
+    -> PrePartialSchedule schedule kernel env Word8
+
   -- Signals that this while loop should do another iteration.
   -- The state for the next iteration is computed by the subterm.
   PContinue
@@ -442,6 +447,7 @@ toPartial' us = \case
       ( IdxSet.drop' lhs condFree `IdxSet.union` IdxSet.drop' lhs (IdxSet.drop stepFree) `IdxSet.union` IdxSet.fromList (groundBufferVars initial)
       , PartialSchedule $ PAwhile us' (Plam lhs $ Pbody fn) initial )
   C.Awhile{} -> internalError "Unary function impossible"
+  C.Atrace msg t -> (arrayDescriptorsIdxSet t, PartialSchedule $ PAtrace msg t)
   C.Aassert msg cond ->
     ( IdxSet.fromList $ mapMaybe (\(Exists a) -> instrToSync a) $ arrayInstrsInExp cond
     , PartialSchedule $ PAssert msg cond )
@@ -525,6 +531,7 @@ rebuild' (PartialSchedule schedule) = case schedule of
   PReturnValues updateTup next -> buildReturnValues updateTup (rebuild' next)
   PAcond var true false -> buildAcond var (rebuild' true) (rebuild' false)
   PAwhile us fn initial -> buildAwhile us (rebuildUnary fn) initial
+  PAtrace msg t -> buildTrace msg t
   PContinue next -> buildContinue $ rebuild' next
   PBreak us vars -> buildBreak us vars
   PAssert msg cond -> buildAssert msg cond
@@ -758,6 +765,20 @@ buildAwhile us (BuildUnary lhs fn') initial available =
   where
     fn = fn' (IdxSet.skip' lhs available)
 
+buildTrace ::
+  Text ->
+  TupR (ArrayDescriptor env) t->
+  Build PartialSchedule kernel env Word8
+buildTrace msg t available = -- TODO(Mike): Controleren of dit wel goed is zo?
+  Built{
+    didChange = False,
+    directlyAwaits = arrayDescriptorsIdxSet t,
+    writes = IdxSet.empty,
+    finallyReleases = IdxSet.empty,
+    trivial = False,
+    term = PartialSchedule $ PAtrace msg t
+  }
+
 buildContinue
   :: Build PartialSchedule kernel env t
   -> Build PartialSchedule kernel env (Loop t)
@@ -914,6 +935,15 @@ analyseSyncEnv' (PartialSchedule sched) = case sched of
           False
           (PAwhile us (Plam lhs $ Pbody body') initial)
   PAwhile{} -> internalError "Function impossible"
+  PAtrace msg t -> 
+    let
+      bindings = _ -- TODO(Mike): verder gaan
+    in
+      ToSyncSchedule UpdateKeep $
+        SyncSchedule
+          (partialEnvFromList const bindings)
+          True
+          (PAtrace msg t)
   PContinue next ->
     let
       next' = analyseSyncEnv next
