@@ -115,7 +115,6 @@ prettyOpenAcc env = \case
     <> prettyOpenAcc env next
 
 prettyArrayDescriptor :: Val env -> ArrayDescriptors env t -> Adoc
--- prettyArrayDescriptor env = foldMapTupR (\(ArrayDescriptor _ sh buffer) -> prettyShapeVars env sh <+> " " <+> prettyVars env 0 buffer)
 prettyArrayDescriptor env = prettyTupR (\p (ArrayDescriptor _ sh buffer) -> prettyShapeVars env sh <+> " " <+> prettyVars env p buffer) 0
 
 prettyArgs :: Val benv -> Args benv f -> Adoc

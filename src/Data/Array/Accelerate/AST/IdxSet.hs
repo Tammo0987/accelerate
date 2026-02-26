@@ -6,7 +6,6 @@
 {-# LANGUAGE TypeApplications    #-}
 {-# LANGUAGE TypeOperators       #-}
 {-# OPTIONS_HADDOCK hide #-}
-
 -- |
 -- Module      : Data.Array.Accelerate.AST.IdxSet
 -- Copyright   : [2008..2020] The Accelerate Team

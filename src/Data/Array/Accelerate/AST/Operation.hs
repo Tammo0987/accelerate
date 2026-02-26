@@ -67,7 +67,6 @@ module Data.Array.Accelerate.AST.Operation (
   NFData'(..)
 ,reindexAcc,toGrounds,fromGrounds,weakenThroughReindex,fuseArgsWith,argsFromList,expToGroundVar) where
 
-import Data.Array.Accelerate.AST                                    (Message(..))
 import Data.Array.Accelerate.AST.Environment
 import Data.Array.Accelerate.AST.Exp
 import Data.Array.Accelerate.AST.LeftHandSide
