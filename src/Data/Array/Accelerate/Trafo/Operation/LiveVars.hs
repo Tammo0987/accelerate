@@ -357,7 +357,7 @@ reEnvArg re (ArgExp expr) = ArgExp $ mapArrayInstr (reEnvArrayInstr re) expr
 reEnvArg re (ArgFun f)    = ArgFun $ mapArrayInstrFun (reEnvArrayInstr re) f
 reEnvArg re (ArgArray m repr sh buffers) = ArgArray m repr (expectJust $ reEnvVars re sh) (expectJust $ reEnvVars re buffers)
 
-reEnvArrayDescriptor :: ReEnv env subenv -> TupR (ArrayDescriptor env) t ->  TupR (ArrayDescriptor subenv) t
+reEnvArrayDescriptor :: ReEnv env subenv -> ArrayDescriptors env t -> TupR (ArrayDescriptor subenv) t
 reEnvArrayDescriptor re = expectJust . traverseTupR (\(ArrayDescriptor shape sh buffer) -> ArrayDescriptor shape <$> reEnvVars re sh <*> reEnvVars re buffer)
 
 -- Captures existential f'

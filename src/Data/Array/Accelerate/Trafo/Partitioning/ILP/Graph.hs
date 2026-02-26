@@ -568,7 +568,7 @@ data Symbol (op :: Type -> Type) where
   SCmp  :: Env env -> Exp env a                                                        -> Symbol op
   SAlc  :: Env env -> ShapeR sh -> ScalarType e -> ExpVars env sh                      -> Symbol op
   SUnt  :: Env env -> ExpVar env e                                                     -> Symbol op
-  SAtr  :: Text -> Env env -> TupR (ArrayDescriptor env) t                             -> Symbol op
+  SAtr  :: Text -> Env env -> ArrayDescriptors env t                                   -> Symbol op
   SAsr  :: Text -> Env env -> Exp env PrimBool                                         -> Symbol op
   SAsu  :: Env env -> Exp env PrimBool                                                 -> Symbol op
   SFen  :: Env env -> IdxSet env                                                       -> Symbol op

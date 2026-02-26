@@ -179,7 +179,7 @@ data PrePartialSchedule schedule kernel env t where
 
   PAtrace
     :: Text
-    -> TupR (ArrayDescriptor env) t
+    -> ArrayDescriptors env t
     -> PrePartialSchedule schedule kernel env Word8
 
   -- Signals that this while loop should do another iteration.
@@ -767,7 +767,7 @@ buildAwhile us (BuildUnary lhs fn') initial available =
 
 buildTrace ::
   Text ->
-  TupR (ArrayDescriptor env) t->
+  ArrayDescriptors env t ->
   Build PartialSchedule kernel env Word8
 buildTrace msg t available = -- TODO(Mike): Controleren of dit wel goed is zo?
   Built{

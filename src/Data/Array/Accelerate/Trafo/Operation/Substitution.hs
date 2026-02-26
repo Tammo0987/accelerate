@@ -103,7 +103,7 @@ reindexArrayInstr' k (Parameter v) = Parameter <$> reindexVar' k v
 reindexExp' :: (Applicative f, RebuildableExp e) => SunkReindexPartial f benv benv' -> e (ArrayInstr benv) env t -> f (e (ArrayInstr benv') env t)
 reindexExp' k = rebuildArrayInstrPartial (rebuildArrayInstrMap $ reindexArrayInstr' k)
 
-reindexArrayDescriptor' :: (Applicative f) => SunkReindexPartial f env env' -> TupR (ArrayDescriptor env) t -> f (TupR (ArrayDescriptor env') t)
+reindexArrayDescriptor' :: (Applicative f) => SunkReindexPartial f env env' -> ArrayDescriptors env t -> f (TupR (ArrayDescriptor env') t)
 reindexArrayDescriptor' k = traverseTupR (\(ArrayDescriptor shape sh buffer) -> ArrayDescriptor shape <$> reindexVars' k sh <*> reindexVars' k buffer)
 
 reindexIdxSet'

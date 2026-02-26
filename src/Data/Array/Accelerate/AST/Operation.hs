@@ -39,7 +39,7 @@ module Data.Array.Accelerate.AST.Operation (
 
   Var', Exp', Fun', In, Out, Mut,
 
-  ArrayDescriptor(..), weakenArrayDescriptor,
+  ArrayDescriptor(..), ArrayDescriptors, weakenArrayDescriptor,
 
   OpenExp, OpenFun, Exp, Fun, ArrayInstr(..),
   expGroundVars, funGroundVars, arrayInstrsInExp, arrayInstrsInFun,

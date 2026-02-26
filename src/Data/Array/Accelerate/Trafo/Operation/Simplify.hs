@@ -389,7 +389,7 @@ simplify' uniquenesses = \case
               (next' env')
       )
 
-simplifyArrayDescriptor :: InfoEnv env -> TupR (ArrayDescriptor env) t -> TupR (ArrayDescriptor env) t
+simplifyArrayDescriptor :: InfoEnv env -> ArrayDescriptors env t -> ArrayDescriptors env t
 simplifyArrayDescriptor env = mapTupR (\(ArrayDescriptor shape sh buffers) -> ArrayDescriptor shape (mapTupR (weaken $ substitute env) sh) (mapTupR (weaken $ substitute env) buffers))
 
 -- Given an environment, the set of updated variables and a list of copies of
@@ -716,7 +716,7 @@ subTupSubstitution s (LeftHandSideWildcard t) _
   = SubTupSubstitution (LeftHandSideWildcard $ subTupR s t) weakenId
 subTupSubstitution _ _ _ = internalError "Tuple mismatch"
 
-trace :: Text -> TupR (ArrayDescriptor env) t -> PreOpenAcc op env Word8
+trace :: Text -> ArrayDescriptors env t -> PreOpenAcc op env Word8
 trace _ TupRunit = Compute (Const scalarTypeWord8 1)
 trace msg t = Atrace msg t
 
