@@ -188,7 +188,7 @@ data PreOpenAcc (op :: Type -> Type) env a where
           -> PreOpenAcc  op env a
 
   Atrace :: Text
-         -> TupR (ArrayDescriptor env) t
+         -> ArrayDescriptors env t
          -> PreOpenAcc op env Word8
 
   -- | Asserts that the given expression evaluates to true.
@@ -296,8 +296,17 @@ data ArrayDescriptor env a where
                   -> GroundVars env (Buffers e)
                   -> ArrayDescriptor env (Array sh e)
 
+type ArrayDescriptors env = TupR (ArrayDescriptor env) --TODO(Mike): Dit overal toepassen
+
 weakenArrayDescriptor :: env :> env' -> ArrayDescriptor env a -> ArrayDescriptor env' a
 weakenArrayDescriptor k (ArrayDescriptor shr sh buffers) = ArrayDescriptor shr (weakenVars k sh) (weakenVars k buffers)
+
+-- TODO(Mike): vragen aan Ivo of die dit ook om gezet wilt hebben en dan eventueel een monoid gebruiken? (AST/Operation.hs onder arrayDescriptor)
+arrayDescriptorIdxSet :: ArrayDescriptor env t -> IdxSet env
+arrayDescriptorIdxSet (ArrayDescriptor _ sh buffers) = IdxSet.fromVars sh `IdxSet.union` IdxSet.fromVars buffers
+
+arrayDescriptorsIdxSet :: ArrayDescriptors env t -> IdxSet env
+arrayDescriptorsIdxSet = foldMapTupR arrayDescriptorIdxSet
 
 -- | The arguments to be passed to an operation of type `t`.
 -- This type is represented as a cons list, separated by (->) and ending

@@ -391,12 +391,6 @@ simplify' uniquenesses = \case
               (next' env')
       )
 
--- TODO(Mike): vragen aan Ivo of die dit ook om gezet wilt hebben en dan eventueel een monoid gebruiken?
-arrayDescriptorIdxSet :: TupR (ArrayDescriptor env) t -> IdxSet env
-arrayDescriptorIdxSet TupRunit = IdxSet.empty
-arrayDescriptorIdxSet (TupRsingle (ArrayDescriptor _ sh buffers)) = IdxSet.fromVars sh `IdxSet.union` IdxSet.fromVars buffers
-arrayDescriptorIdxSet (TupRpair l r) = arrayDescriptorIdxSet l `IdxSet.union` arrayDescriptorIdxSet r
-
 simplifyArrayDescriptor :: InfoEnv env -> TupR (ArrayDescriptor env) t -> TupR (ArrayDescriptor env) t
 simplifyArrayDescriptor env = mapTupR (\(ArrayDescriptor shape sh buffers) -> ArrayDescriptor shape (mapTupR (weaken $ substitute env) sh) (mapTupR (weaken $ substitute env) buffers))
 
