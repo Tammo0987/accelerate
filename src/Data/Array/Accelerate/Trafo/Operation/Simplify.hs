@@ -24,8 +24,6 @@
 module Data.Array.Accelerate.Trafo.Operation.Simplify (
   simplify, simplifyFun, SimplifyOperation(..), CopyOperation(..), isNoOp,
   copyOperationsForArray, detectMapCopies, detectBackpermuteCopies,
-  -- TODO(Mike): Weghalen als dit niet nodig blijkt 
-  arrayDescriptorIdxSet
 ) where
 
 import Data.Array.Accelerate.AST.Environment
@@ -347,7 +345,7 @@ simplify' uniquenesses = \case
 
   Atrace msg t ->
     let
-      set = arrayDescriptorIdxSet t
+      set = arrayDescriptorsIdxSet t
     in
       ( set
       , \env ->

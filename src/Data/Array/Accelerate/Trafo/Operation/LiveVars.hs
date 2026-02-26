@@ -31,9 +31,6 @@ module Data.Array.Accelerate.Trafo.Operation.LiveVars (
   defaultSlvGenerate, defaultSlvMap, defaultSlvBackpermute,
 ) where
 
---TODO(Mike): Is dit de oplossing?
-import Data.Array.Accelerate.Trafo.Operation.Simplify (arrayDescriptorIdxSet)
-
 import qualified Data.Array.Accelerate.AST.IdxSet as IdxSet
 import Data.Array.Accelerate.AST.Var
 import Data.Array.Accelerate.AST.LeftHandSide
@@ -215,7 +212,7 @@ stronglyLiveVariables' liveness returns us = \case
         $ \re _ ->
           Left $ Awhile us' (condition' re) (step' re) $ expectJust $ reEnvVars re initial
   Atrace msg t
-    | free <- arrayDescriptorIdxSet t
+    | free <- arrayDescriptorsIdxSet t
     , liveness1 <- setIdxSetLive free liveness ->
       LVAnalysis
         liveness1

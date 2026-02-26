@@ -55,6 +55,7 @@ module Data.Array.Accelerate.AST.Operation (
   ReindexPartial, reindexArg, reindexArgs, reindexExp, reindexPreArgs, reindexVar, reindexVars, reindexTupR, reindexArrayDescriptor,
   reindexIdxSet,
   weakenReindex,
+  arrayDescriptorsIdxSet,
   argVars, argsVars, argsInputs, argsOutputs, AccessGroundR(..),
 
   mapAccExecutable, mapAfunExecutable,
@@ -296,12 +297,11 @@ data ArrayDescriptor env a where
                   -> GroundVars env (Buffers e)
                   -> ArrayDescriptor env (Array sh e)
 
-type ArrayDescriptors env = TupR (ArrayDescriptor env) --TODO(Mike): Dit overal toepassen
+type ArrayDescriptors env = TupR (ArrayDescriptor env)
 
 weakenArrayDescriptor :: env :> env' -> ArrayDescriptor env a -> ArrayDescriptor env' a
 weakenArrayDescriptor k (ArrayDescriptor shr sh buffers) = ArrayDescriptor shr (weakenVars k sh) (weakenVars k buffers)
 
--- TODO(Mike): vragen aan Ivo of die dit ook om gezet wilt hebben en dan eventueel een monoid gebruiken? (AST/Operation.hs onder arrayDescriptor)
 arrayDescriptorIdxSet :: ArrayDescriptor env t -> IdxSet env
 arrayDescriptorIdxSet (ArrayDescriptor _ sh buffers) = IdxSet.fromVars sh `IdxSet.union` IdxSet.fromVars buffers
 

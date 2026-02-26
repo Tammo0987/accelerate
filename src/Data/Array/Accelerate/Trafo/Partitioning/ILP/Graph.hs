@@ -26,9 +26,6 @@ module Data.Array.Accelerate.Trafo.Partitioning.ILP.Graph where
 import Prelude hiding ( init, reads )
 
 -- Accelerate imports
--- TODO(Mike): Dit weghalen als dat nodig blijkt?
-import Data.Array.Accelerate.Trafo.Operation.Simplify (arrayDescriptorIdxSet)
-
 import Data.Array.Accelerate.AST.Idx
 import Data.Array.Accelerate.AST.IdxSet (IdxSet(..))
 import qualified Data.Array.Accelerate.AST.IdxSet as IdxSet
@@ -1054,7 +1051,7 @@ mkFusionGraph (Awhile u cond body init) = do
 mkFusionGraph (Atrace msg t) = do
   c    <- freshComp
   env  <- use environment
-  c `requiresBuffers` getIdxSetDeps (arrayDescriptorIdxSet t) env
+  c `requiresBuffers` getIdxSetDeps (arrayDescriptorsIdxSet t) env
   symbol c ?= SAtr msg env t
   TupRsingle <$> freshVal c (GroundRscalar scalarTypeWord8)
 
