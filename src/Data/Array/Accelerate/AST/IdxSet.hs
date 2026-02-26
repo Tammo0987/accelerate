@@ -6,6 +6,7 @@
 {-# LANGUAGE TypeApplications    #-}
 {-# LANGUAGE TypeOperators       #-}
 {-# OPTIONS_HADDOCK hide #-}
+{-# LANGUAGE InstanceSigs #-}
 -- |
 -- Module      : Data.Array.Accelerate.AST.IdxSet
 -- Copyright   : [2008..2020] The Accelerate Team
@@ -51,6 +52,12 @@ instance Eq (IdxSet env) where
   (IdxSet (PPush a _)) == (IdxSet (PPush b _)) = IdxSet a == IdxSet b
   (IdxSet (PNone a)) == (IdxSet (PNone b)) = IdxSet a == IdxSet b
   _ == _ = False
+
+instance Semigroup (IdxSet env) where
+  (<>) = union
+
+instance Monoid (IdxSet env) where
+  mempty = empty
 
 overlaps :: IdxSet env -> IdxSet env -> Bool
 overlaps (IdxSet (PPush _ _)) (IdxSet (PPush _ _)) = True
