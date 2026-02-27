@@ -849,7 +849,6 @@ evalOpenExp pexp env arr@(EvalArrayInstr runArrayInstr) =
       !v <- evalE c
       if toBool v then evalE t else evalE e
 
-    -- TODO(Daniel): should the interpreter also be branchless?
     Select c t e -> do
       !v <- evalE c
       -- evaluate both branches
