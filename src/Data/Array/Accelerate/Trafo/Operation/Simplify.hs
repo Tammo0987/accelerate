@@ -350,7 +350,7 @@ simplify' uniquenesses = \case
       ( set
       , \env ->
         fence (syncSubstitutes env set)
-        $ trace msg $ simplifyArrayDescriptor env t
+        $ Atrace msg $ simplifyArrayDescriptor env t
     )
 
   Aassert msg cond ->
@@ -715,10 +715,6 @@ subTupSubstitution (SubTupRpair s1 s2) (LeftHandSidePair l1 l2) (TupRpair v1 v2)
 subTupSubstitution s (LeftHandSideWildcard t) _
   = SubTupSubstitution (LeftHandSideWildcard $ subTupR s t) weakenId
 subTupSubstitution _ _ _ = internalError "Tuple mismatch"
-
-trace :: Text -> ArrayDescriptors env t -> PreOpenAcc op env Word8
-trace _ TupRunit = Compute (Const scalarTypeWord8 1)
-trace msg t = Atrace msg t
 
 assert :: Text -> Exp env PrimBool -> OperationAcc op env Word8
 assert _ (Const _ 1) = Compute (Const scalarTypeWord8 1)
