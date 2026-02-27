@@ -861,6 +861,14 @@ data ToSyncSchedule kernel env t where
     -> SyncSchedule kernel env t1
     -> ToSyncSchedule kernel env t2
 
+arrayDescriptorsSync :: ArrayDescriptors env t -> SyncEnv env
+arrayDescriptorsSync TupRunit = PEnd
+arrayDescriptorsSync (TupRsingle a) = arrayDescriptorSync a
+arrayDescriptorsSync (TupRpair l r) = unionPartialEnv max (arrayDescriptorsSync l) (arrayDescriptorsSync r)
+
+arrayDescriptorSync :: ArrayDescriptor env t -> SyncEnv env
+arrayDescriptorSync (ArrayDescriptor _ _ buffers) = variablesToSyncEnv (mapTupR (const Shared) buffers) buffers
+
 analyseSyncEnv :: PartialSchedule kernel env t -> SyncSchedule kernel env t
 analyseSyncEnv sched
   | ToSyncSchedule up sched' <- analyseSyncEnv' sched
@@ -935,13 +943,10 @@ analyseSyncEnv' (PartialSchedule sched) = case sched of
           False
           (PAwhile us (Plam lhs $ Pbody body') initial)
   PAwhile{} -> internalError "Function impossible"
-  PAtrace msg t -> 
-    let
-      bindings = _ -- TODO(Mike): verder gaan
-    in
+  PAtrace msg t ->
       ToSyncSchedule UpdateKeep $
         SyncSchedule
-          (partialEnvFromList const bindings)
+          (arrayDescriptorsSync t)
           True
           (PAtrace msg t)
   PContinue next ->
