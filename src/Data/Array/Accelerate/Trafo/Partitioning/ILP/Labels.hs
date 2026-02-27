@@ -560,7 +560,6 @@ getExpDeps (Undef _)                        _   = mempty
 getExpDeps  Coerce{}                        _   = mempty
 getExpDeps (Assert _ g e)                   env = getExpDeps g env <> getExpDeps e env
 getExpDeps (Assume g e)                     env = getExpDeps g env <> getExpDeps e env
-getExpDeps (Trace _ poe1 poe2)              env = getExpDeps poe1 env <> getExpDeps poe2 env
 
 
 -- | Get the dependencies of a function.
