@@ -216,7 +216,7 @@ openReconstruct' singletons labelenv graph clusterslist mlab subclustersmap symb
         SBlk {} -> error "wrong type: block"
         SRet env' vars     -> Exists $ Return          (fromJust $ reindexVars (mkReindexPartial' env' env) vars)
         SCmp env' expr     -> Exists $ Compute         (fromJust $ reindexExp  (mkReindexPartial' env' env) expr)
-        SAtr msg env' t    -> Exists $ Atrace msg      (fromJust $ reindexTupR (reindexArrayDescriptor (mkReindexPartial' env' env)) t)
+        SAtr msg env' t    -> Exists $ Atrace msg      (fromJust $ reindexArrayDescriptors (mkReindexPartial' env' env) t)
         SAsr msg env' expr -> Exists $ Aassert msg     (fromJust $ reindexExp  (mkReindexPartial' env' env) expr)
         SAsu env' expr     -> Exists $ Aassume         (fromJust $ reindexExp  (mkReindexPartial' env' env) expr)
         SAlc env' shr e sh -> Exists $ Alloc shr e     (fromJust $ reindexVars (mkReindexPartial' env' env) sh)
