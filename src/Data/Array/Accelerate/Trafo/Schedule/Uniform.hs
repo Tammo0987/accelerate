@@ -31,6 +31,7 @@ module Data.Array.Accelerate.Trafo.Schedule.Uniform (
 ) where
 
 import Data.Array.Accelerate.Analysis.Match
+import Data.Array.Accelerate.AST.Operation (arrayDescriptorsIdxSet)
 import Data.Array.Accelerate.AST.Environment
 import Data.Array.Accelerate.AST.Idx
 import Data.Array.Accelerate.AST.IdxSet (IdxSet(..))
@@ -153,7 +154,7 @@ transform env parallelism ctx schedule = case transform' schedule of
   TransformSchedule f -> f env parallelism ctx
   TransformBinding f
     | TransformToBinding tp skip instr resolvers binding <- f env
-    , DeclareVars lhs k vars <- declareVars tp -> 
+    , DeclareVars lhs k vars <- declareVars tp ->
       case ctx of
         CtxLoop{} -> internalError "Loop impossible"
         CtxNormal dest ->
@@ -223,6 +224,18 @@ transform' (SyncSchedule _ simple schedule) = case schedule of
           $ instr
           $ buildEffect (Exec (kernelMetadata kernel) kernel $ args' SkipNone)
           $ buildEffect (SignalResolve $ map (weaken $ skipWeakenIdx skip) resolvers) buildReturn
+  PAtrace msg t -> TransformSchedule $ \fenv _ _ ->
+    case acquireSome fenv $ arrayDescriptorsIdxSet t of
+      AcquireSome skip signals resolvers instr mapping'
+        | mapping <- mapping' SkipNone ->
+          case reindexArrayDescriptors (`prjPartial` mapping) t of
+            Nothing -> internalError "Variable missing after acquireSome"
+            Just t' ->
+              buildEffect (SignalAwait signals)
+                $ instr
+                $ buildEffect (Atrace msg t')
+                $ buildEffect (SignalResolve $ map (weaken $ skipWeakenIdx skip) resolvers)
+                buildReturn
   PAssert msg cond -> TransformSchedule $ \fenv _ ctx ->
     case acquireSome fenv $ IdxSet.fromVarList $ expGroundVars cond of
       AcquireSome skip signals resolvers instr mapping'
@@ -325,11 +338,11 @@ transform' (SyncSchedule _ simple schedule) = case schedule of
               (weaken' (skipWeakenIdx skip) $ transformSub fenv parallelism dest false)
               buildReturn
       _ -> variableMissing
-  
+
   PAwhile us fn initial -> TransformSchedule $ \fenv _ ctx ->
     transformWhile fenv us fn initial ctx
 
-  PContinue next -> TransformSchedule $ \fenv parallelism ctx -> 
+  PContinue next -> TransformSchedule $ \fenv parallelism ctx ->
     case ctx of
       CtxNormal _ -> internalError "Loop impossible"
       CtxLoop _ destBool dest _ ->
@@ -459,7 +472,7 @@ returnValuesSpawns
   -> Destinations fenv t2
   -> (Destinations fenv t1, [BuildSchedule kernel fenv])
 returnValuesSpawns _ UpdateKeep dest = (dest, [])
-returnValuesSpawns env (UpdateSet u var) (TupRsingle dest) = 
+returnValuesSpawns env (UpdateSet u var) (TupRsingle dest) =
   (TupRunit, [returnValue env u var dest])
 returnValuesSpawns env (UpdatePair up1 up2) (TupRpair dest1 dest2)
   | (dest1', s1) <- returnValuesSpawns env up1 dest1
@@ -977,7 +990,7 @@ awhileInputOutput env resolved (LeftHandSideSingle (GroundRbuffer _)) _ (TupRsin
                 $ weaken (weakenSucc $ weakenSucc weakenId) idx))
             (\skip -> TupRpair
               -- Weaken the existing signals by 2
-              (TupRsingle $ Var BaseRsignal $ weaken (skipWeakenIdx $ SkipSucc $ SkipSucc skip) $ fromMaybe resolved readSignal)  
+              (TupRsingle $ Var BaseRsignal $ weaken (skipWeakenIdx $ SkipSucc $ SkipSucc skip) $ fromMaybe resolved readSignal)
               -- Pass the newly constructed reference
               (TupRsingle $ Var (BaseRref $ GroundRbuffer tp) $ weaken (skipWeakenIdx skip) $ SuccIdx ZeroIdx))
     in
@@ -1018,7 +1031,7 @@ awhileInputOutput env resolved (LeftHandSideSingle (GroundRscalar tp')) _ (TupRs
                 $ weaken (weakenSucc $ weakenSucc weakenId) idx))
             (\skip -> TupRpair
               -- Weaken the existing signals by 2
-              (TupRsingle $ Var BaseRsignal $ weaken (skipWeakenIdx $ SkipSucc $ SkipSucc skip) $ fromMaybe resolved signal)  
+              (TupRsingle $ Var BaseRsignal $ weaken (skipWeakenIdx $ SkipSucc $ SkipSucc skip) $ fromMaybe resolved signal)
               -- Pass the newly constructed reference
               (TupRsingle $ Var (BaseRref $ GroundRscalar tp) $ weaken (skipWeakenIdx skip) $ SuccIdx ZeroIdx))
     in
@@ -1142,7 +1155,7 @@ makeFunSpawnClosed :: UniformScheduleFun kernel env t -> UniformScheduleFun kern
 makeFunSpawnClosed = makeFunSpawnClosed' weakenId
 
 makeFunSpawnClosed' :: env :> env' -> UniformScheduleFun kernel env t -> UniformScheduleFun kernel env' t
-makeFunSpawnClosed' k (Slam lhs f) 
+makeFunSpawnClosed' k (Slam lhs f)
   | Exists lhs' <- rebuildLHS lhs
   , k' <- sinkWithLHS lhs lhs' k =
     Slam lhs' $ makeFunSpawnClosed' k' f
