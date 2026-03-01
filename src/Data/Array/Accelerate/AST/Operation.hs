@@ -52,7 +52,7 @@ module Data.Array.Accelerate.AST.Operation (
 
   paramIn, paramsIn, paramIn', paramsIn',
 
-  ReindexPartial, reindexArg, reindexArgs, reindexExp, reindexPreArgs, reindexVar, reindexVars, reindexTupR, reindexArrayDescriptor,
+  ReindexPartial, reindexArg, reindexArgs, reindexExp, reindexPreArgs, reindexVar, reindexVars, reindexArrayDescriptors,
   reindexIdxSet,
   weakenReindex,
   arrayDescriptorsIdxSet,
@@ -595,14 +595,14 @@ reindexAcc r (Acond var poa poa') = Acond <$> reindexVar r var <*> reindexAcc r 
 reindexAcc r (Awhile tr poa poa' tr') = Awhile tr <$> reindexAfun r poa <*> reindexAfun r poa' <*> reindexVars r tr'
 reindexAcc r (Aassert msg cond) = Aassert msg <$> reindexExp r cond
 reindexAcc r (Aassume cond) = Aassume <$> reindexExp r cond
-reindexAcc r (Atrace msg t) = Atrace msg <$> reindexTupR (reindexArrayDescriptor r) t
+reindexAcc r (Atrace msg t) = Atrace msg <$> reindexArrayDescriptors r t
 reindexAcc r (Fence set e) = Fence <$> reindexIdxSet r set <*> reindexAcc r e
+
+reindexArrayDescriptors :: (Applicative f) => ReindexPartial f env env' -> ArrayDescriptors env a -> f (ArrayDescriptors env' a)
+reindexArrayDescriptors k = traverseTupR (reindexArrayDescriptor k)
 
 reindexArrayDescriptor :: Applicative f => ReindexPartial f env env' -> ArrayDescriptor env a -> f (ArrayDescriptor env' a)
 reindexArrayDescriptor k (ArrayDescriptor shr sh buffers) = ArrayDescriptor shr <$> reindexVars k sh <*> reindexVars k buffers
-
-reindexTupR :: (Applicative f) => (forall a. s a -> f (s' a)) -> TupR s t -> f (TupR s' t)
-reindexTupR = traverseTupR 
 
 reindexAfun :: Applicative f => ReindexPartial f env env' -> PreOpenAfun op env t -> f (PreOpenAfun op env' t)
 reindexAfun r (Abody poa) = Abody <$> reindexAcc r poa
