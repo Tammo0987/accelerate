@@ -309,7 +309,7 @@ data Effect kernel env where
 
   Aassert       :: Text -> Exp env PrimBool -> Effect kernel env
 
-  Atrace        :: Text -> ArrayDescriptors env t -> Effect kernel env --TODO(Mike): Is dit type dan wel nodig?
+  Atrace        :: Text -> ArrayDescriptors env t -> Effect kernel env
 
 -- A base value in the schedule is a scalar, buffer, a signal (resolver)
 -- or a (possibly mutable) reference

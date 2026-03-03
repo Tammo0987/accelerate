@@ -191,6 +191,7 @@ prettyEffect env = \case
   SignalResolve signals -> hang 2 $ group $ vsep [annotate Statement "resolve", list $ map (prettyIdx env) signals]
   RefWrite ref value    -> hang 2 $ group $ vsep ["*" <> prettyVar env ref <+> "=", prettyVar env value]
   Aassert msg cond      -> hang 2 $ group $ vsep [annotate Statement "assert", prettyText msg, prettyExp (val env) cond]
+  Atrace msg t          -> hang 2 $ group $ vsep [annotate Statement "atrace", prettyText msg, prettyArrayDescriptors env t]
 
 prettyKernelFun :: forall kernel env f. PrettyKernel kernel => Val' env -> KernelFun kernel f -> SArgs env f -> Adoc
 prettyKernelFun env fun args = case prettyKernel of
@@ -233,3 +234,8 @@ prettyShapeVars :: Val' env -> Vars s env sh -> Adoc
 prettyShapeVars _   TupRunit = "Z"
 prettyShapeVars env vars = encloseSep "Z :. " "" " :. " $ map (\(Exists v) -> prettyVar env v) $ flattenTupR vars
 
+prettyArrayDescriptors :: Val' env -> ArrayDescriptors env t -> Adoc
+prettyArrayDescriptors env = foldMapTupR (prettyArrayDescriptor env)
+
+prettyArrayDescriptor :: Val' env -> ArrayDescriptor env t -> Adoc
+prettyArrayDescriptor env (ArrayDescriptor _ sh buffer) = "Array" <+> prettyShapeVars env sh <+> prettyVars env 0 buffer
