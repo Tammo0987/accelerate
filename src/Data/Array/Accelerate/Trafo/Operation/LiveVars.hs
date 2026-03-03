@@ -25,7 +25,8 @@ module Data.Array.Accelerate.Trafo.Operation.LiveVars (
   stronglyLiveVariables, stronglyLiveVariablesFun,
 
   SLVOperation(..), ShrinkOperation(..), ShrunkOperation(..), SubArgs(..), SubArg(..),
-  reEnvArrayInstr,
+  reEnvArrayInstr, 
+  reEnvArrayDescriptors,
   ShrinkArg(..), shrinkArgs, composeSubArgs,
 
   defaultSlvGenerate, defaultSlvMap, defaultSlvBackpermute,
@@ -217,7 +218,7 @@ stronglyLiveVariables' liveness returns us = \case
       LVAnalysis
         liveness1
         $ \re s -> case s of
-          SubTupRkeep -> Right $ Atrace msg $ reEnvArrayDescriptor re t
+          SubTupRkeep -> Right $ Atrace msg $ reEnvArrayDescriptors re t
           SubTupRskip -> Right $ Return TupRunit
 
   Fence set next
@@ -357,8 +358,8 @@ reEnvArg re (ArgExp expr) = ArgExp $ mapArrayInstr (reEnvArrayInstr re) expr
 reEnvArg re (ArgFun f)    = ArgFun $ mapArrayInstrFun (reEnvArrayInstr re) f
 reEnvArg re (ArgArray m repr sh buffers) = ArgArray m repr (expectJust $ reEnvVars re sh) (expectJust $ reEnvVars re buffers)
 
-reEnvArrayDescriptor :: ReEnv env subenv -> ArrayDescriptors env t -> TupR (ArrayDescriptor subenv) t
-reEnvArrayDescriptor re = expectJust . traverseTupR (\(ArrayDescriptor shape sh buffer) -> ArrayDescriptor shape <$> reEnvVars re sh <*> reEnvVars re buffer)
+reEnvArrayDescriptors :: ReEnv env subenv -> ArrayDescriptors env t -> TupR (ArrayDescriptor subenv) t
+reEnvArrayDescriptors re = expectJust . traverseTupR (\(ArrayDescriptor shape sh buffer) -> ArrayDescriptor shape <$> reEnvVars re sh <*> reEnvVars re buffer)
 
 -- Captures existential f'
 data ReEnvSubArgs subenv f where
