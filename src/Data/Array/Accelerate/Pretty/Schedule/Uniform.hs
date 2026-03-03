@@ -238,4 +238,4 @@ prettyArrayDescriptors :: Val' env -> ArrayDescriptors env t -> Adoc
 prettyArrayDescriptors env = foldMapTupR (prettyArrayDescriptor env)
 
 prettyArrayDescriptor :: Val' env -> ArrayDescriptor env t -> Adoc
-prettyArrayDescriptor env (ArrayDescriptor _ sh buffer) = "Array" <+> prettyShapeVars env sh <+> prettyVars env 0 buffer
+prettyArrayDescriptor env (ArrayDescriptor _ sh buffer) = "Array" <+> prettyShapeVars env sh <+> prettyVars env 0 buffer --TODO(Mike): Mooi maken
