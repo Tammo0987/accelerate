@@ -769,13 +769,13 @@ buildTrace ::
   Text ->
   ArrayDescriptors env t ->
   Build PartialSchedule kernel env Word8
-buildTrace msg t available = -- TODO(Mike): Controleren of dit wel goed is zo?
+buildTrace msg t available =
   Built{
     didChange = False,
     directlyAwaits = arrayDescriptorsIdxSet t IdxSet.\\ available,
     writes = IdxSet.empty,
     finallyReleases = IdxSet.empty,
-    trivial = False,
+    trivial = True,
     term = PartialSchedule $ PAtrace msg t
   }
 
