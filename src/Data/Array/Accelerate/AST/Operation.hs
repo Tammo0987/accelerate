@@ -39,7 +39,7 @@ module Data.Array.Accelerate.AST.Operation (
 
   Var', Exp', Fun', In, Out, Mut,
 
-  ArrayDescriptor(..), ArrayDescriptors, weakenArrayDescriptor,
+  ArrayDescriptor(..), ArrayDescriptors, weakenArrayDescriptor, weakenArrayDescriptors,
 
   OpenExp, OpenFun, Exp, Fun, ArrayInstr(..),
   expGroundVars, funGroundVars, arrayInstrsInExp, arrayInstrsInFun,
@@ -297,6 +297,9 @@ data ArrayDescriptor env a where
                   -> ArrayDescriptor env (Array sh e)
 
 type ArrayDescriptors env = TupR (ArrayDescriptor env)
+
+weakenArrayDescriptors :: env :> env' -> ArrayDescriptors env a -> ArrayDescriptors env' a
+weakenArrayDescriptors k = mapTupR (weakenArrayDescriptor k)
 
 weakenArrayDescriptor :: env :> env' -> ArrayDescriptor env a -> ArrayDescriptor env' a
 weakenArrayDescriptor k (ArrayDescriptor shr sh buffers) = ArrayDescriptor shr (weakenVars k sh) (weakenVars k buffers)
