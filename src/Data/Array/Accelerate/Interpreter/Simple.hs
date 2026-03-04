@@ -938,6 +938,12 @@ evalOpenExp pexp runarr env =
       | toBool (evalE c)        -> evalE t
       | otherwise               -> evalE e
 
+    Select c t e ->
+      -- evaluate both branches
+      let !t' = evalE t
+          !e' = evalE e
+      in if toBool (evalE c) then t' else e'
+
     While cond body seed        -> go (evalE seed)
       where
         f       = evalF body

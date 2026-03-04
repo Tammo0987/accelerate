@@ -543,6 +543,11 @@ data PreSmartExp acc exp t where
                 -> exp t
                 -> PreSmartExp acc exp t
 
+  Select        :: exp PrimBool
+                -> exp t
+                -> exp t
+                -> PreSmartExp acc exp t
+
   While         :: TypeR t
                 -> (SmartExp t -> exp PrimBool)
                 -> (SmartExp t -> exp t)
@@ -901,6 +906,7 @@ instance HasTypeR exp => HasTypeR (PreSmartExp acc exp) where
     Case _ ((_,c):_)                -> typeR c
     Case{}                          -> internalError "encountered empty case"
     Cond _ e _                      -> typeR e
+    Select _ e _                    -> typeR e
     While t _ _ _                   -> t
     PrimApp f _                     -> snd $ primFunType f
     Index tp _ _                    -> tp
@@ -1417,6 +1423,7 @@ formatPreExpOp = later $ \case
   FromIndex{}   -> "FromIndex"
   Case{}        -> "Case"
   Cond{}        -> "Cond"
+  Select{}      -> "Select"
   While{}       -> "While"
   PrimApp{}     -> "PrimApp"
   Index{}       -> "Index"

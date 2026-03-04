@@ -550,6 +550,9 @@ getExpDeps (Case poe1 poes poe2)            env = getExpDeps poe1 env <>
 getExpDeps (Cond poe1 poe2 exp3)            env = getExpDeps poe1 env <>
                                                   getExpDeps poe2 env <>
                                                   getExpDeps exp3 env
+getExpDeps (Select poe1 poe2 exp3)          env = getExpDeps poe1 env <>
+                                                  getExpDeps poe2 env <>
+                                                  getExpDeps exp3 env
 getExpDeps (While pof1 pof2 poe)            env = getFunDeps pof1 env <>
                                                   getFunDeps pof2 env <>
                                                   getExpDeps poe  env

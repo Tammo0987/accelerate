@@ -167,6 +167,7 @@ inlineVars lhsBound expr bound
       FromIndex shr e1 e2 -> FromIndex shr <$> travE e1 <*> travE e2
       Case e1 rhs def     -> Case <$> travE e1 <*> mapM (\(t,c) -> (t,) <$> travE c) rhs <*> travMaybeE def
       Cond e1 e2 e3       -> Cond <$> travE e1 <*> travE e2 <*> travE e3
+      Select e1 e2 e3     -> Select <$> travE e1 <*> travE e2 <*> travE e3
       While f1 f2 e1      -> While <$> travF f1 <*> travF f2 <*> travE e1
       Const t c           -> Just $ Const t c
       PrimApp p e1        -> PrimApp p <$> travE e1
@@ -460,6 +461,7 @@ rebuildOpenExp v exp =
     FromIndex shr sh ix -> FromIndex shr   <$> rebuildOpenExp v sh <*> rebuildOpenExp v ix
     Case e rhs def      -> Case            <$> rebuildOpenExp v e  <*> sequenceA [ (t,) <$> rebuildOpenExp v c | (t,c) <- rhs ] <*> rebuildMaybeExp v def
     Cond p t e          -> Cond            <$> rebuildOpenExp v p  <*> rebuildOpenExp v t  <*> rebuildOpenExp v e
+    Select p t e        -> Select          <$> rebuildOpenExp v p  <*> rebuildOpenExp v t  <*> rebuildOpenExp v e
     While p f x         -> While           <$> rebuildFun v p      <*> rebuildFun v f      <*> rebuildOpenExp v x
     PrimApp f x         -> PrimApp f       <$> rebuildOpenExp v x
     ArrayInstr arr e    -> ArrayInstr arr  <$> rebuildOpenExp v e
@@ -534,6 +536,7 @@ rebuildArrayInstrOpenExp v = \case
     FromIndex shr sh ix      -> FromIndex shr <$> travE sh <*> travE ix
     Case e rhs def           -> Case <$> travE e <*> sequenceA [ (t,) <$> travE c | (t,c) <- rhs ] <*> travME def
     Cond e1 e2 e3            -> Cond <$> travE e1 <*> travE e2 <*> travE e3
+    Select e1 e2 e3          -> Select <$> travE e1 <*> travE e2 <*> travE e3
     While c f x              -> While <$> travF c <*> travF f <*> travE x
     Const tp c               -> pure $ Const tp c
     PrimApp f x              -> PrimApp f <$> travE x

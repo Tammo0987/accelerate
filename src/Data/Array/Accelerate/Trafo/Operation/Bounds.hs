@@ -35,6 +35,7 @@ module Data.Array.Accelerate.Trafo.Operation.Bounds (
   boundsOptimizeFun, boundsOptimizeFun1, boundsOptimizeFun2, boundsOptimizeExp,
 ) where
 
+import Data.Array.Accelerate.AST.Exp
 import Data.Array.Accelerate.AST.Environment
 import qualified Data.Array.Accelerate.AST.Graph as Graph
 import Data.Array.Accelerate.AST.Idx
@@ -51,6 +52,7 @@ import Data.Array.Accelerate.Representation.Array
 import Data.Array.Accelerate.Representation.Type
 import Data.Array.Accelerate.Type
 import Data.Array.Accelerate.Error
+import Data.Array.Accelerate.Analysis.Match
 
 import Data.Array.Accelerate.Trafo.Operation.Bounds.Algebra
 import Data.Array.Accelerate.Trafo.Operation.Bounds.Environment
@@ -325,6 +327,36 @@ boundsOptimizeExp env@(BoundsEnv _ _ zero _) expr = detectConst env $ case expr 
       , (falseBounds, false') <- boundsOptimizeExp (assumeFalse env c') false ->
         ( unions (makeTransitives env trueBounds) (makeTransitives env falseBounds)
         , Cond c' true' false' )
+
+  Select c t f -> case travE c of
+    -- Check if the condition is already known based on the bounds analysis
+    Const _ 1 -> boundsOptimizeExp env t
+    Const _ 0 -> boundsOptimizeExp env f
+
+    c' ->
+      let (trueBounds, t') = boundsOptimizeExp env t
+          (falseBounds, f') = boundsOptimizeExp env f
+          bs = unions (makeTransitives env trueBounds)
+                      (makeTransitives env falseBounds)
+
+          isBoolBounds :: TermBounds (UniformEnv benv env) Word8 -> Bool
+          isBoolBounds (TupRsingle bound) = (l >= 0 && h <= 1) -- (0, 1) (0, 0) (1, 1)
+            where
+              (l, h) = getBoundRange (boundsZero env) TypeWord8
+                                     (makeTransitive env bound)
+
+          simplify
+            | Just Refl <- matchTypeR (expType t') (TupRsingle scalarTypeWord8)
+            , isBoolBounds trueBounds
+            , isBoolBounds falseBounds
+            = case (t', f') of
+                (_        , Const _ 0)  -> (bs, PrimApp PrimLAnd (Pair c' t'))                    -- c ? t : 0 => c && t
+                (Const _ 0, _        )  -> (bs, PrimApp PrimLAnd (Pair (PrimApp PrimLNot c') f')) -- c ? 0 : f => (not c) && f
+                (Const _ 1, _        )  -> (bs, PrimApp PrimLOr  (Pair c' f'))                    -- c ? 1 : f => c || f
+                (_        , Const _ 1)  -> (bs, PrimApp PrimLOr  (Pair (PrimApp PrimLNot c') t')) -- c ? t : 1 => (not c) || t
+                _                       -> (bs, Select c' t' f')
+            | otherwise                 =  (bs, Select c' t' f')
+        in simplify
 
   Assert msg c body -> case travE c of
     Const _ 1 -> boundsOptimizeExp env body

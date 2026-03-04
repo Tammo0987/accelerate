@@ -238,6 +238,7 @@ simplifyOpenExp env = first getAny . cvtE
       FromIndex shr sh ix       -> hoist2 (fromIndex shr) (cvtE sh) (cvtE ix)
       Case e rhs def            -> hoist (\e' -> caseof e' (sequenceA [ (t,) <$> cvtE c | (t,c) <- rhs ]) (cvtMaybeE def)) (cvtE e)
       Cond p t e                -> hoist (\p' -> cond p' (cvtE t) (cvtE e)) (cvtE p)
+      Select p t e              -> hoist (\p' -> select p' (cvtE t) (cvtE e)) (cvtE p)
       PrimApp f x               -> hoist (evalPrimApp env f) (cvtE x)
       ArrayInstr arr e          -> hoist (arrayInstr arr) (cvtE e)
       ShapeSize shr sh          -> hoist (shapeSize shr) (cvtE sh)
@@ -306,6 +307,17 @@ simplifyOpenExp env = first getAny . cvtE
     shouldInline Const{} = True
     shouldInline _ = False
 
+    select :: PreOpenExp arr env PrimBool
+           -> (Any, PreOpenExp arr env t)
+           -> (Any, PreOpenExp arr env t)
+           -> (Any, PreOpenExp arr env t)
+    select p t@(_,t') e@(_,e')
+      | Const _ 1 <- p                  = Stats.knownBranch "True"      (yes t')
+      | Const _ 0 <- p                  = Stats.knownBranch "False"     (yes e')
+      | Just Refl <- matchOpenExp t' e' = Stats.knownBranch "redundant" (yes e')
+      | PrimApp PrimLNot c <- p         = yes $ snd $ select c e t
+      | otherwise                       =  Select p <$> t <*> e
+
     -- Simplify conditional expressions, in particular by eliminating branches
     -- when the predicate is a known constant.
     --
@@ -317,7 +329,67 @@ simplifyOpenExp env = first getAny . cvtE
       | Const _ 1 <- p                  = Stats.knownBranch "True"      (yes t')
       | Const _ 0 <- p                  = Stats.knownBranch "False"     (yes e')
       | Just Refl <- matchOpenExp t' e' = Stats.knownBranch "redundant" (yes e')
+      | isCheap t' && isCheap e'        = yes $ snd $ select p t e
+      | PrimApp PrimLNot c <- p         = yes $ snd $ cond c e t
       | otherwise                       = Cond p <$> t <*> e
+
+    isCheap :: PreOpenExp arr env t -> Bool
+    isCheap = maybe False (<= maxCost) . expCost
+      where
+        maxCost = 5
+
+        expCost :: PreOpenExp arr env' t -> Maybe Int
+        expCost = \case
+          ArrayInstr a _   -> if inlineArrayInstr a
+                               then Just 1
+                               else Nothing
+          Evar{}           -> Just 1
+          Nil              -> Just 1
+          Const{}          -> Just 1
+          Undef{}          -> Just 1
+          PrimApp f e      -> primCost f .+. expCost e
+          Let _ bnd body   -> Just 1     .+. expCost bnd .+. expCost body
+          Pair e1 e2       -> Just 1     .+. expCost e1  .+. expCost e2
+          VecPack _ e      -> Just 1     .+. expCost e
+          VecUnpack _ e    -> Just 1     .+. expCost e
+          Coerce _ _ e     -> Just 1     .+. expCost e
+          Assume e1 e2     -> Just 1     .+. expCost e1  .+. expCost e2
+          Foreign{}        -> Nothing
+          ToIndex{}        -> Nothing
+          FromIndex{}      -> Nothing
+          Case{}           -> Nothing
+          Cond{}           -> Nothing
+          Select{}         -> Nothing
+          While{}          -> Nothing
+          ShapeSize{}      -> Nothing
+          Assert{}         -> Nothing
+
+        primCost :: PrimFun f -> Maybe Int
+        primCost = \case
+          PrimAdd _        -> Just 1
+          PrimSub _        -> Just 1
+          PrimMul _        -> Just 1
+          PrimNeg _        -> Just 1
+          PrimAbs _        -> Just 1
+          PrimSig _        -> Just 1
+          PrimBAnd _       -> Just 1
+          PrimBOr _        -> Just 1
+          PrimBXor _       -> Just 1
+          PrimBNot _       -> Just 1
+          PrimBShiftL _    -> Just 1
+          PrimBShiftR _    -> Just 1
+          PrimBRotateL _   -> Just 1
+          PrimBRotateR _   -> Just 1
+          PrimCmp _ _      -> Just 1
+          PrimMax _        -> Just 1
+          PrimMin _        -> Just 1
+          PrimLAnd         -> Just 1
+          PrimLOr          -> Just 1
+          PrimLNot         -> Just 1
+          _                -> Nothing
+
+        (.+.) :: Maybe Int -> Maybe Int -> Maybe Int
+        a .+. b = (+) <$> a <*> b
 
     caseof :: PreOpenExp arr env TAG
            -> (Any, [(TAG, PreOpenExp arr env b)])
@@ -652,6 +724,7 @@ summariseOpenExp = (terms +~ 1) . goE
         FromIndex _ sh ix     -> travE sh +++ travE ix
         Case e rhs def        -> travE e +++ mconcat [ travE c | (_,c) <- rhs ] +++ maybe zero travE def
         Cond p t e            -> travE p +++ travE t +++ travE e
+        Select p t e          -> travE p +++ travE t +++ travE e
         While p f x           -> travF p +++ travF f +++ travE x
         ArrayInstr a e        -> travA a +++ travE e
         ShapeSize _ sh        -> travE sh

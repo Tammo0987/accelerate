@@ -88,7 +88,7 @@ module Data.Array.Accelerate.Language (
 
   -- * Flow-control
   acond, awhile,
-  cond,  while,
+  cond, select, while,
   Assert(..), assertBounds,
 
   -- * Utilities for bounds and shape checks
@@ -1294,6 +1294,15 @@ cond :: Elt t
      -> Exp t                   -- ^ else-expression
      -> Exp t
 cond (Exp c) (Exp x) (Exp y) = mkExp $ Cond (mkCoerce' c) x y
+
+-- | A scalar-level conditional expression
+-- that chooses one value based on the condition without branching.
+select :: (Elt t)
+       => Exp Bool                -- ^ condition
+       -> Exp t                   -- ^ then-expression
+       -> Exp t                   -- ^ else-expression
+       -> Exp t
+select (Exp c) (Exp x) (Exp y) = mkExp $ Select (mkCoerce' c) x y
 
 -- | While construct. Continue to apply the given function, starting with the
 -- initial value, until the test function evaluates to 'False'.

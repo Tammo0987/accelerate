@@ -141,6 +141,7 @@ prettyPreOpenExp ctx prettyArrayInstr env exp =
                       , hang shiftwidth (sep [ then_, t' ])
                       , hang shiftwidth (sep [ else_, e' ]) ]
     --
+    Select p t e          -> ppF3 "select"      (ppE p) (ppE t) (ppE e)
     ToIndex _ sh ix       -> ppF2 "toIndex"     (ppE sh) (ppE ix)
     FromIndex _ sh ix     -> ppF2 "fromIndex"   (ppE sh) (ppE ix)
     While p f x           -> ppF3 "while"       (ppF p) (ppF f) (ppE x)
