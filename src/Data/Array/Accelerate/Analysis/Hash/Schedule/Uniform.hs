@@ -136,6 +136,10 @@ encodeEffect = \case
     intHost $(hashQ "Aassert")
     <> intHost (Hashable.hash msg)
     <> encodeOpenExp cond
+  Atrace msg t ->
+    intHost $(hashQ "Atrace")
+    <> intHost (Hashable.hash msg)
+    <> encodeArrayDescriptors t --TODO(Mike): Dit overzetten naar Exp.hs?
 
 encodeIO :: InputOutputR input output -> Builder
 encodeIO = \case

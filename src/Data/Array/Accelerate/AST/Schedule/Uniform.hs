@@ -401,6 +401,7 @@ effectFreeVars (SignalAwait signals)     = IdxSet.fromList $ map Exists $ signal
 effectFreeVars (SignalResolve resolvers) = IdxSet.fromList $ map Exists resolvers
 effectFreeVars (RefWrite ref value)      = IdxSet.insertVar ref $ IdxSet.singletonVar value
 effectFreeVars (Aassert _ cond)          = bindingFreeVars $ Compute cond
+effectFreeVars (Atrace _ t)              = arrayDescriptorsIdxSet t
 
 sargVar :: SArg env t -> Exists (Idx env)
 sargVar (SArgScalar   v) = Exists $ varIdx v

@@ -44,7 +44,7 @@ module Data.Array.Accelerate.AST.Operation (
   OpenExp, OpenFun, Exp, Fun, ArrayInstr(..),
   expGroundVars, funGroundVars, arrayInstrsInExp, arrayInstrsInFun,
 
-  encodeGroundR, encodeGroundsR, encodeGroundVar, encodeGroundVars,
+  encodeGroundR, encodeGroundsR, encodeGroundVar, encodeGroundVars, encodeArrayDescriptors,
   rnfGroundR, rnfGroundsR, rnfGroundVar, rnfGroundVars, rnfUniqueness,
   liftGroundR, liftGroundsR, liftGroundVar, liftGroundVars,
 
@@ -309,6 +309,12 @@ arrayDescriptorIdxSet (ArrayDescriptor _ sh buffers) = IdxSet.fromVars sh `IdxSe
 
 arrayDescriptorsIdxSet :: ArrayDescriptors env t -> IdxSet env
 arrayDescriptorsIdxSet = foldMapTupR arrayDescriptorIdxSet
+
+encodeArrayDescriptors :: ArrayDescriptors env t -> Builder
+encodeArrayDescriptors = encodeTupR encodeArrayDescriptor
+
+encodeArrayDescriptor :: ArrayDescriptor env t -> Builder
+encodeArrayDescriptor (ArrayDescriptor shape sh buffer) = encodeShapeR shape <> encodeGroundVars sh <> encodeGroundVars buffer
 
 -- | The arguments to be passed to an operation of type `t`.
 -- This type is represented as a cons list, separated by (->) and ending
