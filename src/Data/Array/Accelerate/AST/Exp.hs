@@ -171,6 +171,12 @@ data PreOpenExp arr env t where
                 -> PreOpenExp arr env t
                 -> PreOpenExp arr env t
 
+  -- Conditional expression that chooses one value based on the condition without branching.
+  Select        :: PreOpenExp arr env PrimBool
+                -> PreOpenExp arr env t
+                -> PreOpenExp arr env t
+                -> PreOpenExp arr env t
+
   Assert        :: Text
                 -> PreOpenExp arr env PrimBool
                 -> PreOpenExp arr env t
@@ -385,6 +391,7 @@ expType = \case
   Case _ [] (Just e)           -> expType e
   Case{}                       -> internalError "empty case encountered"
   Cond _ e _                   -> expType e
+  Select _ e _                 -> expType e
   While _ (Lam lhs _) _        -> lhsToTupR lhs
   While{}                      -> internalError "What's the matter, you're running in the shadows"
   Const tR _                   -> TupRsingle tR
@@ -515,6 +522,7 @@ rnfOpenExp topExp =
     FromIndex shr sh ix       -> rnfShapeR shr `seq` rnfE sh `seq` rnfE ix
     Case e rhs def            -> rnfE e `seq` rnfList (\(t,c) -> t `seq` rnfE c) rhs `seq` rnfMaybe rnfE def
     Cond p e1 e2              -> rnfE p `seq` rnfE e1 `seq` rnfE e2
+    Select p e1 e2            -> rnfE p `seq` rnfE e1 `seq` rnfE e2
     While p f x               -> rnfF p `seq` rnfF f `seq` rnfE x
     PrimApp f x               -> rnfPrimFun f `seq` rnfE x
     ArrayInstr arr e          -> rnfArrayInstr arr `seq` rnfE e
@@ -639,6 +647,7 @@ liftOpenExp pexp =
     FromIndex shr sh ix       -> [|| FromIndex $$(liftShapeR shr) $$(liftE sh) $$(liftE ix) ||]
     Case p rhs def            -> [|| Case $$(liftE p) $$(liftList (\(t,c) -> [|| (t, $$(liftE c)) ||]) rhs) $$(liftMaybe liftE def) ||]
     Cond p t e                -> [|| Cond $$(liftE p) $$(liftE t) $$(liftE e) ||]
+    Select p t e              -> [|| Select $$(liftE p) $$(liftE t) $$(liftE e) ||]
     While p f x               -> [|| While $$(liftF p) $$(liftF f) $$(liftE x) ||]
     PrimApp f x               -> [|| PrimApp $$(liftPrimFun f) $$(liftE x) ||]
     ArrayInstr arr x          -> [|| ArrayInstr $$(liftArrayInstr arr) $$(liftE x) ||]
@@ -757,6 +766,7 @@ formatExpOp = later $ \case
   FromIndex{}     -> "FromIndex"
   Case{}          -> "Case"
   Cond{}          -> "Cond"
+  Select{}        -> "Select"
   While{}         -> "While"
   PrimApp{}       -> "PrimApp"
   ArrayInstr ar _ -> fromString $ showArrayInstrOp ar

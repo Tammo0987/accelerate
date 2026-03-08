@@ -40,7 +40,7 @@ import Data.Array.Accelerate.AST.Var
 import Data.Array.Accelerate.Analysis.Hash
 import Data.Array.Accelerate.Analysis.Match
 import Data.Array.Accelerate.Error
-import Data.Array.Accelerate.Representation.Shape                   ( ShapeR(..), shapeToList )
+import Data.Array.Accelerate.Representation.Shape                   ( ShapeR(..), shapeToList, rank )
 import Data.Array.Accelerate.Representation.Type
 import Data.Array.Accelerate.Representation.Vec
 import Data.Array.Accelerate.Representation.Slice                   ( SliceIndex(..) )
@@ -238,6 +238,7 @@ simplifyOpenExp env = first getAny . cvtE
       FromIndex shr sh ix       -> hoist2 (fromIndex shr) (cvtE sh) (cvtE ix)
       Case e rhs def            -> hoist (\e' -> caseof e' (sequenceA [ (t,) <$> cvtE c | (t,c) <- rhs ]) (cvtMaybeE def)) (cvtE e)
       Cond p t e                -> hoist (\p' -> cond p' (cvtE t) (cvtE e)) (cvtE p)
+      Select p t e              -> hoist (\p' -> select p' (cvtE t) (cvtE e)) (cvtE p)
       PrimApp f x               -> hoist (evalPrimApp env f) (cvtE x)
       ArrayInstr arr e          -> hoist (arrayInstr arr) (cvtE e)
       ShapeSize shr sh          -> hoist (shapeSize shr) (cvtE sh)
@@ -306,6 +307,31 @@ simplifyOpenExp env = first getAny . cvtE
     shouldInline Const{} = True
     shouldInline _ = False
 
+    select :: PreOpenExp arr env PrimBool
+           -> (Any, PreOpenExp arr env t)
+           -> (Any, PreOpenExp arr env t)
+           -> (Any, PreOpenExp arr env t)
+    select p t@(_,t') e@(_,e')
+      | Const _ 1 <- p                  = Stats.knownBranch "True"      (yes t')
+      | Const _ 0 <- p                  = Stats.knownBranch "False"     (yes e')
+      -- Convert select over pairs to pair of selects. This may enable further
+      -- optimizations, and if we don't do this here we'll do it during code
+      -- generation anyway.
+      | Pair t1 t2 <- t'
+      , Pair e1 e2 <- e'
+      = if shouldInline p then
+        -- If the condition is simple, can directly perform this transformation
+          yes $ Pair (Select p t1 e1) (Select p t2 e2)
+        else
+          -- Otherwise we bind the condition to a variable
+          yes $ Let (LeftHandSideSingle scalarTypeWord8) p
+            $ Pair
+              (Select (Evar (Var scalarTypeWord8 ZeroIdx)) (weakenE (weakenSucc weakenId) t1) (weakenE (weakenSucc weakenId) e1))
+              (Select (Evar (Var scalarTypeWord8 ZeroIdx)) (weakenE (weakenSucc weakenId) t2) (weakenE (weakenSucc weakenId) e2))
+      | Just Refl <- matchOpenExp t' e' = Stats.knownBranch "redundant" (yes e')
+      | PrimApp PrimLNot c <- p         = yes $ Select c e' t'
+      | otherwise                       =  Select p <$> t <*> e
+
     -- Simplify conditional expressions, in particular by eliminating branches
     -- when the predicate is a known constant.
     --
@@ -317,7 +343,92 @@ simplifyOpenExp env = first getAny . cvtE
       | Const _ 1 <- p                  = Stats.knownBranch "True"      (yes t')
       | Const _ 0 <- p                  = Stats.knownBranch "False"     (yes e')
       | Just Refl <- matchOpenExp t' e' = Stats.knownBranch "redundant" (yes e')
+      | isCheap t' && isCheap e'        = yes $ snd $ select p t e
+      | PrimApp PrimLNot c <- p         = yes $ Cond c e' t'
       | otherwise                       = Cond p <$> t <*> e
+
+    -- Checks whether an expression is cheap, and may be evaluated eagerly
+    -- (i.e. lifted from within a conditional, to always be evaluated)
+    --
+    -- If the expression performs many computations, or if the expression
+    -- may diverge, this function will return false.
+    --
+    isCheap :: PreOpenExp arr env t -> Bool
+    isCheap = maybe False (<= maxCost) . expCost
+      where
+        maxCost = 10
+
+        expCost :: PreOpenExp arr env' t -> Maybe Int
+        expCost = \case
+          ArrayInstr a arg -> if inlineArrayInstr a
+                               then Just 0 .+. expCost arg
+                               else Nothing
+          Evar{}           -> Just 0
+          Nil              -> Just 0
+          Const{}          -> Just 0
+          Undef{}          -> Just 0
+          PrimApp f e      -> primCost f .+. expCost e
+          Let _ bnd body   -> expCost bnd .+. expCost body
+          Pair e1 e2       -> expCost e1 .+. expCost e2
+          VecPack _ e      -> Just 1 .+. expCost e
+          VecUnpack _ e    -> Just 1 .+. expCost e
+          Coerce _ _ e     -> expCost e
+          Select c t f     -> Just 1 .+. expCost c .+. expCost t .+. expCost f
+          ToIndex shr sh ix -> shapeCost shr .+. expCost sh .+. expCost ix
+          FromIndex shr sh ix -> shapeCost shr .+. expCost sh .+. expCost ix
+          ShapeSize shr sh -> shapeCost shr .+. expCost sh
+          Foreign{}        -> Nothing
+          Case{}           -> Nothing
+          Cond{}           -> Nothing
+          While{}          -> Nothing
+          Assert{}         -> Nothing
+          -- If we treat Assume as cheap, then it might be strictly evaluated.
+          -- That may imply that the assumption gets a larger scope, and we may
+          -- incorrectly act on the information of that assumption.
+          -- Example: if foo then assume foo x else y
+          -- If we treat Assume as cheap, this may be converted to:
+          -- select foo (assume foo x) y
+          -- The assumption will be lifted:
+          -- assume foo (select foo x y)
+          -- Bounds analysis may optimize this to:
+          -- assume foo x
+          -- Which is cleary not sound.
+          Assume{}         -> Nothing
+
+        shapeCost :: ShapeR sh -> Maybe Int
+        shapeCost = \case
+          ShapeRz -> Just 0
+          ShapeRsnoc shr -> Just $ rank shr
+
+        primCost :: PrimFun f -> Maybe Int
+        primCost = \case
+          PrimAdd _        -> Just 1
+          PrimSub _        -> Just 1
+          PrimMul _        -> Just 1
+          PrimNeg _        -> Just 1
+          PrimAbs _        -> Just 1
+          PrimSig _        -> Just 1
+          PrimBAnd _       -> Just 1
+          PrimBOr _        -> Just 1
+          PrimBXor _       -> Just 1
+          PrimBNot _       -> Just 1
+          PrimBShiftL _    -> Just 1
+          PrimBShiftR _    -> Just 1
+          PrimBRotateL _   -> Just 1
+          PrimBRotateR _   -> Just 1
+          PrimPopCount _   -> Just 1
+          PrimCountLeadingZeros _ -> Just 1
+          PrimCountTrailingZeros _ -> Just 1
+          PrimCmp _ _      -> Just 1
+          PrimMax _        -> Just 1
+          PrimMin _        -> Just 1
+          PrimLAnd         -> Just 1
+          PrimLOr          -> Just 1
+          PrimLNot         -> Just 1
+          _                -> Nothing
+
+        (.+.) :: Maybe Int -> Maybe Int -> Maybe Int
+        a .+. b = (+) <$> a <*> b
 
     caseof :: PreOpenExp arr env TAG
            -> (Any, [(TAG, PreOpenExp arr env b)])
@@ -652,6 +763,7 @@ summariseOpenExp = (terms +~ 1) . goE
         FromIndex _ sh ix     -> travE sh +++ travE ix
         Case e rhs def        -> travE e +++ mconcat [ travE c | (_,c) <- rhs ] +++ maybe zero travE def
         Cond p t e            -> travE p +++ travE t +++ travE e
+        Select p t e          -> travE p +++ travE t +++ travE e
         While p f x           -> travF p +++ travF f +++ travE x
         ArrayInstr a e        -> travA a +++ travE e
         ShapeSize _ sh        -> travE sh

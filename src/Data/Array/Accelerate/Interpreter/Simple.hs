@@ -210,7 +210,7 @@ evalOpenAcc (OpenAcc pacc) aenv =
 
     Aassert msg cond acc
       | toBool (evalE cond)       -> manifest acc
-      | otherwise                 -> error ("*** Assertion failed: " ++ DT.unpack msg)
+      | otherwise                 -> errorWithoutStackTrace ("\n*** Assertion failed: " ++ DT.unpack msg)
 
     Aassume _ acc                 -> manifest acc
 
@@ -938,6 +938,12 @@ evalOpenExp pexp runarr env =
       | toBool (evalE c)        -> evalE t
       | otherwise               -> evalE e
 
+    Select c t e ->
+      -- evaluate both branches
+      let !t' = evalE t
+          !e' = evalE e
+      in if toBool (evalE c) then t' else e'
+
     While cond body seed        -> go (evalE seed)
       where
         f       = evalF body
@@ -954,7 +960,7 @@ evalOpenExp pexp runarr env =
 
     Assert msg c e
       | toBool (evalE c)        -> evalE e
-      | otherwise               -> error $ "*** Assertion failed: " ++ DT.unpack msg
+      | otherwise               -> errorWithoutStackTrace $ "\n*** Assertion failed: " ++ DT.unpack msg
     
     Assume _ e                  -> evalE e
 

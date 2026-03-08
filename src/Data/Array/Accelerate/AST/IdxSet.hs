@@ -46,10 +46,10 @@ varMember :: Var s env t -> IdxSet env -> Bool
 varMember (Var _ idx) = member idx
 
 instance Eq (IdxSet env) where
-  (IdxSet PEnd) == b = isEmpty b
-  a == (IdxSet PEnd) = isEmpty a
-  (IdxSet (PPush a _)) == (IdxSet (PPush b _)) = IdxSet a == IdxSet b
-  (IdxSet (PNone a)) == (IdxSet (PNone b)) = IdxSet a == IdxSet b
+  IdxSet PEnd == b = isEmpty b
+  a == IdxSet PEnd = isEmpty a
+  IdxSet (PPush a _) == IdxSet (PPush b _) = IdxSet a == IdxSet b
+  IdxSet (PNone a) == IdxSet (PNone b) = IdxSet a == IdxSet b
   _ == _ = False
 
 instance Semigroup (IdxSet env) where

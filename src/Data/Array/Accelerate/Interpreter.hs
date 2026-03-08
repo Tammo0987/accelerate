@@ -499,7 +499,7 @@ executeEffect env = \case
     writeIORef ioref value
   S.Aassert msg cond
     | runIdentity (evalExp cond $ evalArrayInstrDefault env) == 1 -> return ()
-    | otherwise -> error ("*** Assertion failed: " ++ T.unpack msg)
+    | otherwise -> errorWithoutStackTrace ("\n*** Assertion failed: " ++ T.unpack msg)
   where
     await :: Idx env S.Signal -> IO ()
     await idx = do
@@ -849,6 +849,13 @@ evalOpenExp pexp env arr@(EvalArrayInstr runArrayInstr) =
       !v <- evalE c
       if toBool v then evalE t else evalE e
 
+    Select c t e -> do
+      !v <- evalE c
+      -- evaluate both branches
+      let !t' = evalE t
+      let !e' = evalE e
+      if toBool v then t' else e'
+
     While cond body seed ->
       evalE seed >>= go
       where
@@ -876,7 +883,7 @@ evalOpenExp pexp env arr@(EvalArrayInstr runArrayInstr) =
 
     Assert msg g e -> do
       g' <- evalE g
-      (if toBool g' then evalE e else error ("*** Assertion failed: " ++ T.unpack msg))
+      (if toBool g' then evalE e else errorWithoutStackTrace ("\n*** Assertion failed: " ++ T.unpack msg))
 
     Assume _ e -> evalE e
 

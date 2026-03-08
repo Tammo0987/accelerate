@@ -41,7 +41,7 @@ undefElt = tuple
 
     vector :: VectorType t -> t
     vector (VectorType n t) = runST $ do
-      mba           <- newByteArray (n * bytesElt (TupRsingle (SingleScalarType t)))
+      mba           <- newByteArray (n * singleTypeSize t)
       ByteArray ba# <- unsafeFreezeByteArray mba
       return (Vec ba#)
 
@@ -69,44 +69,35 @@ undefElt = tuple
     floating TypeFloat  = 0
     floating TypeDouble = 0
 
-bytesElt :: TypeR e -> Int
-bytesElt = tuple
-  where
-    tuple :: TypeR t -> Int
-    tuple TupRunit         = 0
-    tuple (TupRpair ta tb) = tuple ta + tuple tb
-    tuple (TupRsingle t)   = scalar t
+scalarTypeSize :: ScalarType e -> Int
+scalarTypeSize = fst . scalarTypeSizeAlignment
 
-    scalar :: ScalarType t -> Int
-    scalar (SingleScalarType t) = single t
-    scalar (VectorScalarType t) = vector t
+scalarTypeAlignment :: ScalarType e -> Int
+scalarTypeAlignment = snd . scalarTypeSizeAlignment
 
-    vector :: VectorType t -> Int
-    vector (VectorType n t) = n * single t
+scalarTypeSizeAlignment :: ScalarType e -> (Int, Int)
+scalarTypeSizeAlignment (SingleScalarType t) = (sz, sz)
+  where sz = singleTypeSize t
+scalarTypeSizeAlignment (VectorScalarType (VectorType n t)) = (n * sz, sz)
+  where sz = singleTypeSize t
 
-    single :: SingleType t -> Int
-    single (NumSingleType t) = num t
-
-    num :: NumType t -> Int
-    num (IntegralNumType t) = integral t
-    num (FloatingNumType t) = floating t
-
-    integral :: IntegralType t -> Int
-    integral TypeInt    = sizeOf (undefined::Int)
-    integral TypeInt8   = 1
-    integral TypeInt16  = 2
-    integral TypeInt32  = 4
-    integral TypeInt64  = 8
-    integral TypeWord   = sizeOf (undefined::Word)
-    integral TypeWord8  = 1
-    integral TypeWord16 = 2
-    integral TypeWord32 = 4
-    integral TypeWord64 = 8
-
-    floating :: FloatingType t -> Int
-    floating TypeHalf   = 2
-    floating TypeFloat  = 4
-    floating TypeDouble = 8
+-- For all SingleTypes, the alignment is equal to the size
+singleTypeSize :: SingleType e -> Int
+singleTypeSize (NumSingleType (IntegralNumType tp)) = case tp of
+  TypeInt    -> sizeOf (undefined::Int)
+  TypeInt8   -> 1
+  TypeInt16  -> 2
+  TypeInt32  -> 4
+  TypeInt64  -> 8
+  TypeWord   -> sizeOf (undefined::Word)
+  TypeWord8  -> 1
+  TypeWord16 -> 2
+  TypeWord32 -> 4
+  TypeWord64 -> 8
+singleTypeSize (NumSingleType (FloatingNumType tp)) = case tp of
+  TypeHalf   -> 2
+  TypeFloat  -> 4
+  TypeDouble -> 8
 
 showElt :: TypeR e -> e -> String
 showElt t v = showsElt t v ""

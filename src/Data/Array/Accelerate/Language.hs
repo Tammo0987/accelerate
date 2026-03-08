@@ -88,14 +88,14 @@ module Data.Array.Accelerate.Language (
 
   -- * Flow-control
   acond, awhile,
-  cond,  while,
+  cond, select, while,
   Assert(..), assertBounds,
 
   -- * Utilities for bounds and shape checks
   inbounds, inboundsOf, shapeEq,
 
   -- * Array operations with a scalar result
-  (!), (!!), shape, size, shapeSize,
+  (!), (!!), shape, size, shapeSize, null,
 
   -- * Numeric functions
   subtract, even, odd, gcd, lcm, (^), (^^),
@@ -131,10 +131,9 @@ import Data.String                                                  ( fromString
 import Prelude                                                      ( ($), (.), (<>), Maybe(..), Char )
 #if __GLASGOW_HASKELL__ >= 904
 import Data.Type.Equality
-import Data.Array.Accelerate.Smart (unExpBinaryFunction, PreSmartExp (Tag), mkExp, mkCoerce)
 #endif
 
-import qualified Prelude
+import Prelude ()
 
 -- $setup
 -- >>> :seti -XFlexibleContexts
@@ -1296,6 +1295,15 @@ cond :: Elt t
      -> Exp t
 cond (Exp c) (Exp x) (Exp y) = mkExp $ Cond (mkCoerce' c) x y
 
+-- | A scalar-level conditional expression
+-- that chooses one value based on the condition without branching.
+select :: (Elt t)
+       => Exp Bool                -- ^ condition
+       -> Exp t                   -- ^ then-expression
+       -> Exp t                   -- ^ else-expression
+       -> Exp t
+select (Exp c) (Exp x) (Exp y) = mkExp $ Select (mkCoerce' c) x y
+
 -- | While construct. Continue to apply the given function, starting with the
 -- initial value, until the test function evaluates to 'False'.
 --
@@ -1467,6 +1475,12 @@ size = shapeSize . shape
 shapeSize :: forall sh. Shape sh => Exp sh -> Exp Int
 shapeSize (Exp sh) = mkExp $ ShapeSize (shapeR @sh) sh
 
+-- | Test whether an array is empty.
+--
+null :: forall sh e. (Shape sh, Elt e) => Acc (Array sh e) -> Exp Bool
+null arr = isEmpty (shapeR @sh) sh
+  where
+    Exp sh = shape arr
 
 -- Numeric functions
 -- -----------------
