@@ -648,6 +648,16 @@ library
     cpp-options:
         -DACCELERATE_DEBUG
 
+  -- Export the tracy flag via a header
+  -- so dependent libraries can use it
+  -- without having to redeclare the flag.
+  if flag(tracy)
+    include-dirs: cbits/flag-tracy
+    install-includes: flag_tracy.h
+  else
+    include-dirs: cbits/flag-no-tracy
+    install-includes: flag_tracy.h
+
   if flag(tracy)
     if !flag(debug)
       build-depends: accelerate-tracy-flag-depends-on-debug-flag < 0
