@@ -761,6 +761,16 @@ data LoopDirection t where
   -- from n - 1 to 0
   LoopDescending :: LoopDirection Int
 
+isDescending :: LoopDirection Int -> Bool
+isDescending LoopDescending = True
+isDescending _ = False
+
+-- TODO: Migrate all uses of isDescending to chooseDirection, as
+-- Direction provides more type safety than Bool?
+chooseDirection :: LoopDirection Int -> Direction
+chooseDirection LoopDescending = RightToLeft
+chooseDirection _ = LeftToRight
+
 -- The representation of a buffer that is either fused away (only used within
 -- a cluster) or not used at all.
 data LocalBufferR b where
@@ -1312,3 +1322,6 @@ flatClusterIndependentLoopDepth (FlatCluster _ _ _ dirs _ _ _)
   where
     isAny (Exists LoopAny) = True
     isAny _ = False
+
+flatClusterLoopDepth :: FlatCluster op env -> LoopDepth
+flatClusterLoopDepth (FlatCluster shr _ _ _ _ _ _) = rank shr
