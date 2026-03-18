@@ -20,17 +20,19 @@
 module Crypto.Hash.XKCP (
 
   SHA3_256(..),
-  hash, hashlazy,
+  hash, hashlazy, hashIncrement,
 
 ) where
 
 import Control.Monad
+import Data.List (mapAccumR)
 import Data.Word
 import Foreign.C.Types
 import Foreign.Ptr
 import Language.Haskell.TH.Syntax
 import System.IO.Unsafe 
 
+import Data.Array.Byte
 import qualified Data.ByteString                                    as S
 import qualified Data.ByteString.Lazy                               as L
 import qualified Data.ByteString.Lazy.Internal                      as L
@@ -105,6 +107,16 @@ hashlazy lbs = unsafePerformIO $! do
         go cs
   go lbs
 
+-- Increments a hash value. To be used carefully. Designed for generating
+-- multiple variants of the same kernel: either for different phases of the
+-- kernel (like initialization, parallel work and finalization), or to
+-- specialize the kernel for e.g. different input sizes.
+hashIncrement :: Word8 -> SHA3_256 -> SHA3_256
+hashIncrement inc (SHA3_256 input#) = SHA3_256 result#
+  where
+    !(ByteArray result#) = fromList $ snd $ mapAccumR
+      (\carry x -> let y = carry + x in (if y < x then 1 else 0, y))
+      inc $ toList $ ByteArray input#
 
 -- Internals
 -- -----------------------------------------------------------------------------
