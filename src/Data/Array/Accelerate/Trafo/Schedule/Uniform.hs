@@ -224,18 +224,20 @@ transform' (SyncSchedule _ simple schedule) = case schedule of
           $ instr
           $ buildEffect (Exec (kernelMetadata kernel) kernel $ args' SkipNone)
           $ buildEffect (SignalResolve $ map (weaken $ skipWeakenIdx skip) resolvers) buildReturn
-  PAtrace msg t -> TransformSchedule $ \fenv _ _ ->
+  PAtrace msg t -> TransformSchedule $ \fenv _ ctx ->
     case acquireSome fenv $ arrayDescriptorsIdxSet t of
       AcquireSome skip signals resolvers instr mapping'
-        | mapping <- mapping' SkipNone ->
-          case reindexArrayDescriptors (`prjPartial` mapping) t of
-            Nothing -> internalError "Variable missing after acquireSome"
-            Just t' ->
-              buildEffect (SignalAwait signals)
-                $ instr
-                $ buildEffect (Atrace msg t')
-                $ buildEffect (SignalResolve $ map (weaken $ skipWeakenIdx skip) resolvers)
-                buildReturn
+        | mapping <- mapping' SkipNone -> case ctx of 
+          CtxNormal dest
+            | TupRsingle dest' <- dest ->
+              case reindexArrayDescriptors (`prjPartial` mapping) t of
+                Nothing -> internalError "Variable missing after acquireSome"
+                Just t' ->
+                  buildEffect (SignalAwait signals)
+                    $ instr
+                    $ buildEffect (Atrace msg t')
+                    $ buildEffect (SignalResolve $ map (weaken $ skipWeakenIdx skip) resolvers)
+                    $ writeLoopCondition (weaken (skipWeakenIdx skip) dest') True
   PAssert msg cond -> TransformSchedule $ \fenv _ ctx ->
     case acquireSome fenv $ IdxSet.fromVarList $ expGroundVars cond of
       AcquireSome skip signals resolvers instr mapping'
