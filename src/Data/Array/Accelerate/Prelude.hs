@@ -1357,11 +1357,12 @@ scanlSeg f z arr seg =
     seg'      = map (+1) seg
     arr'      = permute' const
                          (fill (sh ::. sz + length seg) z)
-                         (imap
-                            (\(sx ::. i) x ->
-                              let i' = sx ::. i + fromIntegral (inc ! I1 i)
+                         (izipWith
+                            (\(sx ::. i) inci x ->
+                              let i' = sx ::. i + fromIntegral inci
                                in Just_ (T2 i' x)
                             )
+                            (replicate (lift (sh ::. All_)) inc)
                             (take (length flags) arr)
                          )
 
@@ -1453,11 +1454,9 @@ scanl'Seg f z arr seg =
     offset      = scanl1 (+) $ map (assertBounds "Segment sizes in foldSeg should be non-negative" (>= 0)) seg
     inc         = scanl1 (+)
                 $ permute' (+) (fill (I1 $ size arr + 1) 0)
-                           (imap
-                              (\ix x ->
-                                let i' = index1' (offset ! ix)
-                                in Just_ (T2 i' x)
-                              )
+                           (zipWith
+                              (\o x -> Just_ (T2 (index1' o) x))
+                              offset
                               (fill (shape seg) (1 :: Exp i))
                            )
 
@@ -1584,11 +1583,12 @@ scanrSeg f z arr seg =
     seg'        = map (+1) seg
     arr'        = permute' const
                            (fill (sh ::. sz + length seg) z)
-                           (imap
-                              (\(sx ::. i) x ->
-                                let i' = sx ::. i + fromIntegral (inc !! i) - 1
+                           (izipWith
+                              (\(sx ::. i) inci x ->
+                                let i' = sx ::. i + fromIntegral inci - 1
                                  in Just_ (T2 i' x)
                               )
+                              (replicate (lift (sh ::. All_)) inc)
                               (drop (sz - length flags) arr)
                            )
 
@@ -1734,17 +1734,10 @@ mkHeadFlags
 mkHeadFlags seg
   = init
   $ permute' (+) zeros
-             (imap
-                (\ix x ->
-                  let i' = index1' (offset ! ix)
-                  in Just_ (T2 i' x)
-                )
-                ones
-             )
+             (map (\o -> Just_ (T2 (index1' o) 1)) offset)
   where
     T2 offset len = scanl' (+) 0 $ map (assertBounds "Segment sizes should be non-negative" (>= 0)) seg
     zeros         = fill (index1' $ the len + 1) 0
-    ones          = fill (index1  $ size offset) 1
 
 -- | Compute tail flags vector from segment vector for right-scans. That
 -- is, the flag is placed at the last place in each segment.
@@ -1756,17 +1749,10 @@ mkTailFlags
 mkTailFlags seg
   = init
   $ permute' (+) zeros
-             (imap
-               (\ix x ->
-                 let i' = index1' (the len - 1 - offset ! ix)
-                 in Just_ (T2 i' x)
-               )
-               ones
-             )
+             (map (\o -> Just_ (T2 (index1' (the len - 1 - o)) 1)) offset)
   where
     T2 offset len = scanr' (+) 0 $ map (assertBounds "Segment sizes should be non-negative" (>= 0)) seg
     zeros         = fill (index1' $ the len + 1) 0
-    ones          = fill (index1  $ size offset) 1
 
 -- | Construct a segmented version of a function from a non-segmented
 -- version. The segmented apply operates on a head-flag value tuple, and
@@ -2073,11 +2059,11 @@ compact keep arr
         sz              = indexTail (shape arr)
         T2 target len   = scanl' (+) 0 (map boolToInt keep)
         T2 offset valid = scanl' (+) 0 (flatten len)
-        prj ix x        = if keep!ix
-                             then Just_ (T2 (I1 (offset !! toIndex sz (indexTail ix) + target!ix)) x)
+        prj ix k t x    = if k
+                             then Just_ (T2 (I1 (offset !! toIndex sz (indexTail ix) + t)) x)
                              else Nothing_
         dummy           = fill (I1 (the valid)) undef
-        result          = permute' const dummy (imap prj arr)
+        result          = permute' const dummy (izipWith3 prj keep target arr)
     in
     T2 result len
 
@@ -2151,10 +2137,9 @@ scatter
     -> Acc (Vector e)             -- ^ default values
     -> Acc (Vector e)             -- ^ source values
     -> Acc (Vector e)
-scatter to defaults input = permuteUnique' defaults (imap pf input')
+scatter to defaults input = permuteUnique' defaults (zipWith pf to input)
   where
-    pf ix x = Just_ (T2 (I1 (to ! ix)) x)
-    input'  = backpermute (shape to `intersect` shape input) id input
+    pf t x = Just_ (T2 (I1 t) x)
 
 -- | Conditionally overwrite elements of the destination by scattering values of
 -- the source array according to a given index mapping, whenever the masking
@@ -2177,11 +2162,10 @@ scatterIf
     -> Acc (Vector b)             -- ^ default values
     -> Acc (Vector b)             -- ^ source values
     -> Acc (Vector b)
-scatterIf to maskV pred defaults input = permuteUnique' defaults (imap pf input')
+scatterIf to maskV pred defaults input = permuteUnique' defaults (zipWith3 pf maskV to input)
   where
-    input'  = backpermute (shape to `intersect` shape input) id input
-    pf ix x = if pred (maskV ! ix)
-                 then Just_ (T2 (I1 (to ! ix)) x)
+    pf m t x = if pred m
+                 then Just_ (T2 (I1 t) x)
                  else Nothing_
 
 -- Permutations
