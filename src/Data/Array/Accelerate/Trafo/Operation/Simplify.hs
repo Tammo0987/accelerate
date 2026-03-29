@@ -343,6 +343,16 @@ simplify' uniquenesses = \case
               $ awhileSimplifyInvariant us (cond' env') (step' env') $ simplifyReturnVars env us initial
       )
 
+  Atrace msg t ->
+    let
+      set = arrayDescriptorsIdxSet t
+    in
+      ( set
+      , \env ->
+        fence (syncSubstitutes env set)
+        $ Atrace msg $ simplifyArrayDescriptor env t
+    )
+
   Aassert msg cond ->
     ( IdxSet.empty
     , \env ->
@@ -378,6 +388,9 @@ simplify' uniquenesses = \case
               deps'
               (next' env')
       )
+
+simplifyArrayDescriptor :: InfoEnv env -> ArrayDescriptors env t -> ArrayDescriptors env t
+simplifyArrayDescriptor env = mapTupR (\(ArrayDescriptor shape sh buffers) -> ArrayDescriptor shape (mapTupR (weaken $ substitute env) sh) (mapTupR (weaken $ substitute env) buffers))
 
 -- Given an environment, the set of updated variables and a list of copies of
 -- an operation, checks whether the operation copies all its outputs from

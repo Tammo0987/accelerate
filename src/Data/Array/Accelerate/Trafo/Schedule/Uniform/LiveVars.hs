@@ -41,7 +41,7 @@ import Data.Array.Accelerate.Representation.Type
 import Data.Array.Accelerate.Trafo.Exp.Substitution
 import Data.Array.Accelerate.Trafo.LiveVars
 import Data.Array.Accelerate.Trafo.Substitution
-import Data.Array.Accelerate.Trafo.Operation.LiveVars (reEnvArrayInstr)
+import Data.Array.Accelerate.Trafo.Operation.LiveVars (reEnvArrayDescriptors, reEnvArrayInstr)
 
 import Data.Maybe
 
@@ -201,6 +201,7 @@ analyseEffect (Exec _ _ args) liveness = setIdxSetLive (IdxSet.fromList $ argsIn
 analyseEffect (SignalAwait signals) liveness = setIdxSetLive (IdxSet.fromList $ map Exists signals) liveness
 analyseEffect (SignalResolve _) liveness = liveness
 analyseEffect (RefWrite ref value) liveness = addLiveImplies (varIdx ref) (varIdx value) liveness
+analyseEffect (Atrace _ t) liveness = setIdxSetLive (arrayDescriptorsIdxSet t) liveness
 analyseEffect (Aassert _ cond) liveness = setIdxSetLive (IdxSet.fromList free) liveness
   where free = map (\(Exists (Var _ idx)) -> Exists idx) $ expGroundVars cond
 
@@ -214,6 +215,7 @@ reEnvEffect re = \case
     (Nothing  , _          ) -> id
     (Just _   , Nothing    ) -> internalError "Substitution in live variable analysis failed. A reference was live, but the value written to it was dead."
   Aassert msg cond -> Effect $ Aassert msg $ mapArrayInstr (reEnvArrayInstr re) cond
+  Atrace msg t -> Effect $ Atrace msg $ reEnvArrayDescriptors re t
 
 reEnvArg :: ReEnv env subenv -> SArg env t -> SArg subenv t
 reEnvArg re (SArgScalar   var) = SArgScalar   $ expectJust $ reEnvVar re var

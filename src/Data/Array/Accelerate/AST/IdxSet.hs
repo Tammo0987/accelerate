@@ -52,6 +52,12 @@ instance Eq (IdxSet env) where
   IdxSet (PNone a) == IdxSet (PNone b) = IdxSet a == IdxSet b
   _ == _ = False
 
+instance Semigroup (IdxSet env) where
+  (<>) = union
+
+instance Monoid (IdxSet env) where
+  mempty = empty
+
 overlaps :: IdxSet env -> IdxSet env -> Bool
 overlaps (IdxSet (PPush _ _)) (IdxSet (PPush _ _)) = True
 overlaps (IdxSet (PPush a _)) (IdxSet (PNone b  )) = overlaps (IdxSet a) (IdxSet b)

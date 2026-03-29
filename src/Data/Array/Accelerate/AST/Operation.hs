@@ -39,12 +39,12 @@ module Data.Array.Accelerate.AST.Operation (
 
   Var', Exp', Fun', In, Out, Mut,
 
-  ArrayDescriptor(..), weakenArrayDescriptor,
+  ArrayDescriptor(..), ArrayDescriptors, weakenArrayDescriptor, weakenArrayDescriptors,
 
   OpenExp, OpenFun, Exp, Fun, ArrayInstr(..),
   expGroundVars, funGroundVars, arrayInstrsInExp, arrayInstrsInFun,
 
-  encodeGroundR, encodeGroundsR, encodeGroundVar, encodeGroundVars,
+  encodeGroundR, encodeGroundsR, encodeGroundVar, encodeGroundVars, encodeArrayDescriptors,
   rnfGroundR, rnfGroundsR, rnfGroundVar, rnfGroundVars, rnfUniqueness,
   liftGroundR, liftGroundsR, liftGroundVar, liftGroundVars,
 
@@ -52,9 +52,10 @@ module Data.Array.Accelerate.AST.Operation (
 
   paramIn, paramsIn, paramIn', paramsIn',
 
-  ReindexPartial, reindexArg, reindexArgs, reindexExp, reindexPreArgs, reindexVar, reindexVars,
+  ReindexPartial, reindexArg, reindexArgs, reindexExp, reindexPreArgs, reindexVar, reindexVars, reindexArrayDescriptors,
   reindexIdxSet,
   weakenReindex,
+  arrayDescriptorsIdxSet,
   argVars, argsVars, argsInputs, argsOutputs, AccessGroundR(..),
 
   mapAccExecutable, mapAfunExecutable,
@@ -187,7 +188,7 @@ data PreOpenAcc (op :: Type -> Type) env a where
           -> PreOpenAcc  op env a
 
   Atrace :: Text
-         -> TupR (ArrayDescriptor env) t
+         -> ArrayDescriptors env t
          -> PreOpenAcc op env Word8
 
   -- | Asserts that the given expression evaluates to true.
@@ -295,8 +296,25 @@ data ArrayDescriptor env a where
                   -> GroundVars env (Buffers e)
                   -> ArrayDescriptor env (Array sh e)
 
+type ArrayDescriptors env = TupR (ArrayDescriptor env)
+
+weakenArrayDescriptors :: env :> env' -> ArrayDescriptors env a -> ArrayDescriptors env' a
+weakenArrayDescriptors k = mapTupR (weakenArrayDescriptor k)
+
 weakenArrayDescriptor :: env :> env' -> ArrayDescriptor env a -> ArrayDescriptor env' a
 weakenArrayDescriptor k (ArrayDescriptor shr sh buffers) = ArrayDescriptor shr (weakenVars k sh) (weakenVars k buffers)
+
+arrayDescriptorIdxSet :: ArrayDescriptor env t -> IdxSet env
+arrayDescriptorIdxSet (ArrayDescriptor _ sh buffers) = IdxSet.fromVars sh `IdxSet.union` IdxSet.fromVars buffers
+
+arrayDescriptorsIdxSet :: ArrayDescriptors env t -> IdxSet env
+arrayDescriptorsIdxSet = foldMapTupR arrayDescriptorIdxSet
+
+encodeArrayDescriptors :: ArrayDescriptors env t -> Builder
+encodeArrayDescriptors = encodeTupR encodeArrayDescriptor
+
+encodeArrayDescriptor :: ArrayDescriptor env t -> Builder
+encodeArrayDescriptor (ArrayDescriptor shape sh buffer) = encodeShapeR shape <> encodeGroundVars sh <> encodeGroundVars buffer
 
 -- | The arguments to be passed to an operation of type `t`.
 -- This type is represented as a cons list, separated by (->) and ending
@@ -418,7 +436,7 @@ class HasGroundsR f where
 instance HasGroundsR (PreOpenAcc op env) where
   groundsR (Exec _ _)        = TupRunit
   groundsR (Return vars)     = groundsR vars
-  groundsR (Manifest var)    = groundsR var     
+  groundsR (Manifest var)    = groundsR var
   groundsR (Compute e)       = groundsR e
   groundsR (Alet _ _ _ a)    = groundsR a
   groundsR (Alloc _ tp _)    = TupRsingle $ GroundRbuffer tp
@@ -428,6 +446,7 @@ instance HasGroundsR (PreOpenAcc op env) where
   groundsR (Awhile _ _ _ a)  = groundsR a
   groundsR (Aassert _ _)     = TupRsingle $ GroundRscalar scalarTypeWord8
   groundsR (Aassume _)       = TupRsingle $ GroundRscalar scalarTypeWord8
+  groundsR (Atrace _ _)      = TupRsingle $ GroundRscalar scalarTypeWord8
   groundsR (Fence _ a)       = groundsR a
 
 instance HasGroundsR (GroundVar env) where
@@ -585,12 +604,18 @@ reindexAcc r (Acond var poa poa') = Acond <$> reindexVar r var <*> reindexAcc r 
 reindexAcc r (Awhile tr poa poa' tr') = Awhile tr <$> reindexAfun r poa <*> reindexAfun r poa' <*> reindexVars r tr'
 reindexAcc r (Aassert msg cond) = Aassert msg <$> reindexExp r cond
 reindexAcc r (Aassume cond) = Aassume <$> reindexExp r cond
+reindexAcc r (Atrace msg t) = Atrace msg <$> reindexArrayDescriptors r t
 reindexAcc r (Fence set e) = Fence <$> reindexIdxSet r set <*> reindexAcc r e
+
+reindexArrayDescriptors :: (Applicative f) => ReindexPartial f env env' -> ArrayDescriptors env a -> f (ArrayDescriptors env' a)
+reindexArrayDescriptors k = traverseTupR (reindexArrayDescriptor k)
+
+reindexArrayDescriptor :: Applicative f => ReindexPartial f env env' -> ArrayDescriptor env a -> f (ArrayDescriptor env' a)
+reindexArrayDescriptor k (ArrayDescriptor shr sh buffers) = ArrayDescriptor shr <$> reindexVars k sh <*> reindexVars k buffers
 
 reindexAfun :: Applicative f => ReindexPartial f env env' -> PreOpenAfun op env t -> f (PreOpenAfun op env' t)
 reindexAfun r (Abody poa) = Abody <$> reindexAcc r poa
 reindexAfun r (Alam lhs poa) = reindexLHS r lhs $ \lhs' r' -> Alam lhs' <$> reindexAfun r' poa
-
 
 reindexLHS :: Applicative f => ReindexPartial f env env' -> LeftHandSide s t env env1 -> (forall env1'. LeftHandSide s t env' env1' -> ReindexPartial f env1 env1' -> r) -> r
 reindexLHS r (LeftHandSideSingle st) k = k (LeftHandSideSingle st) $ \case
@@ -670,6 +695,7 @@ mapAccExecutable f = \case
   Awhile uniqueness c g a       -> Awhile uniqueness (mapAfunExecutable f c) (mapAfunExecutable f g) a
   Aassert msg cond              -> Aassert msg cond
   Aassume cond                  -> Aassume cond
+  Atrace msg t                  -> Atrace msg t
   Fence set e                   -> Fence set (mapAccExecutable f e)
 
 mapAfunExecutable :: (forall args benv'. op args -> Args benv' args -> op' args) -> PreOpenAfun op benv t -> PreOpenAfun op' benv t
@@ -703,7 +729,11 @@ instance NFData' op => NFData (OperationAcc op env a) where
   rnf (Awhile us cond step initial) = rnfTupR rnfUniqueness us `seq` rnf cond `seq` rnf step `seq` rnfGroundVars initial
   rnf (Aassert _ cond)              = rnfOpenExp cond
   rnf (Aassume cond)                = rnfOpenExp cond
+  rnf (Atrace _ t)                  = rnfTupR rnf t
   rnf (Fence set a)                 = IdxSet.rnfIdxSet set `seq` rnf a
+
+instance NFData (ArrayDescriptor env a) where
+  rnf (ArrayDescriptor shr sh buffers) = rnfShapeR shr `seq` rnfGroundVars sh `seq` rnfGroundVars buffers
 
 instance NFData' op => NFData (OperationAfun op env a) where
   rnf (Abody a) = rnf a
