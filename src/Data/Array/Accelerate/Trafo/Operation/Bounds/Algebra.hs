@@ -89,8 +89,11 @@ nonNegative _ _
 
 undefBound :: Idx env Int -> ScalarType t -> TermBound env t
 -- Not sure if the range maxBound .. minBound would work in the entire
--- analysis. 0 .. 0 should definitely be safe, so we use that.
-undefBound zero _ = boundConst zero 0
+-- analysis. 0 .. 0 should definitely be safe, but then we would convert
+-- Undef to 0. Hence we use 0 .. 1, the next best option.
+-- In the future we may want to include a separate 'undef' value in the
+-- analysis.
+undefBound zero _ = boundRange zero 0 1
 
 bottoms :: Idx env Int -> TypeR t -> TermBounds env t
 bottoms zero = mapTupR (bottom zero)
