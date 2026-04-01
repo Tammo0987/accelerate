@@ -1454,10 +1454,7 @@ scanl'Seg f z arr seg =
     offset      = scanl1 (+) $ map (assertBounds "Segment sizes in foldSeg should be non-negative" (>= 0)) seg
     inc         = scanl1 (+)
                 $ permute' (+) (fill (I1 $ size arr + 1) 0)
-                           (map
-                              (\o -> Just_ (T2 (index1' o) (1 :: Exp i)))
-                              offset
-                           )
+                $ map (\o -> Just_ (T2 (index1' o) (1 :: Exp i))) offset
 
     len         = offset ! I1 (length offset - 1)
     body        = backpermute
@@ -1733,7 +1730,7 @@ mkHeadFlags
 mkHeadFlags seg
   = init
   $ permute' (+) zeros
-             (map (\o -> Just_ (T2 (index1' o) 1)) offset)
+  $ map (\o -> Just_ (T2 (index1' o) 1)) offset
   where
     T2 offset len = scanl' (+) 0 $ map (assertBounds "Segment sizes should be non-negative" (>= 0)) seg
     zeros         = fill (index1' $ the len + 1) 0
@@ -1748,7 +1745,7 @@ mkTailFlags
 mkTailFlags seg
   = init
   $ permute' (+) zeros
-             (map (\o -> Just_ (T2 (index1' (the len - 1 - o)) 1)) offset)
+  $ map (\o -> Just_ (T2 (index1' (the len - 1 - o)) 1)) offset
   where
     T2 offset len = scanr' (+) 0 $ map (assertBounds "Segment sizes should be non-negative" (>= 0)) seg
     zeros         = fill (index1' $ the len + 1) 0
