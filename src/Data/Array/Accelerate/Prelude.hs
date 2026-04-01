@@ -1454,10 +1454,9 @@ scanl'Seg f z arr seg =
     offset      = scanl1 (+) $ map (assertBounds "Segment sizes in foldSeg should be non-negative" (>= 0)) seg
     inc         = scanl1 (+)
                 $ permute' (+) (fill (I1 $ size arr + 1) 0)
-                           (zipWith
-                              (\o x -> Just_ (T2 (index1' o) x))
+                           (map
+                              (\o -> Just_ (T2 (index1' o) (1 :: Exp i)))
                               offset
-                              (fill (shape seg) (1 :: Exp i))
                            )
 
     len         = offset ! I1 (length offset - 1)
