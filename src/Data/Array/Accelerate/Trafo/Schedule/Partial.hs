@@ -828,18 +828,15 @@ buildFence
   :: IdxSet env
   -> Build PartialSchedule kernel env t
   -> Build PartialSchedule kernel env t
-buildFence deps next' available
-  | IdxSet.null deps' =
-    next{ didChange = True }
-  | otherwise =
-    Built{
-      didChange = didChange next,
-      directlyAwaits = deps' `IdxSet.union` directlyAwaits next,
-      writes = writes next,
-      finallyReleases = finallyReleases next,
-      trivial = trivial next,
-      term = PartialSchedule $ PFence deps' $ term next
-    }
+buildFence deps next' available =
+  Built{
+    didChange = didChange next,
+    directlyAwaits = deps' `IdxSet.union` directlyAwaits next,
+    writes = writes next,
+    finallyReleases = finallyReleases next,
+    trivial = trivial next,
+    term = PartialSchedule $ PFence deps' $ term next
+  }
   where
     next = next' (IdxSet.union available deps)
     deps' = deps IdxSet.\\ available
@@ -966,9 +963,11 @@ analyseSyncEnv' (PartialSchedule sched) = case sched of
           (partialEnvFromList const bindings)
           True
           (PAssert msg cond)
-  PFence deps next
-    | ToSyncSchedule up next' <- analyseSyncEnv' next ->
-      ToSyncSchedule up
+  PFence deps next ->
+    let
+      next' = analyseSyncEnv next
+    in
+      ToSyncSchedule UpdateKeep
         $ SyncSchedule
           (syncEnv next')
           (syncSimple next')
