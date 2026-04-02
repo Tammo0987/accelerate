@@ -314,6 +314,8 @@ simplifyOpenExp env = first getAny . cvtE
     select p t@(_,t') e@(_,e')
       | Const _ 1 <- p                  = Stats.knownBranch "True"      (yes t')
       | Const _ 0 <- p                  = Stats.knownBranch "False"     (yes e')
+      | Undef _ <- e'                   = yes t'
+      | Undef _ <- t'                   = yes e'
       -- Convert select over pairs to pair of selects. This may enable further
       -- optimizations, and if we don't do this here we'll do it during code
       -- generation anyway.
@@ -330,7 +332,7 @@ simplifyOpenExp env = first getAny . cvtE
               (Select (Evar (Var scalarTypeWord8 ZeroIdx)) (weakenE (weakenSucc weakenId) t2) (weakenE (weakenSucc weakenId) e2))
       | Just Refl <- matchOpenExp t' e' = Stats.knownBranch "redundant" (yes e')
       | PrimApp PrimLNot c <- p         = yes $ Select c e' t'
-      | otherwise                       =  Select p <$> t <*> e
+      | otherwise                       = Select p <$> t <*> e
 
     -- Simplify conditional expressions, in particular by eliminating branches
     -- when the predicate is a known constant.

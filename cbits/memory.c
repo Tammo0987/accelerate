@@ -6,6 +6,9 @@
 #ifdef ACCELERATE_MEMORY_COUNTER
 #include <pthread.h>
 #endif  // ACCELERATE_MEMORY_COUNTER
+#ifdef ACCELERATE_TRACY
+#include "tracy/public/tracy/TracyC.h"
+#endif  // ACCELERATE_TRACY
 
 #include "align.h"
 #include "flags.h"
@@ -67,7 +70,10 @@ void* accelerate_buffer_alloc(uint64_t byte_size) {
   size = (size + CACHE_LINE_SIZE - 1) / CACHE_LINE_SIZE * CACHE_LINE_SIZE;
   void *ptr = accelerate_raw_alloc(size, CACHE_LINE_SIZE);
 
-  // TODO: call ___tracy_emit_memory_alloc
+  #ifdef ACCELERATE_TRACY
+  ___tracy_emit_memory_alloc(ptr, size, 0);
+  #endif  // ACCELERATE_TRACY
+
   #ifdef ACCELERATE_MEMORY_COUNTER
   // For benchmarking memory usage:
   pthread_mutex_lock(&mutex);
@@ -107,7 +113,10 @@ void accelerate_buffer_release_by(void* interior, uint64_t amount) {
   // Release is always needed, acquire only when the reference count drops to zero.
   uint64_t old = atomic_fetch_add_explicit(&header->reference_count, -amount, memory_order_acq_rel);
   if (old == amount) {
-    // TODO: call ___tracy_emit_memory_free
+
+    #ifdef ACCELERATE_TRACY
+    ___tracy_emit_memory_free(header, 0);
+    #endif  // ACCELERATE_TRACY
 
     #ifdef ACCELERATE_MEMORY_COUNTER
     pthread_mutex_lock(&mutex);

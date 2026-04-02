@@ -375,6 +375,9 @@ allInfusible prods buff cons ilp = foldr' (\prod -> infusible prod buff cons) il
 (|->) = ($)
 (|=>) = ($)
 
+noInplace :: HasCallStack => Node GVal -> FusionILP op -> FusionILP op
+noInplace node ilp = ilp{ _constraints = _constraints ilp <> pimax node :>= Constant (Number nComps) }
+
 --------------------------------------------------------------------------------
 -- Backend specific definitions
 --------------------------------------------------------------------------------
@@ -894,6 +897,13 @@ bindsBuffers c = traverse_ \b -> do
   fusionILP %= ws >-|b|-> c
   writers b .= S.singleton c
 
+-- | Registers that no in-place updates may happen on these variables.
+--
+-- This is needed when the uses of a variable cannot be fully tracked. This
+-- happens when a variable is returned, or used as the input of an awhile loop.
+noInplaceBuffers :: Nodes GVal -> State (FusionGraphState op env) ()
+noInplaceBuffers = traverse_ \b -> do
+  fusionILP %= noInplace b
 
 -- -- | A computation executes another computattion.
 -- executes :: HasCallStack => Node Comp -> Node Comp -> State (FusionGraphState op env) ()
@@ -981,6 +991,7 @@ mkFusionGraph (Return vars) = do
   retN <- freshComp
   let (_, bs, _) = lookupVars vars env
   retN `returnsBuffers` valsNodes bs
+  noInplaceBuffers $ valsNodes bs
   symbol retN ?= SRet env vars
   return bs
 
@@ -1042,6 +1053,7 @@ mkFusionGraph (Awhile u cond body init) = do
     bodyN <- freshComp
     let init_val = lookupVars init env ^. _2
     whileN `requiresBuffers` valsNodes init_val   -- While reads the initial value,
+    noInplaceBuffers $ valsNodes init_val
     _ <- branches                                 -- executes "both" the condition and body,
       (block condN $ mkFusionGraphU u cond)
       (block bodyN $ mkFusionGraphU u body)
