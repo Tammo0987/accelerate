@@ -391,7 +391,7 @@ simplify' uniquenesses = \case
       )
 
 simplifyArrayDescriptor :: InfoEnv env -> ArrayDescriptors env t -> ArrayDescriptors env t
-simplifyArrayDescriptor env = mapTupR (\(ArrayDescriptor shape sh buffers) -> ArrayDescriptor shape (mapTupR (weaken $ substitute env) sh) (mapTupR (weaken $ substitute env) buffers))
+simplifyArrayDescriptor env = mapTupR (\(ArrayDescriptor shr sh buffers) -> ArrayDescriptor shr (mapTupR (weaken $ substitute env) sh) (mapTupR (weaken $ substitute env) buffers))
 
 -- Given an environment, the set of updated variables and a list of copies of
 -- an operation, checks whether the operation copies all its outputs from

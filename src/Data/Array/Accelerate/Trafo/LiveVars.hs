@@ -317,7 +317,7 @@ returnVars TupRpair{} (TupRsingle tp) = pairImpossible tp
 returnIndices :: ReturnImplications env t -> IdxSet env -> LivenessEnv env -> LivenessEnv env
 returnIndices ret indices = case flattenReturnImplications ret of
   ReturnLive -> setIdxSetLive indices
-  (ReturnImpliedBy impliedBy) -> addLiveImplications impliedBy indices
+  ReturnImpliedBy impliedBy -> addLiveImplications impliedBy indices
 
 data SubTupR t t' where
   SubTupRskip :: SubTupR t ()

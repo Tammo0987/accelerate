@@ -314,7 +314,7 @@ encodeArrayDescriptors :: ArrayDescriptors env t -> Builder
 encodeArrayDescriptors = encodeTupR encodeArrayDescriptor
 
 encodeArrayDescriptor :: ArrayDescriptor env t -> Builder
-encodeArrayDescriptor (ArrayDescriptor shape sh buffer) = encodeShapeR shape <> encodeGroundVars sh <> encodeGroundVars buffer
+encodeArrayDescriptor (ArrayDescriptor shr sh buffer) = encodeShapeR shr <> encodeGroundVars sh <> encodeGroundVars buffer
 
 -- | The arguments to be passed to an operation of type `t`.
 -- This type is represented as a cons list, separated by (->) and ending

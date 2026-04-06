@@ -33,6 +33,7 @@ import Data.Array.Accelerate.AST.Kernel
 import Data.Array.Accelerate.AST.LeftHandSide
 import Data.Array.Accelerate.AST.Schedule.Uniform
 import Data.Array.Accelerate.Representation.Type
+import Data.Array.Accelerate.Representation.Shape
 import Data.Array.Accelerate.Type
 import Data.String
 
@@ -235,7 +236,11 @@ prettyShapeVars _   TupRunit = "Z"
 prettyShapeVars env vars = encloseSep "Z :. " "" " :. " $ map (\(Exists v) -> prettyVar env v) $ flattenTupR vars
 
 prettyArrayDescriptors :: Val' env -> ArrayDescriptors env t -> Adoc
-prettyArrayDescriptors env = foldMapTupR (prettyArrayDescriptor env)
+prettyArrayDescriptors env = prettyTupR (prettyArrayDescriptor env) 10
 
-prettyArrayDescriptor :: Val' env -> ArrayDescriptor env t -> Adoc
-prettyArrayDescriptor env (ArrayDescriptor _ sh buffer) = "Array: (" <+> prettyShapeVars env sh <+> prettyVars env 0 buffer <+> ")"
+prettyArrayDescriptor :: Val' env -> Precedence -> ArrayDescriptor env t -> Adoc
+prettyArrayDescriptor env p (ArrayDescriptor shr sh buffer) = parensIf (p > 0) $ prettyModifier In <+> sh' <+> prettyVars env 10 buffer
+  where
+    sh' = case shr of
+      ShapeRz -> "Z"
+      _ -> "(" <> prettyShapeVars env sh <> ")"
