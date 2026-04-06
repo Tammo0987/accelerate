@@ -177,6 +177,11 @@ data PrePartialSchedule schedule kernel env t where
     -> GroundVars env t
     -> PrePartialSchedule schedule kernel env t
 
+  PAtrace
+    :: Text
+    -> ArrayDescriptors env t
+    -> PrePartialSchedule schedule kernel env Word8
+
   -- Signals that this while loop should do another iteration.
   -- The state for the next iteration is computed by the subterm.
   PContinue
@@ -442,6 +447,7 @@ toPartial' us = \case
       ( IdxSet.drop' lhs condFree `IdxSet.union` IdxSet.drop' lhs (IdxSet.drop stepFree) `IdxSet.union` IdxSet.fromList (groundBufferVars initial)
       , PartialSchedule $ PAwhile us' (Plam lhs $ Pbody fn) initial )
   C.Awhile{} -> internalError "Unary function impossible"
+  C.Atrace msg t -> (arrayDescriptorsIdxSet t, PartialSchedule $ PAtrace msg t)
   C.Aassert msg cond ->
     ( IdxSet.fromList $ mapMaybe (\(Exists a) -> instrToSync a) $ arrayInstrsInExp cond
     , PartialSchedule $ PAssert msg cond )
@@ -525,6 +531,7 @@ rebuild' (PartialSchedule schedule) = case schedule of
   PReturnValues updateTup next -> buildReturnValues updateTup (rebuild' next)
   PAcond var true false -> buildAcond var (rebuild' true) (rebuild' false)
   PAwhile us fn initial -> buildAwhile us (rebuildUnary fn) initial
+  PAtrace msg t -> buildTrace msg t
   PContinue next -> buildContinue $ rebuild' next
   PBreak us vars -> buildBreak us vars
   PAssert msg cond -> buildAssert msg cond
@@ -758,6 +765,20 @@ buildAwhile us (BuildUnary lhs fn') initial available =
   where
     fn = fn' (IdxSet.skip' lhs available)
 
+buildTrace ::
+  Text ->
+  ArrayDescriptors env t ->
+  Build PartialSchedule kernel env Word8
+buildTrace msg t available =
+  Built{
+    didChange = False,
+    directlyAwaits = arrayDescriptorsIdxSet t IdxSet.\\ available,
+    writes = IdxSet.empty,
+    finallyReleases = IdxSet.empty,
+    trivial = True,
+    term = PartialSchedule $ PAtrace msg t
+  }
+
 buildContinue
   :: Build PartialSchedule kernel env t
   -> Build PartialSchedule kernel env (Loop t)
@@ -807,18 +828,15 @@ buildFence
   :: IdxSet env
   -> Build PartialSchedule kernel env t
   -> Build PartialSchedule kernel env t
-buildFence deps next' available
-  | IdxSet.null deps' =
-    next{ didChange = True }
-  | otherwise =
-    Built{
-      didChange = didChange next,
-      directlyAwaits = deps' `IdxSet.union` directlyAwaits next,
-      writes = writes next,
-      finallyReleases = finallyReleases next,
-      trivial = trivial next,
-      term = PartialSchedule $ PFence deps' $ term next
-    }
+buildFence deps next' available =
+  Built{
+    didChange = didChange next,
+    directlyAwaits = deps' `IdxSet.union` directlyAwaits next,
+    writes = writes next,
+    finallyReleases = finallyReleases next,
+    trivial = trivial next,
+    term = PartialSchedule $ PFence deps' $ term next
+  }
   where
     next = next' (IdxSet.union available deps)
     deps' = deps IdxSet.\\ available
@@ -839,6 +857,14 @@ data ToSyncSchedule kernel env t where
     :: UpdateTuple env t1 t2
     -> SyncSchedule kernel env t1
     -> ToSyncSchedule kernel env t2
+
+arrayDescriptorsSync :: ArrayDescriptors env t -> SyncEnv env
+arrayDescriptorsSync TupRunit = PEnd
+arrayDescriptorsSync (TupRsingle a) = arrayDescriptorSync a
+arrayDescriptorsSync (TupRpair l r) = unionPartialEnv max (arrayDescriptorsSync l) (arrayDescriptorsSync r)
+
+arrayDescriptorSync :: ArrayDescriptor env t -> SyncEnv env
+arrayDescriptorSync (ArrayDescriptor _ _ buffers) = variablesToSyncEnv (mapTupR (const Shared) buffers) buffers
 
 analyseSyncEnv :: PartialSchedule kernel env t -> SyncSchedule kernel env t
 analyseSyncEnv sched
@@ -914,6 +940,12 @@ analyseSyncEnv' (PartialSchedule sched) = case sched of
           False
           (PAwhile us (Plam lhs $ Pbody body') initial)
   PAwhile{} -> internalError "Function impossible"
+  PAtrace msg t ->
+      ToSyncSchedule UpdateKeep $
+        SyncSchedule
+          (arrayDescriptorsSync t)
+          True
+          (PAtrace msg t)
   PContinue next ->
     let
       next' = analyseSyncEnv next
@@ -931,9 +963,11 @@ analyseSyncEnv' (PartialSchedule sched) = case sched of
           (partialEnvFromList const bindings)
           True
           (PAssert msg cond)
-  PFence deps next
-    | ToSyncSchedule up next' <- analyseSyncEnv' next ->
-      ToSyncSchedule up
+  PFence deps next ->
+    let
+      next' = analyseSyncEnv next
+    in
+      ToSyncSchedule UpdateKeep
         $ SyncSchedule
           (syncEnv next')
           (syncSimple next')

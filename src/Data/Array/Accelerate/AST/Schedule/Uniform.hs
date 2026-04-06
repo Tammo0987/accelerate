@@ -309,6 +309,8 @@ data Effect kernel env where
 
   Aassert       :: Text -> Exp env PrimBool -> Effect kernel env
 
+  Atrace        :: Text -> ArrayDescriptors env t -> Effect kernel env
+
 -- A base value in the schedule is a scalar, buffer, a signal (resolver)
 -- or a (possibly mutable) reference
 --
@@ -399,6 +401,7 @@ effectFreeVars (SignalAwait signals)     = IdxSet.fromList $ map Exists $ signal
 effectFreeVars (SignalResolve resolvers) = IdxSet.fromList $ map Exists resolvers
 effectFreeVars (RefWrite ref value)      = IdxSet.insertVar ref $ IdxSet.singletonVar value
 effectFreeVars (Aassert _ cond)          = bindingFreeVars $ Compute cond
+effectFreeVars (Atrace _ t)              = arrayDescriptorsIdxSet t
 
 sargVar :: SArg env t -> Exists (Idx env)
 sargVar (SArgScalar   v) = Exists $ varIdx v

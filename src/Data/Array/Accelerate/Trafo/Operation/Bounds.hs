@@ -186,6 +186,8 @@ boundsOptimizeAcc env@(BoundsEnv _ _ zero bindings) acc = case acc of
     , env'' <- env{ boundsGraph = boundsGraphClearNodes (boundsGraph env) $ accIdxSet modified }
     -> (IdxSet.empty, env'', bottomsGround zero $ groundsR acc, Fence set $ body')
 
+  Atrace msg t -> (IdxSet.empty, env, TupRsingle $ bottom zero scalarTypeWord8, Atrace msg t)
+
   Aassert msg expr
     | (_, expr') <- boundsOptimizeExp env expr
     , expr'' <- simplifyExp expr'
