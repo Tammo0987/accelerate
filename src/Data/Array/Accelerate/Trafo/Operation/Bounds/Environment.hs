@@ -26,7 +26,7 @@ module Data.Array.Accelerate.Trafo.Operation.Bounds.Environment where
 
 import Data.Array.Accelerate.AST.Environment
 import Data.Array.Accelerate.AST.Idx
-import Data.Array.Accelerate.AST.IdxSet (IdxSet(..), unIdxSet)
+import Data.Array.Accelerate.AST.IdxSet (IdxSet(..))
 import Data.Array.Accelerate.AST.Graph (InEdge(..))
 import qualified Data.Array.Accelerate.AST.Graph as Graph
 import qualified Data.Array.Accelerate.AST.IdxSet as IdxSet

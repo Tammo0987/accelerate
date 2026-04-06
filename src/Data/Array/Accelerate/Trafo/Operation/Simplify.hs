@@ -93,6 +93,7 @@ detectMapCopies' :: forall genv env t s. ELeftHandSide t () env -> OpenExp env g
 detectMapCopies' lhs body input output = go Just body output []
   where
     go :: forall env' s'. env' :?> env -> OpenExp env' genv s' -> GroundVars genv (Buffers s') -> [CopyOperation genv] -> [CopyOperation genv]
+    go k (Assume _ e2) o = go k e2 o
     go k (Pair e1 e2) (TupRpair o1 o2) = go k e1 o1 . go k e2 o2
     go k (Let lhs' _ expr) output'     = go (strengthenWithLHS lhs' >=> k) expr output'
     go k (Evar (Var tp idx)) (TupRsingle (Var _ output'))

@@ -567,6 +567,7 @@ rebuildArrayInstrFun v (Body e)    = Body <$> rebuildArrayInstrOpenExp v e
 rebuildArrayInstrFun v (Lam lhs f) = Lam lhs <$> rebuildArrayInstrFun v f
 
 extractExpVars :: PreOpenExp arr env a -> Maybe (ExpVars env a)
+extractExpVars (Assume _ e) = extractExpVars e
 extractExpVars Nil          = Just TupRunit
 extractExpVars (Pair e1 e2) = TupRpair <$> extractExpVars e1 <*> extractExpVars e2
 extractExpVars (Evar v)     = Just $ TupRsingle v

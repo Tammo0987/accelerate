@@ -183,7 +183,7 @@ data Transform kernel genv t where
     -> Transform kernel genv t
 
   TransformBinding
-    :: (forall fenv. FutureEnv fenv genv -> (TransformToBinding kernel fenv t))
+    :: (forall fenv. FutureEnv fenv genv -> TransformToBinding kernel fenv t)
     -> Transform kernel genv t
 
 -- Captures existential fenv'

@@ -124,8 +124,12 @@ getBoundRange zero tp bound
         Nothing -> fromIntegral (maxBound :: t)
     )
 
+boundIsBool :: Idx env Int -> TermBound env Word8 -> Bool
+boundIsBool zero bound = l >= 0 && u <= 1
+  where (l, u) = getBoundRange zero TypeWord8 bound
+
 boundVar :: Idx env Int -> Idx env t -> TermBound env t
-boundVar zero ix = TermBound
+boundVar _zero ix = TermBound
   (partialEnvSingleton ix $ InEdge $ Edge 0)
   (partialEnvSingleton ix $ Edge 0)
 
@@ -252,19 +256,30 @@ app2 zero f arg1 arg2 bound1 bound2 closed1 closed2 = case f of
   PrimCmp _ CmpNEq
     | closed1 `equal` bound2 -> false zero
     | closed1 `notEqual` bound2 -> true zero
-  PrimCmp (NumSingleType (IntegralNumType tp)) CmpLt
+  PrimCmp (NumSingleType (IntegralNumType _)) CmpLt
     | closed1 `lessThan` bound2 -> true zero
     | closed1 `greaterThanEqual` bound2 -> false zero
-  PrimCmp (NumSingleType (IntegralNumType tp)) CmpGtEq
+  PrimCmp (NumSingleType (IntegralNumType _)) CmpGtEq
     | closed1 `lessThan` bound2 -> false zero
     | closed1 `greaterThanEqual` bound2 -> true zero
+  PrimCmp (NumSingleType (IntegralNumType TypeWord8)) cmp
+    | Const _ constant <- arg1
+    , boundIsBool zero closed2
+    , Just result <- cmpBool cmp constant arg2
+      -> (TupRsingle $ boundRange zero 0 1, result)
+    | Const _ constant <- arg2
+    , boundIsBool zero closed1
+    -- Note that we reorder the arguments to cmpBool (constant and arg1);
+    -- this is sound as we only handle CmpEq and CmpNEq there
+    -- (and not CmpLt and CmpGtEq)
+    , Just result <- cmpBool cmp constant arg1
+      -> (TupRsingle $ boundRange zero 0 1, result)
   PrimCmp _ _ -> bool
   -- Other boolean operations
   PrimIsNaN _ -> bool
   PrimIsInfinite _ -> bool
   PrimLAnd -> bool
   PrimLOr -> bool
-  PrimLNot -> bool
   -- Div, Mod, Quot and rem
   PrimIDiv tp
     | Just (divBounds, _, divExpr, _, _) <- divModOrQuotRem tp
@@ -293,6 +308,19 @@ app2 zero f arg1 arg2 bound1 bound2 closed1 closed2 = case f of
     
     bool :: t ~ PrimBool => (TermBounds env t, OpenExp env' benv t)
     bool = withBounds $ TupRsingle $ boundRange zero 0 1
+
+    -- Optimize comparisons of boolean expressions with constants.
+    -- 'arg' is thus assumed to be an expression that can only evaluate to 0 or
+    -- 1. Note that for the constant, we only pattern match on 0 and 1,
+    -- out of bounds arguments are already be handled in prior cases.
+    cmpBool :: Cmp -> PrimBool -> OpenExp env' benv PrimBool -> Maybe (OpenExp env' benv PrimBool)
+    cmpBool CmpEq   1 arg = Just arg -- True == arg --> arg
+    cmpBool CmpEq   0 arg = Just $ PrimApp PrimLNot arg -- False == arg --> not arg
+    cmpBool CmpNEq  1 arg = Just $ PrimApp PrimLNot arg -- True /= arg --> not arg
+    cmpBool CmpNEq  0 arg = Just arg -- False /= arg --> arg
+    -- Note: we don't pattern match on CmpLt and CmpGtEq, as that allows us to
+    -- freely reorder the arguments (the constant and the expression).
+    cmpBool _ _ _ = Nothing
 
     -- TODO: For rem, always set bounds, also if we only know that arg2 is positive?
     divModOrQuotRem :: a ~ b => IntegralType a -> Maybe (TermBounds env a, TermBounds env a, OpenExp env' benv a, OpenExp env' benv a, OpenExp env' benv (a, a))

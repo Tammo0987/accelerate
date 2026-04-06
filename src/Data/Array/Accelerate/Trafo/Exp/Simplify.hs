@@ -453,6 +453,26 @@ simplifyOpenExp env = first getAny . cvtE
       | Nothing     <- md'
       , [(_,(_,u))] <- us
       = Stats.caseDefault "introduction" $ yes $ Case x (map snd vs) (Just u)
+      -- Convert case with only two alternatives to if-then-else, as we have
+      -- more optimizations for conditionals
+      | Nothing <- md'
+      , [(tag1, alt1), (tag2, alt2)] <- xs'
+      , expr <- snd $ cond (mkBinary (PrimCmp singleType CmpEq) x $ Const scalarType tag1) (pure alt1) (pure alt2)
+      = if shouldInline x then
+          -- Encode the information that 'x' is either tag1 or tag2, in a way
+          -- that bounds analysis will understand: making them the lower and
+          -- upper bound of x.
+          yes $ snd $ assume
+            (mkBinary PrimLAnd
+              (mkBinary (PrimCmp singleType CmpGtEq) x (Const scalarType $ min tag1 tag2))
+              (mkBinary (PrimCmp singleType CmpGtEq) (Const scalarType $ max tag1 tag2) x)
+            )
+            expr
+        else
+          yes expr
+      | Just d <- md'
+      , [(tag1, alt1)] <- xs'
+      = yes $ snd $ cond (mkBinary (PrimCmp singleType CmpEq) x $ Const scalarType tag1) (pure alt1) (pure d)
       | otherwise
       = Case x <$> xs <*> md
       where
