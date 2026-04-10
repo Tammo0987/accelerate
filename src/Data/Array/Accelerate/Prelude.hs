@@ -1363,7 +1363,7 @@ scanlSeg f z arr seg =
                                in Just_ (T2 i' x)
                             )
                             (replicate (lift (sh ::. All_)) inc)
-                            (take (length flags) arr)
+                            arr
                          )
 
     -- Each element in the segments must be shifted to the right one additional
