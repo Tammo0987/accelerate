@@ -480,7 +480,7 @@ weakenToFullLHS = \lhs1 lhs2 -> go lhs1 lhs2 weakenId
     go :: GLeftHandSide t env1 env1' -> GLeftHandSide t env2 env2' -> env2 :> env1 -> env2' :> env1'
     go lhs (LeftHandSideWildcard _) k = weakenWithLHS lhs .> k
     go (LeftHandSidePair lhs1 lhs1') (LeftHandSidePair lhs2 lhs2') k = go lhs1' lhs2' $ go lhs1 lhs2 k
-    go (LeftHandSideSingle _) (LeftHandSideSingle _) k = weakenKeep k
+    go (LeftHandSideSingle _) (LeftHandSideSingle _) k = sink k
     go (LeftHandSideWildcard _) _ _ = internalError "Expected second LHS to be contained in first LHS"
     go _ _ _ = internalError "LHS mismatch"
 

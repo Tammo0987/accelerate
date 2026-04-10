@@ -36,7 +36,7 @@ module Data.Array.Accelerate.AST.Environment (
   prjUpdate', prjReplace', update', updates', mapEnv,
   (:>)(..), weakenId, weakenSucc, weakenSucc', weakenEmpty, weakenReplace,
   sink, (.>), sinkWithLHS, weakenWithLHS, substituteLHS,
-  varsGet, varsGetVal, stripWithLhs, weakenKeep,
+  varsGet, varsGetVal, stripWithLhs,
   
   Append
 ) where
@@ -272,8 +272,7 @@ envFromPartialLazy msg = \case
 newtype IdentityF t f = IdentityF t
 
 skipWeakenIdx :: Skip env env' -> env' :> env
-skipWeakenIdx (SkipSucc s) = weakenSucc $ skipWeakenIdx s
-skipWeakenIdx SkipNone     = weakenId
+skipWeakenIdx s = Weaken (unskipIdx s)
 
 lhsSkip :: forall s t env1 env2. LeftHandSide s t env1 env2 -> Skip env2 env1
 lhsSkip = (`go` SkipNone)
@@ -354,8 +353,8 @@ weakenSucc' (Weaken f) = Weaken (SuccIdx . f)
 weakenSucc :: (env, t) :> env' -> env :> env'
 weakenSucc (Weaken f) = Weaken (f . SuccIdx)
 
-weakenKeep :: env :> env' -> (env, t) :> (env', t)
-weakenKeep (Weaken f) = Weaken $ \case
+sink :: env :> env' -> (env, t) :> (env', t)
+sink (Weaken f) = Weaken $ \case
   ZeroIdx -> ZeroIdx
   SuccIdx i -> SuccIdx $ f i
 
@@ -368,13 +367,6 @@ weakenReplace other k = Weaken f
     f :: forall s. Idx (env, t) s -> Idx env' s
     f ZeroIdx = other
     f (SuccIdx idx) = k >:> idx
-
-sink :: forall env env' t. env :> env' -> (env, t) :> (env', t)
-sink (Weaken f) = Weaken g
-  where
-    g :: Idx (env, t) t' -> Idx (env', t) t'
-    g ZeroIdx      = ZeroIdx
-    g (SuccIdx ix) = SuccIdx $ f ix
 
 infixr 9 .>
 (.>) :: env2 :> env3 -> env1 :> env2 -> env1 :> env3

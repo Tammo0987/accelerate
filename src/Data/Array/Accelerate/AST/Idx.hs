@@ -29,15 +29,15 @@ module Data.Array.Accelerate.AST.Idx (
 
   PairIdx(..),
 
-  Skip(..), skipIdx, chainSkip, pattern SkipSucc'
+  Skip(SkipNone, SkipSucc, SkipSucc'), skipIdx, unskipIdx, chainSkip
 ) where
 
 import Control.DeepSeq
 import Data.Kind
 import Language.Haskell.TH.Extra                                    hiding ( Type )
+import Data.Type.Equality                                           ( (:~:)(Refl) )
 
 #ifndef ACCELERATE_INTERNAL_CHECKS
-import Data.Type.Equality                                           ( (:~:)(Refl) )
 import Unsafe.Coerce                                                ( unsafeCoerce )
 #endif
 
@@ -50,7 +50,14 @@ import Unsafe.Coerce                                                ( unsafeCoer
 data Idx env t where
   ZeroIdx ::              Idx (env, t) t
   SuccIdx :: Idx env t -> Idx (env, s) t
-  deriving (Eq, Ord)
+
+instance Eq (Idx env t) where
+  ZeroIdx == ZeroIdx = True
+  SuccIdx a == SuccIdx b = a == b
+  _ == _ = False
+
+instance Ord (Idx env t) where
+  compare a b = compare (idxToInt a) (idxToInt b)
 
 idxToInt :: Idx env t -> Int
 idxToInt ZeroIdx       = 0
@@ -83,7 +90,7 @@ matchIdx _           _           = Nothing
 -- For performance, it uses an Int under the hood.
 --
 newtype Idx :: Type -> Type -> Type where
-  UnsafeIdxConstructor :: { unsafeRunIdx :: Int } -> Idx env t
+  UnsafeIdxConstructor :: { idxToInt :: Int } -> Idx env t
   deriving (Eq, Ord)
 {-# COMPLETE ZeroIdx, SuccIdx #-}
 
@@ -97,13 +104,13 @@ pattern SuccIdx idx <- (unSucc -> Just (idx, Refl))
   where
     SuccIdx (UnsafeIdxConstructor i) = UnsafeIdxConstructor (i+1)
 
+-- Note: env and s should actually not be universally quantified (forall),
+-- so this function on its own is unsound. The integration in SuccIdx makes it
+-- sound however.
 unSucc :: Idx envs t -> Maybe (Idx env t, envs :~: (env, s))
 unSucc (UnsafeIdxConstructor i)
   | i < 1     = Nothing
   | otherwise = Just (UnsafeIdxConstructor (i-1), unsafeCoerce Refl)
-
-idxToInt :: Idx env t -> Int
-idxToInt = unsafeRunIdx
 
 rnfIdx :: Idx env t -> ()
 rnfIdx !_ = ()
@@ -134,6 +141,9 @@ data PairIdx p a where
   PairIdxLeft  :: PairIdx (a, b) a
   PairIdxRight :: PairIdx (a, b) b
 
+
+#ifdef ACCELERATE_INTERNAL_CHECKS
+
 -- Drops some bindings of env' to result in env.
 data Skip env env' where
   SkipSucc :: Skip env (env', t) -> Skip env env'
@@ -157,6 +167,10 @@ skipIdx (SkipSucc s) idx = case skipIdx s idx of
   Just (SuccIdx idx') -> Just idx'
   _                   -> Nothing
 
+unskipIdx :: Skip env env' -> Idx env' t -> Idx env t
+unskipIdx SkipNone     idx = idx
+unskipIdx (SkipSucc s) idx = unskipIdx s $ SuccIdx idx
+
 chainSkip :: Skip env1 env2 -> Skip env2 env3 -> Skip env1 env3
 chainSkip skipL (SkipSucc skipR) = SkipSucc $ chainSkip skipL skipR
 chainSkip skipL SkipNone         = skipL
@@ -179,3 +193,56 @@ pattern SkipSucc' s <- (unSkipSucc' -> Right (UnSkipSucc' s))
   where
     SkipSucc' s = skipSucc' s
 {-# COMPLETE SkipNone, SkipSucc' #-}
+
+#else
+
+newtype Skip :: Type -> Type -> Type where
+  UnsafeSkipConstructor :: { skipToInt :: Int } -> Skip env env'
+{-# COMPLETE SkipNone, SkipSucc #-}
+{-# COMPLETE SkipNone, SkipSucc' #-}
+
+pattern SkipNone :: forall env env'. () => (env ~ env') => Skip env env'
+pattern SkipNone <- (\x -> (skipToInt x, unsafeCoerce Refl) -> (0, Refl :: env :~: env'))
+  where
+    SkipNone = UnsafeSkipConstructor 0
+
+skipIdx :: Skip env env' -> Idx env t -> Maybe (Idx env' t)
+skipIdx skip idx
+  | i >= 0 = Just $ UnsafeIdxConstructor i
+  | otherwise = Nothing
+  where
+    i = idxToInt idx - skipToInt skip
+
+unskipIdx :: Skip env env' -> Idx env' t -> Idx env t
+unskipIdx skip idx = UnsafeIdxConstructor $ skipToInt skip + idxToInt idx
+
+chainSkip :: Skip env1 env2 -> Skip env2 env3 -> Skip env1 env3
+chainSkip skip1 skip2 = UnsafeSkipConstructor $ skipToInt skip1 + skipToInt skip2
+
+data UnSkipSucc env env' where
+  UnSkipSucc :: Skip env (env', t) -> UnSkipSucc env env'
+
+unSkipSucc :: Skip env env' -> Maybe (UnSkipSucc env env')
+unSkipSucc (UnsafeSkipConstructor 0) = Nothing
+unSkipSucc (UnsafeSkipConstructor i)
+  = unsafeCoerce $ Just $ UnSkipSucc $ UnsafeSkipConstructor $ i - 1
+
+pattern SkipSucc :: forall env env'. () => forall t envt'. (envt' ~ (env', t)) => Skip env envt' -> Skip env env'
+pattern SkipSucc s <- (unSkipSucc -> Just (UnSkipSucc s))
+  where
+    SkipSucc s = UnsafeSkipConstructor $ skipToInt s + 1
+
+data UnSkipSucc' envt env' where
+  UnSkipSucc' :: Skip env env' -> UnSkipSucc' (env, t) env'
+
+unSkipSucc' :: Skip env env' -> Maybe (UnSkipSucc' env env')
+unSkipSucc' (UnsafeSkipConstructor 0) = Nothing
+unSkipSucc' (UnsafeSkipConstructor i)
+  = unsafeCoerce $ Just $ UnSkipSucc' $ UnsafeSkipConstructor $ i - 1
+
+pattern SkipSucc' :: forall envt env'. () => forall t env. (envt ~ (env, t)) => Skip env env' -> Skip envt env'
+pattern SkipSucc' s <- (unSkipSucc' -> Just (UnSkipSucc' s))
+  where
+    SkipSucc' s = UnsafeSkipConstructor $ skipToInt s + 1
+
+#endif
