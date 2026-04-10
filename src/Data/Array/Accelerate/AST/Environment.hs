@@ -31,7 +31,7 @@ module Data.Array.Accelerate.AST.Environment (
   partialEnvPushLHS, partialEnvSameKeys, partialEnvSub, partialEnvSkipLHS,
   envToPartial, envFromPartialLazy,
 
-  Skip(..), skipIdx, chainSkip, skipWeakenIdx, lhsSkip,
+  skipWeakenIdx, lhsSkip,
 
   prjUpdate', prjReplace', update', updates', mapEnv,
   (:>)(..), weakenId, weakenSucc, weakenSucc', weakenEmpty, weakenReplace,
@@ -270,21 +270,6 @@ envFromPartialLazy msg = \case
 
 -- Wrapper to put homogenous types in an Env or PartialEnv
 newtype IdentityF t f = IdentityF t
-
--- Drops some bindings of env' to result in env.
-data Skip env env' where
-  SkipSucc :: Skip env (env', t) -> Skip env env'
-  SkipNone :: Skip env env
-
-skipIdx :: Skip env env' -> Idx env t -> Maybe (Idx env' t)
-skipIdx SkipNone     idx = Just idx
-skipIdx (SkipSucc s) idx = case skipIdx s idx of
-  Just (SuccIdx idx') -> Just idx'
-  _                   -> Nothing
-
-chainSkip :: Skip env1 env2 -> Skip env2 env3 -> Skip env1 env3
-chainSkip skipL (SkipSucc skipR) = SkipSucc $ chainSkip skipL skipR
-chainSkip skipL SkipNone         = skipL
 
 skipWeakenIdx :: Skip env env' -> env' :> env
 skipWeakenIdx (SkipSucc s) = weakenSucc $ skipWeakenIdx s

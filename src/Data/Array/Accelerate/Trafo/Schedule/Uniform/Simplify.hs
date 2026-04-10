@@ -51,7 +51,6 @@ import Data.Array.Accelerate.Representation.Type
 import Data.Array.Accelerate.Trafo.Exp.Substitution
 import Data.Array.Accelerate.Trafo.Substitution             hiding ( weakenArrayInstr )
 import Data.Array.Accelerate.Trafo.Schedule.Uniform.Substitution ()
-import Data.Array.Accelerate.Trafo.SkipEnvironment (Skip'(..), skipWeakenIdx')
 import Data.Maybe
 import Data.List
     ( isSubsequenceOf,
@@ -1005,20 +1004,20 @@ declareRemovedResolvers lhsOld lhsNew k =
     DeclareRemovedResolvers
       term
       $ snd $ go resolvers lhsOld lhsNew
-        (skipWeakenIdx' skip)
-        (skipWeakenIdx' skip .> weakenWithLHS lhsNew .> k)
+        (skipWeakenIdx skip)
+        (skipWeakenIdx skip .> weakenWithLHS lhsNew .> k)
   where
     removed = lhsSize lhsOld - lhsSize lhsNew
 
     bindResolvers
       :: Int
       -> (forall env2'.
-          Skip' env2' env1'
+          Skip env2' env1'
           -> (BuildSchedule kernel env2' -> BuildSchedule kernel env1')
           -> [Idx env2' SignalResolver]
           -> DeclareRemovedResolvers kernel env1 env1')
       -> DeclareRemovedResolvers kernel env1 env1'
-    bindResolvers 0 f = f SkipNone' id []
+    bindResolvers 0 f = f SkipNone id []
     bindResolvers n f = bindResolvers (n - 1) $ \skip term resolvers ->
       f
         (SkipSucc' skip)

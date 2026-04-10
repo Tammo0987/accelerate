@@ -27,7 +27,9 @@ module Data.Array.Accelerate.AST.Idx (
   idxToInt,
   rnfIdx, liftIdx, matchIdx,
 
-  PairIdx(..)
+  PairIdx(..),
+
+  Skip(..), skipIdx, chainSkip, pattern SkipSucc'
 ) where
 
 import Control.DeepSeq
@@ -131,3 +133,49 @@ pattern VoidIdx a <- (\case{} -> a)
 data PairIdx p a where
   PairIdxLeft  :: PairIdx (a, b) a
   PairIdxRight :: PairIdx (a, b) b
+
+-- Drops some bindings of env' to result in env.
+data Skip env env' where
+  SkipSucc :: Skip env (env', t) -> Skip env env'
+  SkipNone :: Skip env env
+
+-- Historical context: we used to have two data types, Skip and Skip'.
+-- Skip was constructed via:
+-- SkipSucc :: Skip env (env', t) -> Skip env env'
+-- and Skip' via:
+-- SkipSucc' :: Skip env env' -> Skip (env, t) env'
+-- Both data types have the same functionality, but different performance,
+-- similar to the difference between cons- and snoc-lists.
+-- Each analysis or transformation in the compiler would need to choose between
+-- these two data types. 
+-- To simplify this, we now only have Skip, and SkipSucc' is implemented as a
+-- pattern synonym over Skip.
+
+skipIdx :: Skip env env' -> Idx env t -> Maybe (Idx env' t)
+skipIdx SkipNone     idx = Just idx
+skipIdx (SkipSucc s) idx = case skipIdx s idx of
+  Just (SuccIdx idx') -> Just idx'
+  _                   -> Nothing
+
+chainSkip :: Skip env1 env2 -> Skip env2 env3 -> Skip env1 env3
+chainSkip skipL (SkipSucc skipR) = SkipSucc $ chainSkip skipL skipR
+chainSkip skipL SkipNone         = skipL
+
+skipSucc' :: Skip env env' -> Skip (env, t) env'
+skipSucc' SkipNone = SkipSucc SkipNone
+skipSucc' (SkipSucc s) = SkipSucc $ skipSucc' s
+
+data UnSkipSucc' envt env' where
+  UnSkipSucc' :: Skip env env' -> UnSkipSucc' (env, t) env'
+
+unSkipSucc' :: Skip env env' -> Either (env :~: env') (UnSkipSucc' env env')
+unSkipSucc' SkipNone = Left Refl
+unSkipSucc' (SkipSucc s) = Right $ case unSkipSucc' s of
+  Left Refl -> UnSkipSucc' SkipNone
+  Right (UnSkipSucc' s') -> UnSkipSucc' $ SkipSucc s'
+
+pattern SkipSucc' :: forall envt env'. () => forall t env. (envt ~ (env, t)) => Skip env env' -> Skip envt env'
+pattern SkipSucc' s <- (unSkipSucc' -> Right (UnSkipSucc' s))
+  where
+    SkipSucc' s = skipSucc' s
+{-# COMPLETE SkipNone, SkipSucc' #-}

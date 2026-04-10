@@ -327,7 +327,7 @@ transform' (SyncSchedule _ simple schedule) = case schedule of
               instr1 $ instr2 $ buildSpawn
                 (f (fenvFSkipMany skip2 bndEnv) Sequential $ CtxNormal $ bndDestinations SkipNone)
                 $ instr3
-                $ transform bodyEnv''' parallelism (weaken (skipWeakenIdx' skip3 .> skipWeakenIdx skip2 .> skipWeakenIdx skip1) ctx) body
+                $ transform bodyEnv''' parallelism (weaken (skipWeakenIdx skip3 .> skipWeakenIdx skip2 .> skipWeakenIdx skip1) ctx) body
 
   -- Control flow
   PAcond cond true false -> TransformSchedule $ \fenv parallelism dest ->
@@ -1057,18 +1057,18 @@ awhileInputOutput _ _ _ _ _ = internalError "Tuple mismatch"
 data MakeAvailable kernel fenv genv' where
   -- Captures existential fenv'
   MakeAvailable
-    :: Skip' fenv' fenv
+    :: Skip fenv' fenv
     -> FutureEnv fenv' genv'
     -> (BuildSchedule kernel fenv' -> BuildSchedule kernel fenv)
     -> MakeAvailable kernel fenv genv'
 
 makeAvailable :: GLeftHandSide t genv genv' -> FutureEnv fenv genv' -> MakeAvailable kernel fenv genv'
-makeAvailable lhs = go (lhsSkip' lhs) SkipNone
+makeAvailable lhs = go (lhsSkip lhs) SkipNone
   where
-    go :: Skip' genv' genv -> Skip fenv2 fenv1 -> FutureEnv fenv1 genv' -> MakeAvailable kernel fenv2 genv'
-    go SkipNone' envSkip env = MakeAvailable SkipNone' (fenvFSkipMany envSkip env) id
+    go :: Skip genv' genv -> Skip fenv2 fenv1 -> FutureEnv fenv1 genv' -> MakeAvailable kernel fenv2 genv'
+    go SkipNone envSkip env = MakeAvailable SkipNone (fenvFSkipMany envSkip env) id
     go skip envSkip (FEnvFSkip env) = go skip (SkipSucc envSkip) env
-    go _ _ FEnvEnd = MakeAvailable SkipNone' FEnvEnd id
+    go _ _ FEnvEnd = MakeAvailable SkipNone FEnvEnd id
     go (SkipSucc' skip) envSkip (FEnvGSkip env)
       | MakeAvailable s env' instr <- go skip envSkip env
       = MakeAvailable s (FEnvGSkip env') instr
@@ -1080,27 +1080,27 @@ makeAvailable lhs = go (lhsSkip' lhs) SkipNone
               (SkipSucc' s)
               (FEnvPush (FEnvFSkip env') $ FutureScalar tp Nothing $ Left ZeroIdx)
               (instr
-                . buildAwait [weaken (skipWeakenIdx' s) . weaken (skipWeakenIdx envSkip) <$> signal]
-                . buildRead (GroundRscalar tp) (weaken (skipWeakenIdx' s) $ weaken (skipWeakenIdx envSkip) ref))
+                . buildAwait [weaken (skipWeakenIdx s) . weaken (skipWeakenIdx envSkip) <$> signal]
+                . buildRead (GroundRscalar tp) (weaken (skipWeakenIdx s) $ weaken (skipWeakenIdx envSkip) ref))
           FutureBuffer tp (Right ref) (Lock signal resolver) Nothing ->
             MakeAvailable
               (SkipSucc' s)
               (FEnvPush (FEnvFSkip env') $ FutureBuffer tp (Left ZeroIdx)
-                (Lock Nothing $ weaken (skipWeakenIdx' $ SkipSucc' s) . weaken (skipWeakenIdx envSkip) <$> resolver)
+                (Lock Nothing $ weaken (skipWeakenIdx $ SkipSucc' s) . weaken (skipWeakenIdx envSkip) <$> resolver)
                 Nothing)
               (instr
-                . buildAwait [weaken (skipWeakenIdx' s) . weaken (skipWeakenIdx envSkip) <$> signal]
-                . buildRead (GroundRbuffer tp) (weaken (skipWeakenIdx' s) $ weaken (skipWeakenIdx envSkip) ref))
+                . buildAwait [weaken (skipWeakenIdx s) . weaken (skipWeakenIdx envSkip) <$> signal]
+                . buildRead (GroundRbuffer tp) (weaken (skipWeakenIdx s) $ weaken (skipWeakenIdx envSkip) ref))
           FutureBuffer tp (Right ref) (Lock signal resolver) (Just (Lock wsignal wresolver)) ->
             MakeAvailable
               (SkipSucc' s)
               (FEnvPush (FEnvFSkip env') $ FutureBuffer tp (Left ZeroIdx)
-                (Lock Nothing $ weaken (skipWeakenIdx' $ SkipSucc' s) . weaken (skipWeakenIdx envSkip) <$> resolver)
-                (Just $ Lock Nothing $ weaken (skipWeakenIdx' $ SkipSucc' s) . weaken (skipWeakenIdx envSkip) <$> wresolver))
+                (Lock Nothing $ weaken (skipWeakenIdx $ SkipSucc' s) . weaken (skipWeakenIdx envSkip) <$> resolver)
+                (Just $ Lock Nothing $ weaken (skipWeakenIdx $ SkipSucc' s) . weaken (skipWeakenIdx envSkip) <$> wresolver))
               (instr
-                . buildAwait (fmap (fmap $ weaken (skipWeakenIdx' s) . weaken (skipWeakenIdx envSkip)) [signal, wsignal])
-                . buildRead (GroundRbuffer tp) (weaken (skipWeakenIdx' s) $ weaken (skipWeakenIdx envSkip) ref))
-          _ -> MakeAvailable s (FEnvPush env' $ weaken (skipWeakenIdx' s .> skipWeakenIdx envSkip) future) instr
+                . buildAwait (fmap (fmap $ weaken (skipWeakenIdx s) . weaken (skipWeakenIdx envSkip)) [signal, wsignal])
+                . buildRead (GroundRbuffer tp) (weaken (skipWeakenIdx s) $ weaken (skipWeakenIdx envSkip) ref))
+          _ -> MakeAvailable s (FEnvPush env' $ weaken (skipWeakenIdx s .> skipWeakenIdx envSkip) future) instr
 
 environmentDropLHS :: PartialEnv f env1 -> LeftHandSide s t env env1 -> PartialEnv f env
 environmentDropLHS env (LeftHandSideWildcard _) = env
@@ -1183,7 +1183,7 @@ makeSpawnClosed' k awaitEnd = \case
       bindSignals (trueCount `max` falseCount) $
         \skip signals resolvers ->
           let
-            k2 = skipWeakenIdx' skip .> k
+            k2 = skipWeakenIdx skip .> k
             resolvers' = toList resolvers
           in
             Acond
@@ -1193,7 +1193,7 @@ makeSpawnClosed' k awaitEnd = \case
               (resolve (drop falseCount resolvers')
                 $ false' k2 weakenId (take falseCount resolvers'))
               (makeSpawnClosed' k2
-                (unionPartialEnv const signals $ skipWeakenPartialEnv' skip awaitEnd) next)
+                (unionPartialEnv const signals $ skipWeakenPartialEnv skip awaitEnd) next)
     -- Acond (weaken k var) (makeSpawnClosed' k PEnd true) (makeSpawnClosed' k PEnd false) (makeSpawnClosed' k awaitEnd next)
   Awhile io step initial next ->
     Awhile io (makeFunSpawnClosed' k step) (mapTupR (weaken k) initial) $ makeSpawnClosed' k awaitEnd next
@@ -1205,15 +1205,15 @@ makeSpawnClosed' k awaitEnd = \case
       bindSignals (count + 1) $
         \skip signals resolvers ->
           Spawn
-            (a' (skipWeakenIdx' skip .> k) weakenId (toList resolvers))
-            (makeSpawnClosed' (skipWeakenIdx' skip .> k)
-              (unionPartialEnv const signals $ skipWeakenPartialEnv' skip awaitEnd) b)
+            (a' (skipWeakenIdx skip .> k) weakenId (toList resolvers))
+            (makeSpawnClosed' (skipWeakenIdx skip .> k)
+              (unionPartialEnv const signals $ skipWeakenPartialEnv skip awaitEnd) b)
   where
     bindSignals
       :: Int
-      -> (forall env2. Skip' env2 env1 -> TypedIdxSet Signal env2 -> TypedIdxSet SignalResolver env2 -> UniformSchedule kernel env2)
+      -> (forall env2. Skip env2 env1 -> TypedIdxSet Signal env2 -> TypedIdxSet SignalResolver env2 -> UniformSchedule kernel env2)
       -> UniformSchedule kernel env1
-    bindSignals 0 f = f SkipNone' PEnd PEnd
+    bindSignals 0 f = f SkipNone PEnd PEnd
     bindSignals n f = bindSignals (n - 1) $ \skip signals resolvers ->
       Alet lhsSignal (NewSignal "Synchronisation to make schedule spawn-closed") $
         f (SkipSucc' $ SkipSucc' skip) (PNone $ PPush signals Refl) (PPush (PNone resolvers) Refl)

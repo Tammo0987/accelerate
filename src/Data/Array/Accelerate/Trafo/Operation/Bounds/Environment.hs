@@ -55,7 +55,7 @@ type BoundsGraph = Graph.Graph Node Edge
 data BoundsEnv benv env = BoundsEnv
   { boundsGraph :: BoundsGraph (UniformEnv benv env)
   -- way to go from index in 'benv' to index in 'UniformEnv benv env'
-  , boundsSkipBenv :: Skip' (UniformEnv benv env) (Append ((), Int) benv)
+  , boundsSkipBenv :: Skip (UniformEnv benv env) (Append ((), Int) benv)
   -- reference to the last index in 'UniformEnv benv env', representing the zero value
   , boundsZero :: Idx (UniformEnv benv env) Int
   , boundsBindings :: WEnv Binding benv
@@ -73,7 +73,7 @@ data Binding benv t where
   BindAssertAssume :: Exp benv PrimBool -> Binding benv PrimBool
 
 emptyEnv :: BoundsEnv () ()
-emptyEnv = BoundsEnv (Graph.pushNode Graph.empty Node PEnd PEnd) SkipNone' ZeroIdx WEmpty
+emptyEnv = BoundsEnv (Graph.pushNode Graph.empty Node PEnd PEnd) SkipNone ZeroIdx WEmpty
 
 instance Sink Binding where
   weaken _ BindNone = BindNone
@@ -87,7 +87,7 @@ instance Sink Binding where
 type UniformEnv benv env = (Append (Append ((), Int) benv) env)
 
 accIdx :: BoundsEnv benv env -> Idx benv t -> Idx (UniformEnv benv env) t
-accIdx (BoundsEnv _ s _ _) ix = weaken (skipWeakenIdx' s) $ extendIdx @((), Int) ix
+accIdx (BoundsEnv _ s _ _) ix = weaken (skipWeakenIdx s) $ extendIdx @((), Int) ix
 
 -- This function currently assumes that the scalar environment is (),
 -- as that is the case in all current uses. If this changes in the future,
@@ -150,7 +150,7 @@ pushScalars _ _ = internalError "Tuple mismatch"
 pushBuffer :: BoundsEnv benv () -> TermBound (UniformEnv benv ()) t -> BoundsEnv (benv, t) ()
 pushBuffer (BoundsEnv g _ z bs) bound = BoundsEnv
   (Graph.pushNode g Node (lower bound) (partialEnvSkip $ upper bound))
-  SkipNone'
+  SkipNone
   (SuccIdx z)
   (WPushB bs BindNone)
 

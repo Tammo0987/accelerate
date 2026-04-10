@@ -50,7 +50,6 @@ import Data.Array.Accelerate.Representation.Type
 import Data.Array.Accelerate.Trafo.Substitution
 import Data.Array.Accelerate.Trafo.Schedule.Partial
 import Data.Array.Accelerate.Trafo.Schedule.Uniform.Simplify
-import Data.Array.Accelerate.Trafo.SkipEnvironment (Skip'(..), lhsSkip')
 import Data.Array.Accelerate.Type
 import Data.Maybe
 import Prelude hiding (id, (.), read)
@@ -855,11 +854,11 @@ subFutureEnvironment' skip fenv@FEnvPush{} PEnd = subFutureEnvironment' skip fen
 -- those bindings only have Move locks (no Borrows). The latter is the case
 -- because of the construction in declareDestinations.
 restrictEnvForLHS :: GLeftHandSide t genv genv' -> FutureEnv fenv genv' -> SyncEnv genv' -> FutureEnv fenv genv'
-restrictEnvForLHS lhs = go (lhsSkip' lhs)
+restrictEnvForLHS lhs = go (lhsSkip lhs)
   where
     -- Note: Since Skip appends the environment in 
-    go :: Skip' genv' genv -> FutureEnv fenv genv' -> SyncEnv genv' -> FutureEnv fenv genv'
-    go SkipNone' env _ = env
+    go :: Skip genv' genv -> FutureEnv fenv genv' -> SyncEnv genv' -> FutureEnv fenv genv'
+    go SkipNone env _ = env
     go skip (FEnvFSkip env) senv = FEnvFSkip $ go skip env senv
     go _ FEnvEnd _ = FEnvEnd
     go (SkipSucc' skip) (FEnvGSkip env) senv = FEnvGSkip $ go skip env $ partialEnvTail senv
