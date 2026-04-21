@@ -29,7 +29,9 @@ module Data.Array.Accelerate.AST.Idx (
 
   PairIdx(..),
 
-  Skip(SkipNone, SkipSucc, SkipSucc'), skipIdx, unskipIdx, chainSkip
+  Skip(SkipNone, SkipSucc, SkipSucc'), skipIdx, unskipIdx, chainSkip,
+
+  Keep(KeepNone, KeepSucc), keepIdx, unkeepIdx, chainKeep,
 ) where
 
 import Control.DeepSeq
@@ -90,7 +92,7 @@ matchIdx _           _           = Nothing
 -- For performance, it uses an Int under the hood.
 --
 newtype Idx :: Type -> Type -> Type where
-  UnsafeIdxConstructor :: { idxToInt :: Int } -> Idx env t
+  UnsafeIdxConstructor :: { unsafeRunIdx :: Int } -> Idx env t
   deriving (Eq, Ord)
 {-# COMPLETE ZeroIdx, SuccIdx #-}
 
@@ -111,6 +113,12 @@ unSucc :: Idx envs t -> Maybe (Idx env t, envs :~: (env, s))
 unSucc (UnsafeIdxConstructor i)
   | i < 1     = Nothing
   | otherwise = Just (UnsafeIdxConstructor (i-1), unsafeCoerce Refl)
+
+-- Note: this is a separate function instead of a field of Idx, since this function is exported.
+-- If we would export a field of Idx, then it could unsafely be updated via
+-- idx{ idxToInt = 2 }, breaking the "safe" abstraction of this module.
+idxToInt :: Idx env t -> Int
+idxToInt = unsafeRunIdx
 
 rnfIdx :: Idx env t -> ()
 rnfIdx !_ = ()
@@ -141,7 +149,8 @@ data PairIdx p a where
   PairIdxLeft  :: PairIdx (a, b) a
   PairIdxRight :: PairIdx (a, b) b
 
-
+-- Skip: a GADT to describe that we skip over a number of bindings in an
+-- environment.
 #ifdef ACCELERATE_INTERNAL_CHECKS
 
 -- Drops some bindings of env' to result in env.
@@ -244,5 +253,69 @@ pattern SkipSucc' :: forall envt env'. () => forall t env. (envt ~ (env, t)) => 
 pattern SkipSucc' s <- (unSkipSucc' -> Just (UnSkipSucc' s))
   where
     SkipSucc' s = UnsafeSkipConstructor $ skipToInt s + 1
+
+#endif
+
+-- Keep: a GADT to describe that we preserve a number of bindings in an
+-- environment.
+-- The right-most n bindings of env1' and env2' are equal.
+-- After dropping those bindings we get env1 and env2 respectively.
+#ifdef ACCELERATE_INTERNAL_CHECKS
+
+data Keep env1 env2 env1' env2' where
+  KeepNone :: Keep env1 env2 env1 env2
+  KeepSucc
+    :: Keep env1 env2 env1' env2'
+    -> Keep env1 env2 (env1', t) (env2', t)
+
+keepIdx :: Keep env1 env2 env1' env2' -> Idx env1' t -> Either (Idx env1 t) (Idx env2' t)
+keepIdx KeepNone idx = Left idx
+keepIdx (KeepSucc _) ZeroIdx = Right ZeroIdx
+keepIdx (KeepSucc k) (SuccIdx idx) = SuccIdx <$> keepIdx k idx
+
+unkeepIdx :: Keep env1 env2 env1' env2' -> Idx env2 t -> Idx env2' t
+unkeepIdx KeepNone idx = idx
+unkeepIdx (KeepSucc k) idx = SuccIdx $ unkeepIdx k idx
+
+chainKeep :: Keep env1 env2 env1' env2' -> Keep env1' env2' env1'' env2'' -> Keep env1 env2 env1'' env2''
+chainKeep keepL KeepNone = keepL
+chainKeep keepL (KeepSucc keepR) = KeepSucc $ chainKeep keepL keepR
+
+#else
+
+newtype Keep :: Type -> Type -> Type -> Type -> Type where
+  UnsafeKeepConstructor :: { keepToInt :: Int } -> Keep env1 env2 env1' env2'
+{-# COMPLETE KeepNone, KeepSucc #-}
+
+pattern KeepNone :: forall env1 env2 env1' env2'. () => (env1 ~ env1', env2 ~ env2') => Keep env1 env2 env1' env2'
+pattern KeepNone <- (\x -> (keepToInt x, unsafeCoerce Refl) -> (0, Refl :: (env1, env2) :~: (env1', env2')))
+  where
+    KeepNone = UnsafeKeepConstructor 0
+
+data UnKeepSucc env1 env2 env1t' env2t' where
+  UnKeepSucc :: Keep env1 env2 env1' env2' -> UnKeepSucc env1 env2 (env1', t) (env2', t)
+
+unKeepSucc :: Keep env1 env2 env1t' env2t' -> Maybe (UnKeepSucc env1 env2 env1t' env2t')
+unKeepSucc (UnsafeKeepConstructor 0) = Nothing
+unKeepSucc (UnsafeKeepConstructor i)
+  = unsafeCoerce $ Just $ UnKeepSucc $ UnsafeKeepConstructor $ i - 1
+
+pattern KeepSucc :: forall env1 env2 env1t' env2t'. () => forall env1' env2' t. (env1t' ~ (env1', t), env2t' ~ (env2', t)) => Keep env1 env2 env1' env2' -> Keep env1 env2 env1t' env2t'
+pattern KeepSucc k <- (unKeepSucc -> Just (UnKeepSucc k))
+  where
+    KeepSucc k = UnsafeKeepConstructor $ keepToInt k + 1
+
+keepIdx :: Keep env1 env2 env1' env2' -> Idx env1' t -> Either (Idx env1 t) (Idx env2' t)
+keepIdx k idx
+  | i >= 0 = Left $ UnsafeIdxConstructor i
+  | otherwise = Right $ UnsafeIdxConstructor $ idxToInt idx
+  where
+    i = idxToInt idx - keepToInt k
+
+unkeepIdx :: Keep env1 env2 env1' env2' -> Idx env2 t -> Idx env2' t
+unkeepIdx k idx = UnsafeIdxConstructor $ idxToInt idx + keepToInt k
+
+chainKeep :: Keep env1 env2 env1' env2' -> Keep env1' env2' env1'' env2'' -> Keep env1 env2 env1'' env2''
+chainKeep keep1 keep2 = UnsafeKeepConstructor $ keepToInt keep1 + keepToInt keep2
 
 #endif
