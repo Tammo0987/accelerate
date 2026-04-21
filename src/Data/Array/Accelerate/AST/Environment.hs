@@ -34,7 +34,7 @@ module Data.Array.Accelerate.AST.Environment (
   skipWeakenIdx, lhsSkip,
 
   prjUpdate', prjReplace', update', updates', mapEnv,
-  (:>)(..), weakenId, weakenSucc, weakenSucc', weakenEmpty, weakenReplace,
+  (:>)(Weaken), (>:>), weakenId, weakenSucc, weakenSucc', weakenEmpty, weakenReplace,
   sink, (.>), sinkWithLHS, weakenWithLHS, substituteLHS,
   varsGet, varsGetVal, stripWithLhs,
   
@@ -272,7 +272,7 @@ envFromPartialLazy msg = \case
 newtype IdentityF t f = IdentityF t
 
 skipWeakenIdx :: Skip env env' -> env' :> env
-skipWeakenIdx s = Weaken (unskipIdx s)
+skipWeakenIdx s = WeakenSkip s WeakenId
 
 lhsSkip :: forall s t env1 env2. LeftHandSide s t env1 env2 -> Skip env2 env1
 lhsSkip = (`go` SkipNone)
@@ -319,58 +319,104 @@ mapEnv _ Empty = Empty
 mapEnv g (Push env f) = Push (mapEnv g env) (g f)
 
 
--- data Identity a = Identity { runIdentity :: a }
-
--- instance Functor Identity where
---   {-# INLINE fmap #-}
---   fmap f (Identity a) = Identity (f a)
-
--- instance Applicative Identity where
---   {-# INLINE (<*>) #-}
---   {-# INLINE pure  #-}
---   Identity f <*> Identity a = Identity (f a)
---   pure a                    = Identity a
-
 -- The type of shifting terms from one context into another
 --
--- This is defined as a newtype, as a type synonym containing a forall
--- quantifier may give issues with impredicative polymorphism, which GHC
--- does not support.
---
-newtype env :> env' = Weaken { (>:>) :: forall (t' :: Type). Idx env t' -> Idx env' t' } -- Weak or Weaken
+-- This used to be defined as a newtype over a function (the current Weaken
+-- constructor), but for higher performance we partially defunctionalized this
+-- newtype into a small set of constructors.
+data env :> env' where
+  WeakenId :: env :> env
 
--- Weaken is currently just a function. We could consider to partially defunctionalize this and define
--- it as a data type, which constructors for the following functions.
--- Note that we may then also need to fold a chain of weakenSucc to a SkipIdx, and change the internal
--- definition of SkipIdx to Int (like we also did for Idx).
+  WeakenEmpty :: () :> env'
+
+  WeakenReplace
+    :: env :> env'
+    -> {-# UNPACK #-} !(Idx env' t)
+    -> (env, t) :> env'
+
+  WeakenKeep
+    :: env1 :> env2
+    -> {-# UNPACK #-} !(Keep env1 env2 env1' env2')
+    -> env1' :> env2'
+
+  WeakenSkip
+    :: {-# UNPACK #-} !(Skip env2 env1)
+    -> env2 :> env3
+    -> env1 :> env3
+
+  WeakenSkip'
+    :: env1 :> env2
+    -> {-# UNPACK #-} !(Skip env3 env2)
+    -> env1 :> env3
+
+  WeakenChain
+    :: env1 :> env2
+    -> env2 :> env3
+    -> env1 :> env3
+
+  Weaken :: (forall (t' :: Type). Idx env t' -> Idx env' t') -> env :> env'
+
+(>:>) :: env :> env' -> Idx env t -> Idx env' t
+WeakenId >:> idx = idx
+WeakenEmpty >:> VoidIdx x = x
+WeakenReplace _ idx >:> ZeroIdx = idx
+WeakenReplace k _ >:> SuccIdx idx = k >:> idx
+WeakenSkip s k >:> idx = k >:> unskipIdx s idx
+WeakenSkip' k s >:> idx = unskipIdx s (k >:> idx)
+WeakenKeep k keep >:> idx = case keepIdx keep idx of
+  Left idx' -> unkeepIdx keep $ k >:> idx'
+  Right idx' -> idx'
+WeakenChain k1 k2 >:> idx = k2 >:> (k1 >:> idx)
+Weaken f >:> idx = f idx
 
 weakenId :: env :> env
-weakenId = Weaken id
+weakenId = WeakenId
 
 weakenSucc' :: env :> env' -> env :> (env', t)
-weakenSucc' (Weaken f) = Weaken (SuccIdx . f)
+weakenSucc' (WeakenSkip' k s) = WeakenSkip' k (SkipSucc' s)
+weakenSucc' (WeakenSkip s WeakenId) = WeakenSkip' WeakenId (SkipSucc' s)
+weakenSucc' k = WeakenSkip' k (SkipSucc SkipNone)
 
 weakenSucc :: (env, t) :> env' -> env :> env'
-weakenSucc (Weaken f) = Weaken (f . SuccIdx)
+weakenSucc (WeakenSkip s k) = WeakenSkip (SkipSucc s) k
+weakenSucc (WeakenSkip' WeakenId s) = WeakenSkip (SkipSucc s) WeakenId
+weakenSucc k = WeakenSkip (SkipSucc SkipNone) k
 
 sink :: env :> env' -> (env, t) :> (env', t)
-sink (Weaken f) = Weaken $ \case
-  ZeroIdx -> ZeroIdx
-  SuccIdx i -> SuccIdx $ f i
+sink WeakenId = WeakenId
+sink (WeakenKeep k keep) = WeakenKeep k $ KeepSucc keep
+sink k = WeakenKeep k (KeepSucc KeepNone)
 
 weakenEmpty :: () :> env'
-weakenEmpty = Weaken $ \(VoidIdx x) -> x
+weakenEmpty = WeakenEmpty
 
 weakenReplace :: forall env env' t. Idx env' t -> env :> env' -> (env, t) :> env'
-weakenReplace other k = Weaken f
-  where
-    f :: forall s. Idx (env, t) s -> Idx env' s
-    f ZeroIdx = other
-    f (SuccIdx idx) = k >:> idx
+weakenReplace other k = WeakenReplace k other
 
 infixr 9 .>
+-- | Compose two weakenings
 (.>) :: env2 :> env3 -> env1 :> env2 -> env1 :> env3
-(.>) (Weaken f) (Weaken g) = Weaken (f . g)
+-- Instead of always emitting a WeakenChain, we check for various simple cases
+-- to return a simpler weakening.
+-- Check WeakenId
+(.>) WeakenId k = k
+(.>) k WeakenId = k
+-- Combine skips
+(.>) (WeakenSkip s1 WeakenId)  (WeakenSkip' k2 s2) = WeakenSkip' k2 (chainSkip s1 s2)
+(.>) (WeakenSkip' WeakenId s1) (WeakenSkip' k2 s2) = WeakenSkip' k2 (chainSkip s1 s2)
+(.>) (WeakenSkip s1 k1) (WeakenSkip s2 WeakenId)   = WeakenSkip (chainSkip s1 s2) k1
+(.>) (WeakenSkip s1 k1) (WeakenSkip' WeakenId s2)  = WeakenSkip (chainSkip s1 s2) k1
+-- Single skip
+(.>) (WeakenSkip s1 WeakenId)  k2 = WeakenSkip' k2 s1
+(.>) (WeakenSkip' WeakenId s1) k2 = WeakenSkip' k2 s1
+(.>) k1 (WeakenSkip s2 WeakenId)  = WeakenSkip s2 k1
+(.>) k1 (WeakenSkip' WeakenId s2) = WeakenSkip s2 k1
+-- Move Skip outwards (as we might be able to combine it with a skip in a later call to (.>)).
+-- Directly construct WeakenChain instead of recursing, as optimizing it further probably has no additional benefits.
+(.>) k1 (WeakenSkip s2 k2) = WeakenSkip s2 (WeakenChain k2 k1)
+(.>) (WeakenSkip' k1 s1) k2 = WeakenSkip' (WeakenChain k2 k1) s1
+-- Default case
+(.>) k1 k2 = WeakenChain k2 k1
 
 sinkWithLHS :: HasCallStack => LeftHandSide s t env1 env1' -> LeftHandSide s t env2 env2' -> env1 :> env2 -> env1' :> env2'
 sinkWithLHS (LeftHandSideWildcard _) (LeftHandSideWildcard _) k = k
@@ -388,6 +434,8 @@ weakenWithLHS = go weakenId
 
 substituteLHS :: forall s s' t env env'. LeftHandSide s t env env' -> Vars s' env t -> env' :> env
 substituteLHS lhs vars = Weaken f
+  -- TODO: Could we convert this to a sequence of WeakenReplace constructors,
+  -- instead of Weaken?
   where
     f :: Idx env' a -> Idx env a
     f ix = case go lhs vars ix of
