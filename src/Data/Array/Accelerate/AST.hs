@@ -84,7 +84,7 @@ module Data.Array.Accelerate.AST (
   ALeftHandSide, ArrayVar, ArrayVars,
 
   -- ** Scalar expressions
-  ELeftHandSide, ExpVar, ExpVars, expVars,
+  ELeftHandSide, ExpVar, ExpVars, expVars, undefs,
   Fun, OpenFun, PreOpenFun(..),
   Exp, OpenExp, PreOpenExp(..),
   ArrayInstr(..), IsArrayInstr(..), NoArrayInstr,

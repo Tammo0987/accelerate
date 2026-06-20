@@ -436,46 +436,54 @@ simplifyOpenExp env = first getAny . cvtE
            -> (Any, [(TAG, PreOpenExp arr env b)])
            -> (Any, Maybe (PreOpenExp arr env b))
            -> (Any, PreOpenExp arr env b)
-    caseof x xs@(_,xs') md@(_,md')
+    caseof tag@(_, tag') xs@(_,xs') md@(_,md')
       | Const _ t   <- x
-      = Stats.caseElim "known" $ yes $ fromMaybe (fromJust md') $ lookup t xs'
+      = Stats.caseElim "known" $ yes $ fromMaybe
+        -- If the tag matches no alternative, then return the default (if present)
+        -- or undef.
+        (fromMaybe (undefs tp) md')
+        $ lookup t xs'
       | Just d      <- md'
       , []          <- xs'
       = Stats.caseElim "redundant" (yes d)
       | Just d      <- md'
       , [(_,(_,u))] <- us
       , Just Refl   <- matchOpenExp d u
-      = Stats.caseDefault "merge" $ yes $ Case x (map snd vs) (Just u)
+      = Stats.caseDefault "merge" $ yes $ Case tag' (map snd vs) (Just u)
       | Nothing     <- md'
       , []          <- vs
       , [(_,(_,u))] <- us
       = Stats.caseElim "overlap" $ yes u
       | Nothing     <- md'
       , [(_,(_,u))] <- us
-      = Stats.caseDefault "introduction" $ yes $ Case x (map snd vs) (Just u)
+      = Stats.caseDefault "introduction" $ yes $ Case tag' (map snd vs) (Just u)
       -- Convert case with only two alternatives to if-then-else, as we have
       -- more optimizations for conditionals
       | Nothing <- md'
       , [(tag1, alt1), (tag2, alt2)] <- xs'
-      , expr <- snd $ cond (mkBinary (PrimCmp singleType CmpEq) x $ Const scalarType tag1) (pure alt1) (pure alt2)
-      = if shouldInline x then
-          -- Encode the information that 'x' is either tag1 or tag2, in a way
+      , expr <- snd $ cond (mkBinary (PrimCmp singleType CmpEq) tag' $ Const scalarType tag1) (pure alt1) (pure alt2)
+      = if shouldInline tag' then
+          -- Encode the information that 'tag' is either tag1 or tag2, in a way
           -- that bounds analysis will understand: making them the lower and
-          -- upper bound of x.
+          -- upper bound of tag.
           yes $ snd $ assume
             (mkBinary PrimLAnd
-              (mkBinary (PrimCmp singleType CmpGtEq) x (Const scalarType $ min tag1 tag2))
-              (mkBinary (PrimCmp singleType CmpGtEq) (Const scalarType $ max tag1 tag2) x)
+              (mkBinary (PrimCmp singleType CmpGtEq) tag' (Const scalarType $ min tag1 tag2))
+              (mkBinary (PrimCmp singleType CmpGtEq) (Const scalarType $ max tag1 tag2) tag')
             )
             expr
         else
           yes expr
       | Just d <- md'
       , [(tag1, alt1)] <- xs'
-      = yes $ snd $ cond (mkBinary (PrimCmp singleType CmpEq) x $ Const scalarType tag1) (pure alt1) (pure d)
+      = yes $ snd $ cond (mkBinary (PrimCmp singleType CmpEq) tag' $ Const scalarType tag1) (pure alt1) (pure d)
       | otherwise
-      = Case x <$> xs <*> md
+      = Case <$> tag <*> xs <*> md
       where
+        tp
+          | Just d <- md' = expType d
+          | (_, x) : _ <- xs' = expType x
+          | otherwise = internalError "Empty case statement should not occur"
         (us,vs) = partition (\(n,_) -> n > 1)
                 $ Map.elems
                 . Map.fromListWith merge

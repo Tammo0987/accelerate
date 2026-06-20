@@ -53,7 +53,7 @@ description:
       quality pseudorandom numbers.
   .
   Additional libraries that have worked in the past but are not included in the
-  current release:
+  current release (they may be updated later, check to be sure):
   .
     * @accelerate-examples@: Computational kernels and applications
       demonstrating the use of Accelerate.
@@ -132,8 +132,6 @@ category:               Accelerate, Compilers/Interpreters, Concurrency, Data, P
 stability:              Experimental
 
 extra-source-files:
-    README.md
-    CHANGELOG.md
     cbits/*.c
     cbits/*.cpp
     cbits/*.h
@@ -180,11 +178,13 @@ extra-source-files:
 
 extra-doc-files:
     images/*.png
+    README.md
+    CHANGELOG.md
 
 custom-setup
   setup-depends:
-      base              >= 4.10
-    , Cabal
+      base              >= 4.10 && < 4.23
+    , Cabal             >= 2 && < 3.18
     , cabal-doctest     >= 1.0
     , directory         >= 1.0
     , filepath          >= 1.0
@@ -203,7 +203,7 @@ flag debug
     Note that a backend may not implement (or be applicable to) all options.
     .
     The following flags control phases of the compiler. The are enabled with
-    @-f\<flag\>@ and can be reveresed with @-fno-\<flag\>@:
+    @-f\<flag\>@ and can be reversed with @-fno-\<flag\>@:
     .
       * @acc-sharing@: Enable sharing recovery of array expressions (True).
     .
@@ -319,7 +319,7 @@ flag internal-checks
   default:              False
   description:          Enable some internal consistency checks
 
--- Enabling this drastically increases build times
+-- Enabling this increases build times
 -- See: https://gitlab.haskell.org/ghc/ghc/issues/15751
 flag nofib
   manual:               True
@@ -637,10 +637,6 @@ library
         -optcxx=-Wall
         -optcxx=-std=c++20
 
-  ghc-prof-options:
-        -caf-all
-        -auto-all
-
   if flag(debug)
     cc-options:
         -DACCELERATE_DEBUG
@@ -857,11 +853,11 @@ executable tracy-capture
 
 source-repository head
   Type:                 git
-  Location:             git://github.com/AccelerateHS/accelerate.git
+  Location:             https://github.com/AccelerateHS/accelerate.git
 
 source-repository this
   Type:                 git
   Tag:                  v1.4.0.0
-  Location:             git://github.com/AccelerateHS/accelerate.git
+  Location:             https://github.com/AccelerateHS/accelerate.git
 
 -- vim: nospell
