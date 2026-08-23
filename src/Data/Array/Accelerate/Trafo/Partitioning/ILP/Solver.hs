@@ -22,6 +22,7 @@ import qualified Data.Set as S
 import {-# SOURCE #-} Data.Array.Accelerate.Trafo.Partitioning.ILP.Graph ( Var, MakesILP )
 import Data.Foldable
 import Data.Array.Accelerate.Error
+import Formatting                                       ( (%), shown )
 
 
 -- Currently the only instance is for MIP, which gives bindings to a couple of solvers.
@@ -44,6 +45,17 @@ finalize ilp@(ILP dir obj constr bnds n) =
   where
     extraconstr = foldMap (\v -> int (-5) .<=. var v) (allVars ilp)
     extrabnds   = foldMap (Lower (-5))                (allVars ilp)
+
+evalExpr :: (Ord (Var op), Show (Var op)) => Constants -> Solution op -> Expression op -> Int
+evalExpr consts sol = go
+  where
+    go (Constant (Number f)) = f consts
+    go (a :+ b)              = go a + go b
+    go (Number f :* v)       = f consts * value v
+
+    value v = case M.lookup v sol of
+      Just x  -> x
+      Nothing -> internalError ("evalExpr: variable not in solution: " % shown) v
 
 data OptDir = Maximise | Minimise
   deriving (Show, Eq)

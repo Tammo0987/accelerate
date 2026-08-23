@@ -49,13 +49,18 @@ data Objective
   | MemoryUsage'         -- ^ Version of `MemoryUsage` that prioritizes fusion when two solutions would otherwise have the same costs.
   deriving (Show, Bounded, Enum, Eq, Ord)
 
+data Encoding = Legacy | PropBased deriving (Show, Eq)
+
+makeILP :: MakesILP op => Objective -> FusionILP op -> ILP op
+makeILP = makeILPWith Legacy
+
 -- TODO: _obj is now obsolete
 -- Makes the ILP. Note that this function 'appears' to ignore the Node levels completely!
 -- We could add some assertions, but if all the input is well-formed (no labels, constraints, etc
 -- that reward putting non-siblings in the same cluster) this is fine: We will interpret 'cluster 3'
 -- with parents `Nothing` as a different cluster than 'cluster 3' with parents `Just 5`.
-makeILP :: forall op. MakesILP op => Objective -> FusionILP op -> ILP op
-makeILP obj (FusionILP graph constraints bounds) =
+makeILPWith :: forall op. MakesILP op => Encoding -> Objective -> FusionILP op -> ILP op
+makeILPWith _ obj (FusionILP graph constraints bounds) =
   ILP minMax objFun (graphConstraints <> constraints) (graphBounds <> bounds) (Constants n m)
   where
     compN :: Nodes Comp
