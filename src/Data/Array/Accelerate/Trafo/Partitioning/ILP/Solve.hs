@@ -27,6 +27,7 @@ import Lens.Micro ((^.),  _1 )
 import Lens.Micro.Extras ( view )
 import Data.Maybe (fromJust,  mapMaybe )
 import Control.Monad.State
+import Data.Array.Accelerate.Trafo.Partitioning.ILP.ConstraintLanguage (Atom (..), Constraint(..), LowerEnv(..), lowerAll, Lower)
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.NameGeneration (freshName)
 import Data.Foldable
 import Control.Monad
@@ -49,7 +50,7 @@ data Objective
   | MemoryUsage'         -- ^ Version of `MemoryUsage` that prioritizes fusion when two solutions would otherwise have the same costs.
   deriving (Show, Bounded, Enum, Eq, Ord)
 
-data Encoding = Legacy | PropBased deriving (Show, Eq)
+data Encoding = Legacy | Modern deriving (Show, Eq)
 
 makeILP :: MakesILP op => Objective -> FusionILP op -> ILP op
 makeILP = makeILPWith Legacy
@@ -60,7 +61,7 @@ makeILP = makeILPWith Legacy
 -- that reward putting non-siblings in the same cluster) this is fine: We will interpret 'cluster 3'
 -- with parents `Nothing` as a different cluster than 'cluster 3' with parents `Just 5`.
 makeILPWith :: forall op. MakesILP op => Encoding -> Objective -> FusionILP op -> ILP op
-makeILPWith _ obj (FusionILP graph constraints bounds) =
+makeILPWith enc obj (FusionILP graph constraints bounds) =
   ILP minMax objFun (graphConstraints <> constraints) (graphBounds <> bounds) (Constants n m)
   where
     compN :: Nodes Comp
@@ -171,7 +172,14 @@ makeILPWith _ obj (FusionILP graph constraints bounds) =
     fusibleAcyclicC = foldMap (\e@(i,j) -> between (fused e) (pi j .-. pi i) (timesN $ fused e)) fusibleE'
 
     -- pi_i < pi_j for all strict edges  NEW!
-    strictAcyclicC = foldMap (\(i,j) -> pi i .<. pi j) strictE
+    strictAcyclicC = case enc of
+      Legacy -> foldMap (\(i,j) -> pi i .<. pi j) strictE
+      Modern -> fst loweredStrictAcyclicC
+
+    loweredStrictAcyclicC :: (LinearConstraint op, Bounds op)
+    loweredStrictAcyclicC = lowerAll (LowerEnv M.empty (Constants n m))
+        $ map (Holds . uncurry ClusterBefore)
+        $ S.toList strictE
 
     -- x_ij == 1 for all infusible edges
     infusibleC = foldMap (\e -> fused e .==. int 1) infusibleE'
@@ -186,7 +194,9 @@ makeILPWith _ obj (FusionILP graph constraints bounds) =
       <> (-1) .*. timesN (fused (w,r)) .<=. readDir (b,r) .-. writeDir (w,b)
 
     fusionBounds :: Bounds op
-    fusionBounds = piB <> fusedB <> manifestB <> readB
+    fusionBounds = piB <> fusedB <> manifestB <> readB <> case enc of
+      Legacy -> mempty
+      Modern -> snd loweredStrictAcyclicC
 
     --  0 <= pi_i <= n
     piB = foldMap (\i -> lowerUpper 0 (Pi i) n) compN
