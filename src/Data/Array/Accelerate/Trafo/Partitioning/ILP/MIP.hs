@@ -80,7 +80,7 @@ expr n (Constant (Number f)) = pure $ fromIntegral (f n)
 expr n (x :+ y) = (+) <$> expr n x <*> expr n y
 expr n ((Number f) :* y) = (fromIntegral (f n) *) . varExpr <$> var y
 
-cons :: MakesILP op => Constants -> Constraint op -> Reader (Names op) [MIP.Constraint Scientific]
+cons :: MakesILP op => Constants -> LinearConstraint op -> Reader (Names op) [MIP.Constraint Scientific]
 cons n (x :>= y) = (\a b -> [a MIP..>=. b]) <$> expr n x <*> expr n y
 cons n (x :<= y) = (\a b -> [a MIP..<=. b]) <$> expr n x <*> expr n y
 cons n (x :== y) = (\a b -> [a MIP..==. b]) <$> expr n x <*> expr n y

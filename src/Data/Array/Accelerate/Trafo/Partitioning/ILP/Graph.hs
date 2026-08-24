@@ -268,7 +268,7 @@ writeEdgesOf b = to (\g -> S.filter (\(_,b') -> b' == b) (g^.writeEdges))
 -- If not, we can always merge the blocks together later.
 data FusionILP op = FusionILP
   { _graph       :: FusionGraph
-  , _constraints :: Constraint op
+  , _constraints :: LinearConstraint op
   , _bounds      :: Bounds op
   }
 
@@ -292,7 +292,7 @@ class HasFusionILP s op | s -> op where
 graph :: Lens' (FusionILP op) FusionGraph
 graph f s = f (_graph s) <&> \g -> s{_graph = g}
 
-constraints :: Lens' (FusionILP op) (Constraint op)
+constraints :: Lens' (FusionILP op) (LinearConstraint op)
 constraints f s = f (_constraints s) <&> \c -> s{_constraints = c}
 
 bounds :: Lens' (FusionILP op) (Bounds op)
@@ -454,7 +454,7 @@ class ( ShrinkArg (BackendClusterArg op), Eq (BackendVar op)
     -> State (BackendGraphState op env) ()
 
   -- | This function lets the backend define additional constraints on the ILP.
-  finalize :: FusionGraph -> Constraint op
+  finalize :: FusionGraph -> LinearConstraint op
 
 -- | Attach backend-specific information to labelled arguments.
 labelLabelledArgs :: MakesILP op => Solution op -> Node Comp -> LabelledArgs env args -> LabelledArgsOp op env args

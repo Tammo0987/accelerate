@@ -17,7 +17,7 @@ import qualified Data.Set as S
 -- Uses an hs-boot file to break an unfortunate cyclic import situation with D.A.A.T.P.ILP.Graph:
 -- `ILPSolver` references `Var` in type signatures, `Var` contains `BackendVar`,
 -- `BackendVar` is in the class `MakesILP`, which references `Information`,
--- `Information` contains `Constraint` and `Bounds` from `ILPSolver`.
+-- `Information` contains `LinearConstraint` and `Bounds` from `ILPSolver`.
 -- I did not want to put them in the same module, so here we are.
 import {-# SOURCE #-} Data.Array.Accelerate.Trafo.Partitioning.ILP.Graph ( Var, MakesILP )
 import Data.Foldable
@@ -60,7 +60,7 @@ evalExpr consts sol = go
 data OptDir = Maximise | Minimise
   deriving (Show, Eq)
 
-data ILP op = ILP OptDir (Expression op) (Constraint op) (Bounds op) Constants
+data ILP op = ILP OptDir (Expression op) (LinearConstraint op) (Bounds op) Constants
 deriving instance Show (Var op) => Show (ILP op)
 
 type Solution op = M.Map (Var op) Int
@@ -111,23 +111,23 @@ instance Monoid (Expression op) where
   mempty :: Expression op
   mempty = int 0
 
-data Constraint op where
-  (:>=) :: Expression op -> Expression op -> Constraint op
-  (:<=) :: Expression op -> Expression op -> Constraint op
-  (:==) :: Expression op -> Expression op -> Constraint op
-  (:&&) :: Constraint op -> Constraint op -> Constraint op
-  TrueConstraint :: Constraint op
-deriving instance Show (Var op) => Show (Constraint op)
+data LinearConstraint op where
+  (:>=) :: Expression op -> Expression op -> LinearConstraint op
+  (:<=) :: Expression op -> Expression op -> LinearConstraint op
+  (:==) :: Expression op -> Expression op -> LinearConstraint op
+  (:&&) :: LinearConstraint op -> LinearConstraint op -> LinearConstraint op
+  TrueConstraint :: LinearConstraint op
+deriving instance Show (Var op) => Show (LinearConstraint op)
 
-instance Semigroup (Constraint op) where
-  (<>) :: Constraint op -> Constraint op -> Constraint op
+instance Semigroup (LinearConstraint op) where
+  (<>) :: LinearConstraint op -> LinearConstraint op -> LinearConstraint op
   (<>) TrueConstraint b = b
   (<>) a TrueConstraint = a
   (<>) a (b :&& c) = (a <> b) <> c
   (<>) a b = a :&& b
 
-instance Monoid    (Constraint op) where
-  mempty :: Constraint op
+instance Monoid    (LinearConstraint op) where
+  mempty :: LinearConstraint op
   mempty = TrueConstraint
 
 
@@ -198,22 +198,22 @@ instance IsNumber (Expression op) where
 
 
 -- | @x >= y@
-(.>=.) :: Expression op -> Expression op -> Constraint op
+(.>=.) :: Expression op -> Expression op -> LinearConstraint op
 (.>=.) = (:>=)
 infixr 7 .>=.
 
 -- | @x <= y@
-(.<=.) :: Expression op -> Expression op -> Constraint op
+(.<=.) :: Expression op -> Expression op -> LinearConstraint op
 (.<=.) = (:<=)
 infixr 7 .<=.
 
 -- | @x == y@
-(.==.) :: Expression op -> Expression op -> Constraint op
+(.==.) :: Expression op -> Expression op -> LinearConstraint op
 (.==.) = (:==)
 infixr 7 .==.
 
 -- | @x[0] == x[1] == ... == x[n-1]@
-allEqual :: [Expression op] -> Constraint op
+allEqual :: [Expression op] -> LinearConstraint op
 allEqual []     = TrueConstraint
 allEqual (x:xs) = foldMap (x .==.) xs
 
@@ -238,17 +238,17 @@ equal :: Int -> Var op -> Bounds op
 equal x v = lowerUpper x v x
 
 -- | @x < y@
-(.>.) :: Expression op -> Expression op -> Constraint op
+(.>.) :: Expression op -> Expression op -> LinearConstraint op
 x .>. y = x .>=. (y .+. int 1)
 infixl 7 .>.
 
 -- | @x < y@
-(.<.) :: Expression op -> Expression op -> Constraint op
+(.<.) :: Expression op -> Expression op -> LinearConstraint op
 x .<. y = (x .+. int 1) .<=. y
 infixl 7 .<.
 
 -- | @x <= y <= z@
-between :: Expression op -> Expression op -> Expression op -> Constraint op
+between :: Expression op -> Expression op -> Expression op -> LinearConstraint op
 between x y z = x .<=. y <> y .<=. z
 
 -- | Not 'Expression' (i.e. 1 - 'Expression').
@@ -256,23 +256,23 @@ notB :: Expression op -> Expression op
 notB e = int 1 .-. e
 
 -- | If a is 0, then b is 0.
-impliesB :: Expression op -> Expression op -> Constraint op
+impliesB :: Expression op -> Expression op -> LinearConstraint op
 impliesB = (.>=.)
 
 -- -- | Iff a and b are 0, then r is 0.
--- andB :: Expression op -> Expression op -> Expression op -> Constraint op
+-- andB :: Expression op -> Expression op -> Expression op -> LinearConstraint op
 -- andB a b r = orB (notB a) (notB b) (notB r)
 
 -- | Iff a and b are 0, then r is 0.
 --
 -- Source: "Formulating Integer Linear Programs: A Rogues' Gallery", B3
-andB :: Expression op -> Expression op -> Expression op -> Constraint op
+andB :: Expression op -> Expression op -> Expression op -> LinearConstraint op
 andB a b r = r .<=. a .+. b
           <> r .>=. a
           <> r .>=. b
 
 -- | Iff all xs are 0, then r is 0.
-allB :: Foldable f => f (Expression op) -> Expression op -> Constraint op
+allB :: Foldable f => f (Expression op) -> Expression op -> LinearConstraint op
 allB xs r | null xs   = TrueConstraint
           | otherwise = r .<=. fold xs
                      <> foldMap (r .>=.) xs
@@ -280,7 +280,7 @@ allB xs r | null xs   = TrueConstraint
 -- -- | Iff a and b are 1, then r is 1.
 -- -- not sure if this encoding is new, nor whether it is the simplest, but I think it works.
 -- -- perhaps defining andB is easier than defining orB?
--- orB :: Expression op -> Expression op -> Expression op -> Constraint op
+-- orB :: Expression op -> Expression op -> Expression op -> LinearConstraint op
 -- orB a b r =
 --   (2 .*. r .<=. a .+. b) -- r can only be 1 if both a and b are 1, so this line fixes 3/4 cases
 --   <>
@@ -289,42 +289,42 @@ allB xs r | null xs   = TrueConstraint
 -- | Iff a and b are 1, then r is 1.
 --
 -- Source: "Formulating Integer Linear Programs: A Rogues' Gallery", B2
-orB :: Expression op -> Expression op -> Expression op -> Constraint op
+orB :: Expression op -> Expression op -> Expression op -> LinearConstraint op
 orB a b r = r .+. int 1 .>=. a .+. b
          <> r .<=. a
          <> r .<=. b
 
 -- | Iff all xs are 1, then r is 1.
-anyB :: Foldable f => f (Expression op) -> Expression op -> Constraint op
+anyB :: Foldable f => f (Expression op) -> Expression op -> LinearConstraint op
 anyB xs r | null xs   = TrueConstraint
           | otherwise = r .+. int (length xs - 1) .>=. fold xs
                      <> foldMap (r .<=.) xs
 
-isEqualRangeN :: Expression op -> Expression op -> Expression op -> Constraint op
+isEqualRangeN :: Expression op -> Expression op -> Expression op -> LinearConstraint op
 isEqualRangeN = isEqualRange timesN
 
 -- given a function f that multiplies by the size of the domain of a and b, r can only be 0(true) when a and b are equal
 -- note that r can always be 1
-isEqualRange :: (Expression op -> Expression op) -> Expression op -> Expression op -> Expression op -> Constraint op
+isEqualRange :: (Expression op -> Expression op) -> Expression op -> Expression op -> Expression op -> LinearConstraint op
 isEqualRange f a b r = between (a .-. f r) b (a .+. f r)
 
 
 -- | From a set of booleans, select at most n to be 0 (true).
-packB :: Foldable f => Int -> f (Expression op) -> Constraint op
+packB :: Foldable f => Int -> f (Expression op) -> LinearConstraint op
 packB n xs
   | n >= length xs = TrueConstraint
   | n >= 0         = fold xs .>=. int (length xs - n)
   | otherwise      = internalError "packB: always false"
 
 -- | From a set of booleans, select at least n to be 0 (true).
-coverB :: Foldable f => Int -> f (Expression op) -> Constraint op
+coverB :: Foldable f => Int -> f (Expression op) -> LinearConstraint op
 coverB n xs
   | n <= 0         = TrueConstraint
   | n <= length xs = fold xs .<=. int (length xs - n)
   | otherwise      = internalError "coverB: always false"
 
 -- | From a set of booleans, select exactly n to be 0 (true).
-partitionB :: Foldable f => Int -> f (Expression op) -> Constraint op
+partitionB :: Foldable f => Int -> f (Expression op) -> LinearConstraint op
 partitionB n xs = packB n xs <> coverB n xs
 
 
@@ -337,7 +337,7 @@ varsExpr (Constant _) = mempty
 varsExpr (a :+ b) = varsExpr a <> varsExpr b
 varsExpr (_ :* v) = S.singleton v
 
-varsConstr :: Ord (Var op) => Constraint op -> S.Set (Var op)
+varsConstr :: Ord (Var op) => LinearConstraint op -> S.Set (Var op)
 varsConstr TrueConstraint = mempty
 varsConstr (a :&& b) = varsConstr a <> varsConstr b
 varsConstr (a :>= b) = varsExpr a <> varsExpr b
