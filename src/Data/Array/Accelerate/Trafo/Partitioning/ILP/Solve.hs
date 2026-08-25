@@ -27,7 +27,7 @@ import Lens.Micro ((^.),  _1 )
 import Lens.Micro.Extras ( view )
 import Data.Maybe (fromJust,  mapMaybe )
 import Control.Monad.State
-import Data.Array.Accelerate.Trafo.Partitioning.ILP.ConstraintLanguage (Atom (..), Constraint(..), LowerEnv(..), lowerAll, Lower)
+import Data.Array.Accelerate.Trafo.Partitioning.ILP.ConstraintLanguage (Atom (..), Constraint(..), LowerEnv(..), lowerAll)
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.NameGeneration (freshName)
 import Data.Foldable
 import Control.Monad
@@ -166,23 +166,29 @@ makeILPWith enc obj (FusionILP graph constraints bounds) =
       _ -> mempty
 
     fusionConstraints = fusibleAcyclicC <> strictAcyclicC <> infusibleC <> manifestC
-      <> numberOfClustersC <> readC <> fusionOrderC <> finalize graph
+      <> numberOfClustersC <> readC <> fusionOrderC <> finalize graph <> fst lowered
 
     -- x_ij <= pi_j - pi_i <= n*x_ij for all fusible edges
     fusibleAcyclicC = foldMap (\e@(i,j) -> between (fused e) (pi j .-. pi i) (timesN $ fused e)) fusibleE'
 
     -- pi_i < pi_j for all strict edges  NEW!
     strictAcyclicC = case enc of
-      Legacy -> foldMap (\(i,j) -> pi i .<. pi j) strictE
-      Modern -> fst loweredStrictAcyclicC
-
-    loweredStrictAcyclicC :: (LinearConstraint op, Bounds op)
-    loweredStrictAcyclicC = lowerAll (LowerEnv M.empty (Constants n m))
-        $ map (Holds . uncurry ClusterBefore)
-        $ S.toList strictE
+        Legacy -> foldMap (\(i,j) -> pi i .<. pi j) strictE
+        Modern -> mempty
 
     -- x_ij == 1 for all infusible edges
-    infusibleC = foldMap (\e -> fused e .==. int 1) infusibleE'
+    infusibleC = case enc of
+        Legacy -> foldMap (\e -> fused e .==. int 1) infusibleE'
+        Modern -> mempty
+
+    strictAcyclicP = map (Holds . uncurry ClusterBefore) $ S.toList strictE
+    infusibleP = map (Not . uncurry SameCluster) $ S.toList infusibleE'
+
+    modernP = case enc of
+        Legacy -> []
+        Modern -> strictAcyclicP <> infusibleP
+
+    lowered = lowerAll (LowerEnv M.empty (Constants n m)) modernP
 
     -- forall b, iff all (w,b,r) are fused, then b is not manifest.
     manifestC = M.foldMapWithKey (\b es -> allB (map fused es) (notB $ manifest b))
@@ -194,9 +200,7 @@ makeILPWith enc obj (FusionILP graph constraints bounds) =
       <> (-1) .*. timesN (fused (w,r)) .<=. readDir (b,r) .-. writeDir (w,b)
 
     fusionBounds :: Bounds op
-    fusionBounds = piB <> fusedB <> manifestB <> readB <> case enc of
-      Legacy -> mempty
-      Modern -> snd loweredStrictAcyclicC
+    fusionBounds = piB <> fusedB <> manifestB <> readB <> snd lowered
 
     --  0 <= pi_i <= n
     piB = foldMap (\i -> lowerUpper 0 (Pi i) n) compN
