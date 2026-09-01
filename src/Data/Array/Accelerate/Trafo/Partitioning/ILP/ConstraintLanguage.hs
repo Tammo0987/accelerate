@@ -13,8 +13,7 @@ import Prelude hiding (pi)
 
 -- | A property of the fusion problem, to be lowered into linear constraints.
 data Constraint op
-  = Linear (LinearConstraint op)
-  | ClusterBefore (Node Comp) (Node Comp)
+  = ClusterBefore (Node Comp) (Node Comp)
   | DifferentCluster (Node Comp) (Node Comp)
   | NotManifestIfAllFused (Node GVal) [(Node Comp, Node Comp)]
   | FusibleOrder (Node Comp) (Node Comp)
@@ -82,7 +81,6 @@ lowerHorizontalReadCost env _ consumers = do
 -- | Lower a single 'Constraint'.
 lower :: LowerEnv op -> Constraint op -> Lower op
 lower env constraint = case constraint of
-  Linear c -> pure (c, mempty, mempty)
   ClusterBefore i j -> pure (pi i .<. pi j, mempty, mempty)
   DifferentCluster i j -> pure (fused (i, j) .==. int 1, mempty, mempty)
   NotManifestIfAllFused b pairs -> pure (allB (map fused pairs) (notB $ manifest b), mempty, mempty)

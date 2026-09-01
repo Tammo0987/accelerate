@@ -1,7 +1,6 @@
 {-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE BlockArguments #-}
-{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 module Data.Array.Accelerate.Trafo.Partitioning.ILP.Solve where
@@ -46,18 +45,13 @@ data Objective
   | MemoryUsage'         -- ^ Version of `MemoryUsage` that prioritizes fusion when two solutions would otherwise have the same costs.
   deriving (Show, Bounded, Enum, Eq, Ord)
 
-data Encoding = Legacy | Modern deriving (Show, Eq)
-
-makeILP :: MakesILP op => Objective -> FusionILP op -> ILP op
-makeILP = makeILPWith Legacy
-
 -- TODO: _obj is now obsolete
 -- Makes the ILP. Note that this function 'appears' to ignore the Node levels completely!
 -- We could add some assertions, but if all the input is well-formed (no labels, constraints, etc
 -- that reward putting non-siblings in the same cluster) this is fine: We will interpret 'cluster 3'
 -- with parents `Nothing` as a different cluster than 'cluster 3' with parents `Just 5`.
-makeILPWith :: forall op. MakesILP op => Encoding -> Objective -> FusionILP op -> ILP op
-makeILPWith enc obj (FusionILP graph constraints bounds) =
+makeILP :: forall op. MakesILP op => Objective -> FusionILP op -> ILP op
+makeILP obj (FusionILP graph constraints bounds) =
   ILP minMax objFun (graphConstraints <> constraints) (graphBounds <> bounds) (Constants n m)
   where
     compN :: Nodes Comp
@@ -135,42 +129,29 @@ makeILPWith enc obj (FusionILP graph constraints bounds) =
     -- To eliminate that one too, we'd need n^2 edges.
     numberOfClusters  = var (Other "maximumClusterNumber")
 
-    -- x_ij <= pi_j - pi_i <= n*x_ij for all fusible edges
-    fusibleAcyclicC = foldMap (\e@(i,j) -> between (fused e) (pi j .-. pi i) (timesN $ fused e)) fusibleE'
-
-    -- pi_i < pi_j for all strict edges  NEW!
-    strictAcyclicC = foldMap (\(i,j) -> pi i .<. pi j) strictE
+    -- pi_i < pi_j for all strict edges
+    strictAcyclicConstraints   = map (uncurry ClusterBefore)    $ S.toList strictE
 
     -- x_ij == 1 for all infusible edges
-    infusibleC = foldMap (\e -> fused e .==. int 1) infusibleE'
+    infusibleConstraints       = map (uncurry DifferentCluster) $ S.toList infusibleE'
 
     -- forall b, iff all (w,b,r) are fused, then b is not manifest.
-    manifestC = M.foldMapWithKey (\b es -> allB (map fused es) (notB $ manifest b))
-        $ foldl (flip \(i,b,j) -> M.insertWith (<>) b [(i,j)]) M.empty dataflowE
+    manifestConstraints        = map (uncurry NotManifestIfAllFused) . M.toList $ foldl (flip \(i,b,j) -> M.insertWith (<>) b [(i,j)]) M.empty dataflowE
+
+    -- x_ij <= pi_j - pi_i <= n*x_ij for all fusible edges
+    fusibleAcyclicConstraints  = map (uncurry FusibleOrder) $ S.toList fusibleE'
 
     -- if (w,b,r) is fused, then d_wb == d_br
-    fusionOrderC = flip foldMap fusibleE $ \(w,b,r) ->
-                   timesN (fused (w,r)) .>=. readDir (b,r) .-. writeDir (w,b)
-                   <> (-1) .*. timesN (fused (w,r)) .<=. readDir (b,r) .-. writeDir (w,b)
-
-    -- removing this from myConstraints makes the ILP slightly smaller, but disables the use of this cost function
-    numberOfClustersC = case obj of
-        NumClusters -> foldMap (\l -> pi l .<=. numberOfClusters) compN
-        Everything  -> foldMap (\l -> pi l .<=. numberOfClusters) compN
-        _ -> mempty
-
-    strictAcyclicConstraints   = map (uncurry ClusterBefore)    $ S.toList strictE
-    infusibleConstraints       = map (uncurry DifferentCluster) $ S.toList infusibleE'
-    manifestConstraints        = map (uncurry NotManifestIfAllFused) . M.toList $ foldl (flip \(i,b,j) -> M.insertWith (<>) b [(i,j)]) M.empty dataflowE
-    fusibleAcyclicConstraints  = map (uncurry FusibleOrder) $ S.toList fusibleE'
     fusionDirectionConstraints = map (\(w,b,r) -> FusionDirection w b r) $ S.toList fusibleE
+
+    -- removing this makes the ILP slightly smaller, but disables the use of this cost function
     numberOfClustersConstraints = case obj of
         NumClusters -> map (`WithinClusterCount` Other "maximumClusterNumber") $ S.toList compN
         Everything  -> map (`WithinClusterCount` Other "maximumClusterNumber") $ S.toList compN
         _ -> []
 
-    modernConstraints :: [Constraint op]
-    modernConstraints = strictAcyclicConstraints
+    allConstraints :: [Constraint op]
+    allConstraints = strictAcyclicConstraints
         <> infusibleConstraints
         <> manifestConstraints
         <> fusibleAcyclicConstraints
@@ -183,31 +164,16 @@ makeILPWith enc obj (FusionILP graph constraints bounds) =
         <> atMostOneReaderConstraints
         <> atMostOneWriterConstraints
         <> readAliveThroughWritersConstraints
-
-    sharedConstraints :: [Constraint op]
-    sharedConstraints = horizontalReadCostConstraints
-
-    legacyConstraints :: LinearConstraint op
-    legacyConstraints = fusibleAcyclicC
-        <> strictAcyclicC
-        <> infusibleC
-        <> manifestC
-        <> numberOfClustersC
-        <> fusionOrderC
-        <> (if enableIU then onManifestC <> inplaceOrderC <> inplaceClusterC <> acrossClusterC <> singleReadC <> singleWriteC <> finalClusterC else mempty)
+        <> horizontalReadCostConstraints
 
     lowered :: (LinearConstraint op, Bounds op, Expression op)
-    lowered = case enc of
-        Legacy -> lowerAll (LowerEnv M.empty (Constants n m)) sharedConstraints
-        Modern -> lowerAll (LowerEnv M.empty (Constants n m)) (modernConstraints <> sharedConstraints)
+    lowered = lowerAll (LowerEnv M.empty (Constants n m)) allConstraints
 
     (loweredConstraints, loweredBounds, loweredCost) = lowered
 
     numberOfReads = loweredCost .+. numberOfUnfusedEdges
 
-    fusionConstraints = case enc of
-        Legacy -> legacyConstraints <> finalize graph <> loweredConstraints
-        Modern ->                      finalize graph <> loweredConstraints
+    fusionConstraints = finalize graph <> loweredConstraints
 
     fusionBounds :: Bounds op
     fusionBounds = piB <> fusedB <> manifestB <> loweredBounds
@@ -237,47 +203,34 @@ makeILPWith enc obj (FusionILP graph constraints bounds) =
     weightedNumberOfNonInplaceUpdates = M.foldMapWithKey (\p w -> w .*. inplace p) inplacePweights
 
     -- If inplace p, then c1 == c2
-    acrossClusterC = flip foldMap inplaceP \case
-      p@((_,c1),(c2,_))
-        | c1 == c2  -> mempty
-        | otherwise -> isEqualRangeN (pi c1) (pi c2) (inplace p)
-
     acrossClusterConstraints :: [Constraint op]
     acrossClusterConstraints = [AcrossClusterSame p | enableIU, p <- S.toList inplaceP]
 
     -- If inplace p, then manifest b1 and manifest b2
-    onManifestC = foldMap (\p@((b1,_),(_,b2)) -> (inplace p `impliesB` manifest b1) <> (inplace p `impliesB` manifest b2)) inplaceP
-
     onManifestConstraints :: [Constraint op]
     onManifestConstraints = [OnManifestIfInPlace p | enableIU, p <- S.toList inplaceP]
-
-    -- Forall b, at most one inplace p
-    singleReadC  = foldMap (packB 1) $ foldl (flip \p@((b,_),_) -> M.insertWith (<>) b [inplace p]) M.empty inplaceP
-    singleWriteC = foldMap (packB 1) $ foldl (flip \p@(_,(_,b)) -> M.insertWith (<>) b [inplace p]) M.empty inplaceP
 
     readerGroups = foldl (flip \p@((b,_),_) -> M.insertWith (<>) b [p]) M.empty inplaceP
     writerGroups = foldl (flip \p@(_,(_,b)) -> M.insertWith (<>) b [p]) M.empty inplaceP
 
+    -- Forall b, at most one inplace p
     atMostOneReaderConstraints :: [Constraint op]
     atMostOneReaderConstraints = [AtMostOneReader b ps | enableIU, (b, ps) <- M.toList readerGroups]
 
+    -- Forall b, at most one inplace p
     atMostOneWriterConstraints :: [Constraint op]
     atMostOneWriterConstraints = [AtMostOneWriter b ps | enableIU, (b, ps) <- M.toList writerGroups]
 
     -- If inplace p, then pimax b1 >= pi c2
-    inplaceClusterC = foldMap (\p@((b1,_),(c2,_)) -> (pimax b1 .-. pi c2) .<=. timesN (inplace p)) inplaceP
-
     inPlaceClusterConstraints :: [Constraint op]
     inPlaceClusterConstraints = [InPlaceCluster p | enableIU, p <- S.toList inplaceP]
-
-    -- Iff     inplace p, then pi c1     <= pimax b1
-    -- Iff not inplace p, then pi c1 + 1 <= pimax b1
-    -- finalClusterC = foldMap (\p@((b1,c1),_) -> pi c1 .+. inplace p .<=. pimax b1) inplaceP
-    finalClusterC = foldMap (\r@(b1,c1) -> pi c1 .+. int 1 .-. foldMap (\w -> int 1 .-. inplace (r,w)) (M.findWithDefault [] r readM) .<=. pimax b1) readE
 
     -- Group inplace paths by read edge:
     readM = foldl (flip \(r,w) -> M.insertWith (<>) r [w]) M.empty inplaceP
 
+    -- Iff     inplace p, then pi c1     <= pimax b1
+    -- Iff not inplace p, then pi c1 + 1 <= pimax b1
+    -- finalClusterC = foldMap (\p@((b1,c1),_) -> pi c1 .+. inplace p .<=. pimax b1) inplaceP
     readAliveThroughWritersConstraints :: [Constraint op]
     readAliveThroughWritersConstraints = [ReadAliveThroughWriters r (M.findWithDefault [] r readM) | enableIU, r <- S.toList readE]
 
@@ -287,8 +240,6 @@ makeILPWith enc obj (FusionILP graph constraints bounds) =
     -- However, a mutable computation would create a third writer, which would be a problem.
 
     -- If inplace p, then d_br == d_wb
-    inplaceOrderC = foldMap (\p@(r,w) -> isEqualRangeN (readDir r) (writeDir w) (inplace p)) inplaceP
-
     inPlaceDirectionConstraints :: [Constraint op]
     inPlaceDirectionConstraints = [InPlaceDirection p | enableIU, p <- S.toList inplaceP]
 
