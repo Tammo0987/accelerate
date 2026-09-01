@@ -2,7 +2,7 @@
 module Data.Array.Accelerate.Trafo.Partitioning.ILP.ConstraintLanguage where
 
 import Control.Monad.State (State, evalState)
-import Data.Array.Accelerate.Trafo.Partitioning.ILP.Graph (InplacePath, Var, fused, inplace, manifest, pi, readDir, writeDir)
+import Data.Array.Accelerate.Trafo.Partitioning.ILP.Graph (InplacePath, Var, fused, inplace, manifest, pi, pimax, readDir, writeDir)
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Labels (Comp, GVal, Node)
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Solver (Bounds, Constants, LinearConstraint, allB, between, impliesB, int, isEqualRangeN, notB, timesN, var, (.-.), (.<.), (.<=.), (.==.))
 import Data.Map (Map)
@@ -19,6 +19,7 @@ data Constraint op
   | WithinClusterCount (Node Comp) (Var op)
   | OnManifestIfInPlace InplacePath
   | InPlaceDirection InplacePath
+  | InPlaceCluster InplacePath
 
 -- | An environment for lowering, containing the bounds of the variables and the
 -- constants for the problem.
@@ -42,7 +43,8 @@ lower _ constraint = case constraint of
   FusionDirection w b r -> pure (isEqualRangeN (writeDir (w, b)) (readDir (b, r)) (fused (w, r)), mempty)
   WithinClusterCount l v -> pure (pi l .<=. var v, mempty)
   OnManifestIfInPlace p@((b1, _), (_, b2)) -> pure ((inplace p `impliesB` manifest b1) <> (inplace p `impliesB` manifest b2), mempty)
-  InPlaceDirection p@(r,w) -> pure (isEqualRangeN (readDir r) (writeDir w) (inplace p), mempty)
+  InPlaceDirection p@(r, w) -> pure (isEqualRangeN (readDir r) (writeDir w) (inplace p), mempty)
+  InPlaceCluster p@((b1, _), (c2, _)) -> pure ((pimax b1 .-. pi c2) .<=. timesN (inplace p), mempty)
 
 -- | Lower a batch of 'Constraint's under one shared name supply.
 lowerAll :: LowerEnv op -> [Constraint op] -> (LinearConstraint op, Bounds op)
