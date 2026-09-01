@@ -2,9 +2,9 @@
 module Data.Array.Accelerate.Trafo.Partitioning.ILP.ConstraintLanguage where
 
 import Control.Monad.State (State, evalState)
-import Data.Array.Accelerate.Trafo.Partitioning.ILP.Graph (Var, fused, pi)
-import Data.Array.Accelerate.Trafo.Partitioning.ILP.Labels (Comp, Node)
-import Data.Array.Accelerate.Trafo.Partitioning.ILP.Solver (Bounds, Constants, LinearConstraint, int, (.<.), (.==.))
+import Data.Array.Accelerate.Trafo.Partitioning.ILP.Graph (Var, fused, manifest, pi)
+import Data.Array.Accelerate.Trafo.Partitioning.ILP.Labels (Comp, GVal, Node)
+import Data.Array.Accelerate.Trafo.Partitioning.ILP.Solver (Bounds, Constants, LinearConstraint, allB, int, notB, (.<.), (.==.))
 import Data.Map (Map)
 import Prelude hiding (pi)
 
@@ -13,6 +13,7 @@ data Constraint op
   = Linear (LinearConstraint op)
   | ClusterBefore (Node Comp) (Node Comp)
   | DifferentCluster (Node Comp) (Node Comp)
+  | NotManifestIfAllFused (Node GVal) [(Node Comp, Node Comp)]
 
 -- | An environment for lowering, containing the bounds of the variables and the
 -- constants for the problem.
@@ -31,6 +32,7 @@ lower _ constraint = case constraint of
   Linear c -> pure (c, mempty)
   ClusterBefore i j -> pure (pi i .<. pi j, mempty)
   DifferentCluster i j -> pure (fused (i, j) .==. int 1, mempty)
+  NotManifestIfAllFused b pairs -> pure (allB (map fused pairs) (notB $ manifest b), mempty)
 
 -- | Lower a batch of 'Constraint's under one shared name supply.
 lowerAll :: LowerEnv op -> [Constraint op] -> (LinearConstraint op, Bounds op)

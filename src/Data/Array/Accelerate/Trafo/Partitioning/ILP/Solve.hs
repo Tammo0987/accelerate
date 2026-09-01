@@ -183,16 +183,19 @@ makeILPWith enc obj (FusionILP graph constraints bounds) =
 
     strictAcyclicP = map (uncurry ClusterBefore)    $ S.toList strictE
     infusibleP     = map (uncurry DifferentCluster) $ S.toList infusibleE'
+    manifestP      = map (uncurry NotManifestIfAllFused) . M.toList $ foldl (flip \(i,b,j) -> M.insertWith (<>) b [(i,j)]) M.empty dataflowE
 
     modernP = case enc of
         Legacy -> []
-        Modern -> strictAcyclicP <> infusibleP
+        Modern -> strictAcyclicP <> infusibleP <> manifestP
 
     lowered = lowerAll (LowerEnv M.empty (Constants n m)) modernP
 
     -- forall b, iff all (w,b,r) are fused, then b is not manifest.
-    manifestC = M.foldMapWithKey (\b es -> allB (map fused es) (notB $ manifest b))
-              $ foldl (flip \(i,b,j) -> M.insertWith (<>) b [(i,j)]) M.empty dataflowE
+    manifestC = case enc of
+        Legacy -> M.foldMapWithKey (\b es -> allB (map fused es) (notB $ manifest b))
+                  $ foldl (flip \(i,b,j) -> M.insertWith (<>) b [(i,j)]) M.empty dataflowE
+        Modern -> mempty
 
     -- if (w,b,r) is fused, then d_wb == d_br
     fusionOrderC = flip foldMap fusibleE $ \(w,b,r) ->
