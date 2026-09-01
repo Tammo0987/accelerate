@@ -183,14 +183,15 @@ makeILPWith enc obj (FusionILP graph constraints bounds) =
         Legacy -> foldMap (\e -> fused e .==. int 1) infusibleE'
         Modern -> mempty
 
-    strictAcyclicP  = map (uncurry ClusterBefore)    $ S.toList strictE
-    infusibleP      = map (uncurry DifferentCluster) $ S.toList infusibleE'
-    manifestP       = map (uncurry NotManifestIfAllFused) . M.toList $ foldl (flip \(i,b,j) -> M.insertWith (<>) b [(i,j)]) M.empty dataflowE
-    fusibleAcyclicP = map (uncurry FusibleOrder) $ S.toList fusibleE'
+    strictAcyclicP   = map (uncurry ClusterBefore)    $ S.toList strictE
+    infusibleP       = map (uncurry DifferentCluster) $ S.toList infusibleE'
+    manifestP        = map (uncurry NotManifestIfAllFused) . M.toList $ foldl (flip \(i,b,j) -> M.insertWith (<>) b [(i,j)]) M.empty dataflowE
+    fusibleAcyclicP  = map (uncurry FusibleOrder) $ S.toList fusibleE'
+    fusionDirectionP = map (\(w,b,r) -> FusionDirection w b r) $ S.toList fusibleE
 
     modernP = case enc of
         Legacy -> []
-        Modern -> strictAcyclicP <> infusibleP <> manifestP <> fusibleAcyclicP
+        Modern -> strictAcyclicP <> infusibleP <> manifestP <> fusibleAcyclicP <> fusionDirectionP
 
     lowered = lowerAll (LowerEnv M.empty (Constants n m)) modernP
 
@@ -201,9 +202,11 @@ makeILPWith enc obj (FusionILP graph constraints bounds) =
         Modern -> mempty
 
     -- if (w,b,r) is fused, then d_wb == d_br
-    fusionOrderC = flip foldMap fusibleE $ \(w,b,r) ->
-                  timesN (fused (w,r)) .>=. readDir (b,r) .-. writeDir (w,b)
-      <> (-1) .*. timesN (fused (w,r)) .<=. readDir (b,r) .-. writeDir (w,b)
+    fusionOrderC = case enc of
+        Legacy -> flip foldMap fusibleE $ \(w,b,r) ->
+                    timesN (fused (w,r)) .>=. readDir (b,r) .-. writeDir (w,b)
+            <> (-1) .*. timesN (fused (w,r)) .<=. readDir (b,r) .-. writeDir (w,b)
+        Modern -> mempty
 
     fusionBounds :: Bounds op
     fusionBounds = piB <> fusedB <> manifestB <> readB <> snd lowered
