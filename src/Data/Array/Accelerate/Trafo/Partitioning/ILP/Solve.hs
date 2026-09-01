@@ -159,10 +159,16 @@ makeILPWith enc obj (FusionILP graph constraints bounds) =
     -- these exec-pi values, in which case we are only left with the independent array operations problem.
     -- To eliminate that one too, we'd need n^2 edges.
     numberOfClusters  = var (Other "maximumClusterNumber")
+
+    numberOfClustersP = case obj of
+        NumClusters -> map (`WithinClusterCount` Other "maximumClusterNumber") $ S.toList compN
+        Everything  -> map (`WithinClusterCount` Other "maximumClusterNumber") $ S.toList compN
+        _ -> []
+
     -- removing this from myConstraints makes the ILP slightly smaller, but disables the use of this cost function
-    numberOfClustersC = case obj of
-      NumClusters -> foldMap (\l -> pi l .<=. numberOfClusters) compN
-      Everything  -> foldMap (\l -> pi l .<=. numberOfClusters) compN
+    numberOfClustersC = case (enc, obj) of
+      (Legacy, NumClusters) -> foldMap (\l -> pi l .<=. numberOfClusters) compN
+      (Legacy, Everything)  -> foldMap (\l -> pi l .<=. numberOfClusters) compN
       _ -> mempty
 
     fusionConstraints = fusibleAcyclicC <> strictAcyclicC <> infusibleC <> manifestC
@@ -191,7 +197,7 @@ makeILPWith enc obj (FusionILP graph constraints bounds) =
 
     modernP = case enc of
         Legacy -> []
-        Modern -> strictAcyclicP <> infusibleP <> manifestP <> fusibleAcyclicP <> fusionDirectionP
+        Modern -> strictAcyclicP <> infusibleP <> manifestP <> fusibleAcyclicP <> fusionDirectionP <> numberOfClustersP
 
     lowered = lowerAll (LowerEnv M.empty (Constants n m)) modernP
 

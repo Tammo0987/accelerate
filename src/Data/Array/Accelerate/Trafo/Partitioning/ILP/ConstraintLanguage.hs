@@ -4,7 +4,7 @@ module Data.Array.Accelerate.Trafo.Partitioning.ILP.ConstraintLanguage where
 import Control.Monad.State (State, evalState)
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Graph (Var, fused, manifest, pi, readDir, writeDir)
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Labels (Comp, GVal, Node)
-import Data.Array.Accelerate.Trafo.Partitioning.ILP.Solver (Bounds, Constants, LinearConstraint, allB, between, int, isEqualRangeN, notB, timesN, (.-.), (.<.), (.==.))
+import Data.Array.Accelerate.Trafo.Partitioning.ILP.Solver (Bounds, Constants, LinearConstraint, allB, between, int, isEqualRangeN, notB, timesN, var, (.-.), (.<.), (.<=.), (.==.))
 import Data.Map (Map)
 import Prelude hiding (pi)
 
@@ -16,6 +16,7 @@ data Constraint op
   | NotManifestIfAllFused (Node GVal) [(Node Comp, Node Comp)]
   | FusibleOrder (Node Comp) (Node Comp)
   | FusionDirection (Node Comp) (Node GVal) (Node Comp)
+  | WithinClusterCount (Node Comp) (Var op)
 
 -- | An environment for lowering, containing the bounds of the variables and the
 -- constants for the problem.
@@ -37,6 +38,7 @@ lower _ constraint = case constraint of
   NotManifestIfAllFused b pairs -> pure (allB (map fused pairs) (notB $ manifest b), mempty)
   FusibleOrder i j -> pure (between (fused (i, j)) (pi j .-. pi i) (timesN $ fused (i, j)), mempty)
   FusionDirection w b r -> pure (isEqualRangeN (writeDir (w, b)) (readDir (b, r)) (fused (w, r)), mempty)
+  WithinClusterCount l v -> pure (pi l .<=. var v, mempty)
 
 -- | Lower a batch of 'Constraint's under one shared name supply.
 lowerAll :: LowerEnv op -> [Constraint op] -> (LinearConstraint op, Bounds op)
