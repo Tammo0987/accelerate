@@ -6,22 +6,22 @@ module Data.Array.Accelerate.Trafo.Partitioning.ILP.ConstraintLanguage where
 
 import Control.Monad (replicateM)
 import Control.Monad.State (State, evalState)
-import Data.Array.Accelerate.Trafo.Partitioning.ILP.Graph (InplacePath, ReadEdge, Var (Other), WriteEdge, fused, inplace, manifest, pi, pimax, readDir, writeDir)
+import Data.Array.Accelerate.Trafo.Partitioning.ILP.Graph (InplacePath, ReadEdge, Var (Other), WriteEdge, fused, inplace, manifest, maxCluster, pi, pimax, readDir, writeDir)
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Labels (Comp, GVal, Node)
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.NameGeneration (freshName)
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Solver (Bounds, Constants (nComps), Expression, LinearConstraint, allB, between, binary, impliesB, int, isEqualRangeN, lowerUpper, notB, packB, timesN, var, (.+.), (.-.), (.<.), (.<=.), (.==.))
 import Data.Foldable (fold)
-import Prelude hiding (pi)
 import Data.Kind (Type)
+import Prelude hiding (pi)
 
 -- | A property of the fusion problem, to be lowered into linear constraints.
-data Constraint op
+data Constraint (op :: Type -> Type)
   = ClusterBefore (Node Comp) (Node Comp)
   | DifferentCluster (Node Comp) (Node Comp)
   | NotManifestIfAllFused (Node GVal) [(Node Comp, Node Comp)]
   | FusibleOrder (Node Comp) (Node Comp)
   | FusionDirection (Node Comp) (Node GVal) (Node Comp)
-  | WithinClusterCount (Node Comp) (Var op)
+  | WithinClusterCount (Node Comp)
   | OnManifestIfInPlace InplacePath
   | InPlaceDirection InplacePath
   | InPlaceCluster InplacePath
@@ -86,7 +86,7 @@ lower env constraint = case constraint of
   NotManifestIfAllFused b pairs -> pure (allB (map fused pairs) (notB $ manifest b), mempty, mempty)
   FusibleOrder i j -> pure (between (fused (i, j)) (pi j .-. pi i) (timesN $ fused (i, j)), mempty, mempty)
   FusionDirection w b r -> pure (isEqualRangeN (writeDir (w, b)) (readDir (b, r)) (fused (w, r)), mempty, mempty)
-  WithinClusterCount l v -> pure (pi l .<=. var v, mempty, mempty)
+  WithinClusterCount l -> pure (pi l .<=. maxCluster, mempty, mempty)
   OnManifestIfInPlace p@((b1, _), (_, b2)) -> pure ((inplace p `impliesB` manifest b1) <> (inplace p `impliesB` manifest b2), mempty, mempty)
   InPlaceDirection p@(r, w) -> pure (isEqualRangeN (readDir r) (writeDir w) (inplace p), mempty, mempty)
   InPlaceCluster p@((b1, _), (c2, _)) -> pure ((pimax b1 .-. pi c2) .<=. timesN (inplace p), mempty, mempty)

@@ -501,6 +501,8 @@ data Var (op :: Type -> Type)
     -- All 'InPlace' variables need to be unique, so we can't omit the computation labels. Taking one path through a cluster is different from taking another.
   | PiMax (Node GVal)
     -- ^ The cluster number of the largest reader of the buffer, since in-place updates are only allowed on the final consumer of an array/buffer.
+  | MaxCluster
+    -- ^ Upper bound on the larget 'Pi' assigned to any comptation, used by the 'NumClusters'/'Everything' objectives to approximate the cluster count.
   -- | WriteDirPiMax (Node GVal)
   --   -- ^ The write direction of the largest reader of the buffer. This is used to check that all reads of the buffer are in the same direction as the write.
 
@@ -547,6 +549,9 @@ inplace ((b1,c1),(c2,b2)) = var $ InPlace b1 c1 c2 b2
 -- | Safe constructor for 'PiMax' variables.
 pimax :: Node GVal -> Expression op
 pimax = var . PiMax
+
+maxCluster :: Expression op
+maxCluster = var MaxCluster
 
 dirToInt :: Direction -> Int
 dirToInt LeftToRight = -2

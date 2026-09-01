@@ -1,7 +1,6 @@
 {-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE BlockArguments #-}
-{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 module Data.Array.Accelerate.Trafo.Partitioning.ILP.Solve where
 
@@ -148,7 +147,7 @@ makeILPWithPresolve presolve obj (FusionILP graph constraints bounds) =
     -- It's possible to also give each array operation a 'exec-pi' variable, and change this to minimise the maximum of
     -- these exec-pi values, in which case we are only left with the independent array operations problem.
     -- To eliminate that one too, we'd need n^2 edges.
-    numberOfClusters  = var (Other "maximumClusterNumber")
+    numberOfClusters  = maxCluster
 
     -- pi_i < pi_j for all strict edges
     strictAcyclicConstraints   = map (uncurry ClusterBefore)    $ S.toList strictE
@@ -167,8 +166,8 @@ makeILPWithPresolve presolve obj (FusionILP graph constraints bounds) =
 
     -- removing this makes the ILP slightly smaller, but disables the use of this cost function
     numberOfClustersConstraints = case obj of
-        NumClusters -> map (`WithinClusterCount` Other "maximumClusterNumber") $ S.toList compN
-        Everything  -> map (`WithinClusterCount` Other "maximumClusterNumber") $ S.toList compN
+        NumClusters -> map WithinClusterCount $ S.toList compN
+        Everything  -> map WithinClusterCount $ S.toList compN
         _ -> []
 
     --  0 <= pi_i <= n
