@@ -160,59 +160,67 @@ makeILPWith enc obj (FusionILP graph constraints bounds) =
     -- To eliminate that one too, we'd need n^2 edges.
     numberOfClusters  = var (Other "maximumClusterNumber")
 
-    numberOfClustersP = case obj of
+    -- x_ij <= pi_j - pi_i <= n*x_ij for all fusible edges
+    fusibleAcyclicC = foldMap (\e@(i,j) -> between (fused e) (pi j .-. pi i) (timesN $ fused e)) fusibleE'
+
+    -- pi_i < pi_j for all strict edges  NEW!
+    strictAcyclicC = foldMap (\(i,j) -> pi i .<. pi j) strictE
+
+    -- x_ij == 1 for all infusible edges
+    infusibleC = foldMap (\e -> fused e .==. int 1) infusibleE'
+
+    -- forall b, iff all (w,b,r) are fused, then b is not manifest.
+    manifestC = M.foldMapWithKey (\b es -> allB (map fused es) (notB $ manifest b))
+        $ foldl (flip \(i,b,j) -> M.insertWith (<>) b [(i,j)]) M.empty dataflowE
+
+    -- if (w,b,r) is fused, then d_wb == d_br
+    fusionOrderC = flip foldMap fusibleE $ \(w,b,r) ->
+                   timesN (fused (w,r)) .>=. readDir (b,r) .-. writeDir (w,b)
+                   <> (-1) .*. timesN (fused (w,r)) .<=. readDir (b,r) .-. writeDir (w,b)
+
+    -- removing this from myConstraints makes the ILP slightly smaller, but disables the use of this cost function
+    numberOfClustersC = case obj of
+        NumClusters -> foldMap (\l -> pi l .<=. numberOfClusters) compN
+        Everything  -> foldMap (\l -> pi l .<=. numberOfClusters) compN
+        _ -> mempty
+
+    strictAcyclicConstraints   = map (uncurry ClusterBefore)    $ S.toList strictE
+    infusibleConstraints       = map (uncurry DifferentCluster) $ S.toList infusibleE'
+    manifestConstraints        = map (uncurry NotManifestIfAllFused) . M.toList $ foldl (flip \(i,b,j) -> M.insertWith (<>) b [(i,j)]) M.empty dataflowE
+    fusibleAcyclicConstraints  = map (uncurry FusibleOrder) $ S.toList fusibleE'
+    fusionDirectionConstraints = map (\(w,b,r) -> FusionDirection w b r) $ S.toList fusibleE
+    numberOfClustersConstraints = case obj of
         NumClusters -> map (`WithinClusterCount` Other "maximumClusterNumber") $ S.toList compN
         Everything  -> map (`WithinClusterCount` Other "maximumClusterNumber") $ S.toList compN
         _ -> []
 
-    -- removing this from myConstraints makes the ILP slightly smaller, but disables the use of this cost function
-    numberOfClustersC = case (enc, obj) of
-      (Legacy, NumClusters) -> foldMap (\l -> pi l .<=. numberOfClusters) compN
-      (Legacy, Everything)  -> foldMap (\l -> pi l .<=. numberOfClusters) compN
-      _ -> mempty
+    modernConstraints :: [Constraint op]
+    modernConstraints = strictAcyclicConstraints
+        <> infusibleConstraints
+        <> manifestConstraints
+        <> fusibleAcyclicConstraints
+        <> fusionDirectionConstraints
+        <> numberOfClustersConstraints
 
-    fusionConstraints = fusibleAcyclicC <> strictAcyclicC <> infusibleC <> manifestC
-      <> numberOfClustersC <> readC <> fusionOrderC <> finalize graph <> fst lowered
+    sharedConstraints :: [Constraint op]
+    sharedConstraints = [Linear readC] <> [Linear inplaceConstraints | enableIU]
 
-    -- x_ij <= pi_j - pi_i <= n*x_ij for all fusible edges
-    fusibleAcyclicC = case enc of
-        Legacy -> foldMap (\e@(i,j) -> between (fused e) (pi j .-. pi i) (timesN $ fused e)) fusibleE'
-        Modern -> mempty
+    legacyConstraints :: LinearConstraint op
+    legacyConstraints = fusibleAcyclicC
+        <> strictAcyclicC
+        <> infusibleC
+        <> manifestC
+        <> numberOfClustersC
+        <> fusionOrderC
 
-    -- pi_i < pi_j for all strict edges  NEW!
-    strictAcyclicC = case enc of
-        Legacy -> foldMap (\(i,j) -> pi i .<. pi j) strictE
-        Modern -> mempty
+    lowered :: (LinearConstraint op, Bounds op)
+    lowered = case enc of
+        Legacy -> lowerAll (LowerEnv M.empty (Constants n m)) sharedConstraints
+        Modern -> lowerAll (LowerEnv M.empty (Constants n m)) (modernConstraints <> sharedConstraints)
 
-    -- x_ij == 1 for all infusible edges
-    infusibleC = case enc of
-        Legacy -> foldMap (\e -> fused e .==. int 1) infusibleE'
-        Modern -> mempty
-
-    strictAcyclicP   = map (uncurry ClusterBefore)    $ S.toList strictE
-    infusibleP       = map (uncurry DifferentCluster) $ S.toList infusibleE'
-    manifestP        = map (uncurry NotManifestIfAllFused) . M.toList $ foldl (flip \(i,b,j) -> M.insertWith (<>) b [(i,j)]) M.empty dataflowE
-    fusibleAcyclicP  = map (uncurry FusibleOrder) $ S.toList fusibleE'
-    fusionDirectionP = map (\(w,b,r) -> FusionDirection w b r) $ S.toList fusibleE
-
-    modernP = case enc of
-        Legacy -> []
-        Modern -> strictAcyclicP <> infusibleP <> manifestP <> fusibleAcyclicP <> fusionDirectionP <> numberOfClustersP
-
-    lowered = lowerAll (LowerEnv M.empty (Constants n m)) modernP
-
-    -- forall b, iff all (w,b,r) are fused, then b is not manifest.
-    manifestC = case enc of
-        Legacy -> M.foldMapWithKey (\b es -> allB (map fused es) (notB $ manifest b))
-                  $ foldl (flip \(i,b,j) -> M.insertWith (<>) b [(i,j)]) M.empty dataflowE
-        Modern -> mempty
-
-    -- if (w,b,r) is fused, then d_wb == d_br
-    fusionOrderC = case enc of
-        Legacy -> flip foldMap fusibleE $ \(w,b,r) ->
-                    timesN (fused (w,r)) .>=. readDir (b,r) .-. writeDir (w,b)
-            <> (-1) .*. timesN (fused (w,r)) .<=. readDir (b,r) .-. writeDir (w,b)
-        Modern -> mempty
+    fusionConstraints = case enc of
+        Legacy -> legacyConstraints <> finalize graph <> fst lowered
+        Modern ->                      finalize graph <> fst lowered
 
     fusionBounds :: Bounds op
     fusionBounds = piB <> fusedB <> manifestB <> readB <> snd lowered
@@ -289,7 +297,7 @@ makeILPWith enc obj (FusionILP graph constraints bounds) =
     -- Objective function
     ----------------------------------------------------------------------------
 
-    graphConstraints = if enableIU then fusionConstraints <> inplaceConstraints else fusionConstraints
+    graphConstraints = fusionConstraints
     graphBounds      = if enableIU then fusionBounds      <> inplaceBounds      else fusionBounds
 
     -- Since we want all clusters to have one 'iteration size', the final objFun should
