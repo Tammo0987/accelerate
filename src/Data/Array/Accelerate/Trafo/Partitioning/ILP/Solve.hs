@@ -26,11 +26,7 @@ import Data.Function ( on )
 import Lens.Micro ((^.),  _1 )
 import Lens.Micro.Extras ( view )
 import Data.Maybe (fromJust,  mapMaybe )
-import Control.Monad.State
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.ConstraintLanguage (Constraint(..), LowerEnv(..), lowerAll)
-import Data.Array.Accelerate.Trafo.Partitioning.ILP.NameGeneration (freshName)
-import Data.Foldable
-import Control.Monad
 
 data Objective
   -- Old fusion only objectives:
@@ -118,31 +114,10 @@ makeILPWith enc obj (FusionILP graph constraints bounds) =
     -- Then, we also need n^2 intermediate variables just to make these disjunction of conjunctions
     -- note, it's only quadratic in the number of consumers of a specific array.
     -- We also check for the 'order': horizontal fusion only happens when the two fused accesses are in the same order.
-    numberOfReads = nReads .+. numberOfUnfusedEdges
-    (nReads, readC, readB)
-      = foldl (<>) mempty
-      . flip evalState ""
-      . forM (S.toList compN) $ \computation -> do
-      let consumers  = S.map (\(_,b,c) -> (b,c)) $ S.filter (\(c,_,_) -> c == computation) fusibleE
-          nConsumers = S.size consumers
-      readPis    <- replicateM nConsumers readPiVar
-      readOrders <- replicateM nConsumers readOrderVar
-      (subConstraint, subBounds) <- flip foldMapM consumers $ \(buff,cons) -> do
-        useVars <- replicateM nConsumers useVar -- these are the n^2 variables: For each consumer, n variables which each check the equality of pi to readpi
-        let constraint = foldMap
-              (\(uv, rp, ro) -> isEqualRangeN (var rp) (pi cons)              (var uv)
-                             <> isEqualRangeN (var ro) (readDir (buff, cons)) (var uv))
-              (zip3 useVars readPis readOrders)
-        return (constraint <> foldl (.+.) (int 0) (map var useVars) .<=. int (nConsumers-1), foldMap binary useVars)
-      readPi0s <- replicateM nConsumers readPi0Var
-      return ( foldl (.+.) (int 0) (map var readPi0s)
-             , subConstraint <> fold (zipWith (\p p0 -> var p .<=. timesN (var p0)) readPis readPi0s)
-             , subBounds <> foldMap (\v -> lowerUpper 0 v n) readPis <> foldMap binary readPi0s)
-
-    readOrderVar = Other <$> freshName "ReadOrder"
-    readPiVar    = Other <$> freshName "ReadPi"   -- non-zero signifies that at least one consumer reads this array from a certain pi
-    readPi0Var   = Other <$> freshName "Read0Pi"  -- signifies whether the corresponding readPi variable is 0
-    useVar       = Other <$> freshName "ReadUse"  -- signifies whether a consumer corresponds with a readPi variable; because its pi == readpi
+    horizontalReadCostConstraints :: [Constraint op]
+    horizontalReadCostConstraints = [HorizontalReadCost computation consumers
+        | computation <- S.toList compN
+        , let consumers = S.toList . S.map (\(_,b,c) -> (b,c)) $ S.filter (\(c,_,_) -> c == computation) fusibleE]
 
     -- objective function that maximises the number of fused away arrays, and thus minimises the number of array writes
     -- using .-. instead of notB to factor the constants out of the cost function; if we use (1 - manifest l) as elsewhere Gurobi thinks the 1 is a variable name
@@ -210,7 +185,7 @@ makeILPWith enc obj (FusionILP graph constraints bounds) =
         <> readAliveThroughWritersConstraints
 
     sharedConstraints :: [Constraint op]
-    sharedConstraints = [Linear readC] <> [Linear inplaceConstraints | enableIU]
+    sharedConstraints = horizontalReadCostConstraints
 
     legacyConstraints :: LinearConstraint op
     legacyConstraints = fusibleAcyclicC
@@ -221,17 +196,21 @@ makeILPWith enc obj (FusionILP graph constraints bounds) =
         <> fusionOrderC
         <> (if enableIU then onManifestC <> inplaceOrderC <> inplaceClusterC <> acrossClusterC <> singleReadC <> singleWriteC <> finalClusterC else mempty)
 
-    lowered :: (LinearConstraint op, Bounds op)
+    lowered :: (LinearConstraint op, Bounds op, Expression op)
     lowered = case enc of
         Legacy -> lowerAll (LowerEnv M.empty (Constants n m)) sharedConstraints
         Modern -> lowerAll (LowerEnv M.empty (Constants n m)) (modernConstraints <> sharedConstraints)
 
+    (loweredConstraints, loweredBounds, loweredCost) = lowered
+
+    numberOfReads = loweredCost .+. numberOfUnfusedEdges
+
     fusionConstraints = case enc of
-        Legacy -> legacyConstraints <> finalize graph <> fst lowered
-        Modern ->                      finalize graph <> fst lowered
+        Legacy -> legacyConstraints <> finalize graph <> loweredConstraints
+        Modern ->                      finalize graph <> loweredConstraints
 
     fusionBounds :: Bounds op
-    fusionBounds = piB <> fusedB <> manifestB <> readB <> snd lowered
+    fusionBounds = piB <> fusedB <> manifestB <> loweredBounds
 
     --  0 <= pi_i <= n
     piB = foldMap (\i -> lowerUpper 0 (Pi i) n) compN
@@ -312,9 +291,6 @@ makeILPWith enc obj (FusionILP graph constraints bounds) =
 
     inPlaceDirectionConstraints :: [Constraint op]
     inPlaceDirectionConstraints = [InPlaceDirection p | enableIU, p <- S.toList inplaceP]
-
-    -- TODO remove this later in the migration.
-    inplaceConstraints = mempty
 
     -- 0 <= pimax_b
     pimaxB = foldMap (\b -> lowerUpper 0 (PiMax b) (n+5)) buffN
@@ -437,13 +413,3 @@ splitExecs (xs, xM) symbolM = (f xs, M.map f xM)
     -- The reason I doubt is because if multiple non-exec, non-lhs nodes are here, the current reconstruction code
     -- (I think) ignores all but the last one.
     afterexecs ls = let xs = map NonExec (S.toList $ S.filter isAfterExec ls) in if length xs > 1 then xs {-error "dunno what this means"-} else xs
-
--- Only needs Applicative
-newtype MonadMonoid f m = MonadMonoid { getMonadMonoid :: f m }
-instance (Monad f, Semigroup m) => Semigroup (MonadMonoid f m) where
-  (MonadMonoid x) <> (MonadMonoid y) = MonadMonoid $ (<>) <$> x <*> y
-instance (Monad f, Monoid m) => Monoid (MonadMonoid f m) where
-  mempty = MonadMonoid (pure mempty)
-
-foldMapM :: (Foldable t, Monad f, Monoid m) => (a -> f m) -> t a -> f m
-foldMapM f = getMonadMonoid . foldMap (MonadMonoid . f)
