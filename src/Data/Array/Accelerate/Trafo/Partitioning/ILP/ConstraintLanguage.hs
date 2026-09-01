@@ -20,6 +20,7 @@ data Constraint op
   | OnManifestIfInPlace InplacePath
   | InPlaceDirection InplacePath
   | InPlaceCluster InplacePath
+  | AcrossClusterSame InplacePath
 
 -- | An environment for lowering, containing the bounds of the variables and the
 -- constants for the problem.
@@ -45,6 +46,9 @@ lower _ constraint = case constraint of
   OnManifestIfInPlace p@((b1, _), (_, b2)) -> pure ((inplace p `impliesB` manifest b1) <> (inplace p `impliesB` manifest b2), mempty)
   InPlaceDirection p@(r, w) -> pure (isEqualRangeN (readDir r) (writeDir w) (inplace p), mempty)
   InPlaceCluster p@((b1, _), (c2, _)) -> pure ((pimax b1 .-. pi c2) .<=. timesN (inplace p), mempty)
+  AcrossClusterSame p@((_, c1), (c2, _))
+    | c1 == c2 -> pure (mempty, mempty)
+    | otherwise -> pure (isEqualRangeN (pi c1) (pi c2) (inplace p), mempty)
 
 -- | Lower a batch of 'Constraint's under one shared name supply.
 lowerAll :: LowerEnv op -> [Constraint op] -> (LinearConstraint op, Bounds op)
