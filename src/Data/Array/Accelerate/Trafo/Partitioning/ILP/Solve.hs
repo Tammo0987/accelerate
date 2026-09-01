@@ -202,6 +202,7 @@ makeILPWith enc obj (FusionILP graph constraints bounds) =
         <> fusionDirectionConstraints
         <> numberOfClustersConstraints
         <> onManifestConstraints
+        <> inPlaceDirectionConstraints
 
     sharedConstraints :: [Constraint op]
     sharedConstraints = [Linear readC] <> [Linear inplaceConstraints | enableIU]
@@ -214,6 +215,7 @@ makeILPWith enc obj (FusionILP graph constraints bounds) =
         <> numberOfClustersC
         <> fusionOrderC
         <> (if enableIU then onManifestC else mempty)
+        <> (if enableIU then inplaceOrderC else mempty)
 
     lowered :: (LinearConstraint op, Bounds op)
     lowered = case enc of
@@ -286,8 +288,10 @@ makeILPWith enc obj (FusionILP graph constraints bounds) =
     -- If inplace p, then d_br == d_wb
     inplaceOrderC = foldMap (\p@(r,w) -> isEqualRangeN (readDir r) (writeDir w) (inplace p)) inplaceP
 
-    inplaceConstraints = acrossClusterC <> singleReadC <> singleWriteC <> inplaceClusterC <> finalClusterC <> inplaceOrderC
+    inPlaceDirectionConstraints :: [Constraint op]
+    inPlaceDirectionConstraints = [InPlaceDirection p | enableIU, p <- S.toList inplaceP]
 
+    inplaceConstraints = acrossClusterC <> singleReadC <> singleWriteC <> inplaceClusterC <> finalClusterC
 
     -- 0 <= pimax_b
     pimaxB = foldMap (\b -> lowerUpper 0 (PiMax b) (n+5)) buffN

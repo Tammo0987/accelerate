@@ -18,6 +18,7 @@ data Constraint op
   | FusionDirection (Node Comp) (Node GVal) (Node Comp)
   | WithinClusterCount (Node Comp) (Var op)
   | OnManifestIfInPlace InplacePath
+  | InPlaceDirection InplacePath
 
 -- | An environment for lowering, containing the bounds of the variables and the
 -- constants for the problem.
@@ -41,6 +42,7 @@ lower _ constraint = case constraint of
   FusionDirection w b r -> pure (isEqualRangeN (writeDir (w, b)) (readDir (b, r)) (fused (w, r)), mempty)
   WithinClusterCount l v -> pure (pi l .<=. var v, mempty)
   OnManifestIfInPlace p@((b1, _), (_, b2)) -> pure ((inplace p `impliesB` manifest b1) <> (inplace p `impliesB` manifest b2), mempty)
+  InPlaceDirection p@(r,w) -> pure (isEqualRangeN (readDir r) (writeDir w) (inplace p), mempty)
 
 -- | Lower a batch of 'Constraint's under one shared name supply.
 lowerAll :: LowerEnv op -> [Constraint op] -> (LinearConstraint op, Bounds op)
