@@ -5,7 +5,6 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 module Data.Array.Accelerate.Trafo.Partitioning.ILP.Solve where
 
-
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Graph hiding (graph, constraints, bounds)
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Labels
     (Node, parent, Nodes, Comp, GVal)
@@ -45,7 +44,6 @@ data Objective
   | MemoryUsage'         -- ^ Version of `MemoryUsage` that prioritizes fusion when two solutions would otherwise have the same costs.
   deriving (Show, Bounded, Enum, Eq, Ord)
 
--- TODO: _obj is now obsolete
 -- Makes the ILP. Note that this function 'appears' to ignore the Node levels completely!
 -- We could add some assertions, but if all the input is well-formed (no labels, constraints, etc
 -- that reward putting non-siblings in the same cluster) this is fine: We will interpret 'cluster 3'
@@ -54,18 +52,55 @@ makeILP :: forall op. MakesILP op => Objective -> FusionILP op -> ILP op
 makeILP obj (FusionILP graph constraints bounds) =
   ILP minMax objFun (graphConstraints <> constraints) (graphBounds <> bounds) (Constants n m)
   where
+    graphConstraints = finalize graph <> loweredConstraints
+    graphBounds      = fusionBounds <> inPlaceBounds
+
+    lowered :: (LinearConstraint op, Bounds op, Expression op)
+    lowered = lowerAll (LowerEnv M.empty (Constants n m)) (fusionConstraints <> inPlaceConstraints)
+
+    (loweredConstraints, loweredBounds, loweredCost) = lowered
+
+    fusionConstraints = strictAcyclicConstraints
+        <> infusibleConstraints
+        <> manifestConstraints
+        <> fusibleAcyclicConstraints
+        <> fusionDirectionConstraints
+        <> numberOfClustersConstraints
+        <> horizontalReadCostConstraints
+
+    fusionBounds = piB <> fusedB <> manifestB <> loweredBounds
+
+    inPlaceConstraints = if enableIU
+        then onManifestConstraints
+            <> inPlaceDirectionConstraints
+            <> inPlaceClusterConstraints
+            <> acrossClusterConstraints
+            <> atMostOneReaderConstraints
+            <> atMostOneWriterConstraints
+            <> readAliveThroughWritersConstraints
+        else mempty
+
+    inPlaceBounds = if enableIU then pimaxB <> inplaceB else mempty
+
+    ----------------------------------------------------------------------------
+    -- Utils:
+    ----------------------------------------------------------------------------
+
     compN :: Nodes Comp
     compN = graph^.computationNodes
 
     buffN :: Nodes GVal
     buffN = graph^.valueNodes
 
-    readE :: S.Set ReadEdge
-    readE = graph^.readEdges
+    n :: Int
+    n = S.size compN
 
-    writeE :: S.Set WriteEdge
-    writeE = graph^.writeEdges
+    m :: Int
+    m = S.size buffN
 
+    ----------------------------------------------------------------------------
+    -- Fusion:
+    ----------------------------------------------------------------------------
     dataflowE :: S.Set DataflowEdge
     dataflowE = graph^.dataflowEdges
 
@@ -79,26 +114,7 @@ makeILP obj (FusionILP graph constraints bounds) =
     fusibleE'   = S.map (\(i,_,j) -> (i,j)) fusibleE
     infusibleE' = S.map (\(i,_,j) -> (i,j)) infusibleE
 
-    inplacePweights :: M.Map InplacePath Number
-    inplacePweights = graph^.inplacePaths
-
-    inplaceP :: S.Set InplacePath
-    inplaceP = M.keysSet inplacePweights
-
-    n :: Int
-    n = S.size compN
-
-    m :: Int
-    m = S.size buffN
-
-
-    ----------------------------------------------------------------------------
-    -- Fusion:
-    ----------------------------------------------------------------------------
-
     -- objective function that maximises the number of edges we fuse, and minimises the number of array reads if you ignore horizontal fusion
-    -- numberOfUnfusedEdges = M.foldMapWithKey (\e v -> const v `times` fused e)
-    --                      $ foldl (flip \(i,_,j) -> M.insertWith (+) (i,j) 1) M.empty dataflowE
     numberOfUnfusedEdges = foldMap fused fusibleE'
 
     -- A cost function that doesn't ignore horizontal fusion.
@@ -112,6 +128,8 @@ makeILP obj (FusionILP graph constraints bounds) =
     horizontalReadCostConstraints = [HorizontalReadCost computation consumers
         | computation <- S.toList compN
         , let consumers = S.toList . S.map (\(_,b,c) -> (b,c)) $ S.filter (\(c,_,_) -> c == computation) fusibleE]
+
+    numberOfReads = loweredCost .+. numberOfUnfusedEdges
 
     -- objective function that maximises the number of fused away arrays, and thus minimises the number of array writes
     -- using .-. instead of notB to factor the constants out of the cost function; if we use (1 - manifest l) as elsewhere Gurobi thinks the 1 is a variable name
@@ -150,34 +168,6 @@ makeILP obj (FusionILP graph constraints bounds) =
         Everything  -> map (`WithinClusterCount` Other "maximumClusterNumber") $ S.toList compN
         _ -> []
 
-    allConstraints :: [Constraint op]
-    allConstraints = strictAcyclicConstraints
-        <> infusibleConstraints
-        <> manifestConstraints
-        <> fusibleAcyclicConstraints
-        <> fusionDirectionConstraints
-        <> numberOfClustersConstraints
-        <> onManifestConstraints
-        <> inPlaceDirectionConstraints
-        <> inPlaceClusterConstraints
-        <> acrossClusterConstraints
-        <> atMostOneReaderConstraints
-        <> atMostOneWriterConstraints
-        <> readAliveThroughWritersConstraints
-        <> horizontalReadCostConstraints
-
-    lowered :: (LinearConstraint op, Bounds op, Expression op)
-    lowered = lowerAll (LowerEnv M.empty (Constants n m)) allConstraints
-
-    (loweredConstraints, loweredBounds, loweredCost) = lowered
-
-    numberOfReads = loweredCost .+. numberOfUnfusedEdges
-
-    fusionConstraints = finalize graph <> loweredConstraints
-
-    fusionBounds :: Bounds op
-    fusionBounds = piB <> fusedB <> manifestB <> loweredBounds
-
     --  0 <= pi_i <= n
     piB = foldMap (\i -> lowerUpper 0 (Pi i) n) compN
 
@@ -196,52 +186,54 @@ makeILP obj (FusionILP graph constraints bounds) =
     -- TODO: Either make the internal structure more robust by only allowing variables to appear once per expression/constraint,
     -- or add a simplification step to ensure this is the case.
 
+    readE :: S.Set ReadEdge
+    readE = graph^.readEdges
+
+    inplaceP :: S.Set InplacePath
+    inplaceP = M.keysSet $ graph^.inplacePaths
+
     -- Number of in-place updates:
     numberOfNonInplaceUpdates = foldMap inplace inplaceP
 
-    -- Weighted sum of in-place updates:
-    weightedNumberOfNonInplaceUpdates = M.foldMapWithKey (\p w -> w .*. inplace p) inplacePweights
+    -- If inplace p, then manifest b1 and manifest b2
+    onManifestConstraints :: [Constraint op]
+    onManifestConstraints = [OnManifestIfInPlace p | p <- S.toList inplaceP]
+
+    -- If inplace p, then d_br == d_wb
+    inPlaceDirectionConstraints :: [Constraint op]
+    inPlaceDirectionConstraints = [InPlaceDirection p | p <- S.toList inplaceP]
+
+    -- If inplace p, then pimax b1 >= pi c2
+    inPlaceClusterConstraints :: [Constraint op]
+    inPlaceClusterConstraints = [InPlaceCluster p | p <- S.toList inplaceP]
 
     -- If inplace p, then c1 == c2
     acrossClusterConstraints :: [Constraint op]
-    acrossClusterConstraints = [AcrossClusterSame p | enableIU, p <- S.toList inplaceP]
-
-    -- If inplace p, then manifest b1 and manifest b2
-    onManifestConstraints :: [Constraint op]
-    onManifestConstraints = [OnManifestIfInPlace p | enableIU, p <- S.toList inplaceP]
+    acrossClusterConstraints = [AcrossClusterSame p | p <- S.toList inplaceP]
 
     readerGroups = foldl (flip \p@((b,_),_) -> M.insertWith (<>) b [p]) M.empty inplaceP
     writerGroups = foldl (flip \p@(_,(_,b)) -> M.insertWith (<>) b [p]) M.empty inplaceP
 
     -- Forall b, at most one inplace p
     atMostOneReaderConstraints :: [Constraint op]
-    atMostOneReaderConstraints = [AtMostOneReader b ps | enableIU, (b, ps) <- M.toList readerGroups]
+    atMostOneReaderConstraints = [AtMostOneReader b ps | (b, ps) <- M.toList readerGroups]
 
     -- Forall b, at most one inplace p
     atMostOneWriterConstraints :: [Constraint op]
-    atMostOneWriterConstraints = [AtMostOneWriter b ps | enableIU, (b, ps) <- M.toList writerGroups]
-
-    -- If inplace p, then pimax b1 >= pi c2
-    inPlaceClusterConstraints :: [Constraint op]
-    inPlaceClusterConstraints = [InPlaceCluster p | enableIU, p <- S.toList inplaceP]
+    atMostOneWriterConstraints = [AtMostOneWriter b ps | (b, ps) <- M.toList writerGroups]
 
     -- Group inplace paths by read edge:
     readM = foldl (flip \(r,w) -> M.insertWith (<>) r [w]) M.empty inplaceP
 
     -- Iff     inplace p, then pi c1     <= pimax b1
     -- Iff not inplace p, then pi c1 + 1 <= pimax b1
-    -- finalClusterC = foldMap (\p@((b1,c1),_) -> pi c1 .+. inplace p .<=. pimax b1) inplaceP
     readAliveThroughWritersConstraints :: [Constraint op]
-    readAliveThroughWritersConstraints = [ReadAliveThroughWriters r (M.findWithDefault [] r readM) | enableIU, r <- S.toList readE]
+    readAliveThroughWritersConstraints = [ReadAliveThroughWriters r (M.findWithDefault [] r readM) | r <- S.toList readE]
 
     -- TODO: Maybe add a constraint that c2 is the first writer to b2?
     -- This would make sense because the graph doesn't acctually enforce there is only one writer per buffer.
     -- For most cases there shouldn't be more than 2 writers, one of which is a let-binding, so no issues arise without this constraint.
     -- However, a mutable computation would create a third writer, which would be a problem.
-
-    -- If inplace p, then d_br == d_wb
-    inPlaceDirectionConstraints :: [Constraint op]
-    inPlaceDirectionConstraints = [InPlaceDirection p | enableIU, p <- S.toList inplaceP]
 
     -- 0 <= pimax_b
     pimaxB = foldMap (\b -> lowerUpper 0 (PiMax b) (n+5)) buffN
@@ -249,15 +241,9 @@ makeILP obj (FusionILP graph constraints bounds) =
     -- inplace b1 b2 \in {0, 1}
     inplaceB = foldMap (\((b1,c1),(c2,b2)) -> binary $ InPlace b1 c1 c2 b2) inplaceP
 
-    inplaceBounds = pimaxB <> inplaceB
-
-
     ----------------------------------------------------------------------------
     -- Objective function
     ----------------------------------------------------------------------------
-
-    graphConstraints = fusionConstraints
-    graphBounds      = if enableIU then fusionBounds      <> inplaceBounds      else fusionBounds
 
     -- Since we want all clusters to have one 'iteration size', the final objFun should
     -- take care to never reward 'fusing' disjoint clusters, and then slightly penalise it.
