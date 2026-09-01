@@ -27,7 +27,7 @@ import Lens.Micro ((^.),  _1 )
 import Lens.Micro.Extras ( view )
 import Data.Maybe (fromJust,  mapMaybe )
 import Control.Monad.State
-import Data.Array.Accelerate.Trafo.Partitioning.ILP.ConstraintLanguage (Atom (..), Constraint(..), LowerEnv(..), lowerAll)
+import Data.Array.Accelerate.Trafo.Partitioning.ILP.ConstraintLanguage (Constraint(..), LowerEnv(..), lowerAll)
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.NameGeneration (freshName)
 import Data.Foldable
 import Control.Monad
@@ -181,8 +181,8 @@ makeILPWith enc obj (FusionILP graph constraints bounds) =
         Legacy -> foldMap (\e -> fused e .==. int 1) infusibleE'
         Modern -> mempty
 
-    strictAcyclicP = map (Holds . uncurry ClusterBefore) $ S.toList strictE
-    infusibleP = map (Not . uncurry SameCluster) $ S.toList infusibleE'
+    strictAcyclicP = map (uncurry ClusterBefore)    $ S.toList strictE
+    infusibleP     = map (uncurry DifferentCluster) $ S.toList infusibleE'
 
     modernP = case enc of
         Legacy -> []
