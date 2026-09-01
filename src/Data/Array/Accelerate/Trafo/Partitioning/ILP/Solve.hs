@@ -59,7 +59,7 @@ makeILPWithPresolve presolve obj (FusionILP graph constraints bounds) =
     graphBounds      = fusionBounds <> inPlaceBounds
 
     lowered :: (LinearConstraint op, Bounds op, Expression op)
-    lowered = lowerAll (LowerEnv M.empty (Constants n m)) $ presolve $ fusionConstraints <> inPlaceConstraints
+    lowered = lowerAll (LowerEnv (Constants n m)) $ presolve $ fusionConstraints <> inPlaceConstraints
 
     (loweredConstraints, loweredBounds, loweredCost) = lowered
 

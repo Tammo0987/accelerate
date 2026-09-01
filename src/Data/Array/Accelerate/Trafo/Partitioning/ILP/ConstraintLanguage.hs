@@ -1,3 +1,6 @@
+{-# LANGUAGE GADTs #-}
+{-# LANGUAGE KindSignatures #-}
+
 -- A domain-specific language for the fusion ILP's constraints.
 module Data.Array.Accelerate.Trafo.Partitioning.ILP.ConstraintLanguage where
 
@@ -8,8 +11,8 @@ import Data.Array.Accelerate.Trafo.Partitioning.ILP.Labels (Comp, GVal, Node)
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.NameGeneration (freshName)
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Solver (Bounds, Constants (nComps), Expression, LinearConstraint, allB, between, binary, impliesB, int, isEqualRangeN, lowerUpper, notB, packB, timesN, var, (.+.), (.-.), (.<.), (.<=.), (.==.))
 import Data.Foldable (fold)
-import Data.Map (Map)
 import Prelude hiding (pi)
+import Data.Kind (Type)
 
 -- | A property of the fusion problem, to be lowered into linear constraints.
 data Constraint op
@@ -28,12 +31,9 @@ data Constraint op
   | ReadAliveThroughWriters ReadEdge [WriteEdge]
   | HorizontalReadCost (Node Comp) [(Node GVal, Node Comp)]
 
--- | An environment for lowering, containing the bounds of the variables and the
--- constants for the problem.
-data LowerEnv op = LowerEnv
-  { lowerEnvBounds :: Map (Var op) (Int, Int),
-    lowerEnvConstants :: Constants
-  }
+-- | An environment for lowering, containing the constants for the problem.
+data LowerEnv (op :: Type -> Type) where
+  LowerEnv :: {lowerEnvConstants :: Constants} -> LowerEnv op
 
 -- | The result of lowering. Contains the generated constraints and the bounds of the variables.
 --   State monad is used to generate fresh variable names.
