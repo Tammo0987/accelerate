@@ -205,6 +205,8 @@ makeILPWith enc obj (FusionILP graph constraints bounds) =
         <> inPlaceDirectionConstraints
         <> inPlaceClusterConstraints
         <> acrossClusterConstraints
+        <> atMostOneReaderConstraints
+        <> atMostOneWriterConstraints
 
     sharedConstraints :: [Constraint op]
     sharedConstraints = [Linear readC] <> [Linear inplaceConstraints | enableIU]
@@ -216,7 +218,7 @@ makeILPWith enc obj (FusionILP graph constraints bounds) =
         <> manifestC
         <> numberOfClustersC
         <> fusionOrderC
-        <> (if enableIU then onManifestC <> inplaceOrderC <> inplaceClusterC <> acrossClusterC else mempty)
+        <> (if enableIU then onManifestC <> inplaceOrderC <> inplaceClusterC <> acrossClusterC <> singleReadC <> singleWriteC else mempty)
 
     lowered :: (LinearConstraint op, Bounds op)
     lowered = case enc of
@@ -273,6 +275,15 @@ makeILPWith enc obj (FusionILP graph constraints bounds) =
     singleReadC  = foldMap (packB 1) $ foldl (flip \p@((b,_),_) -> M.insertWith (<>) b [inplace p]) M.empty inplaceP
     singleWriteC = foldMap (packB 1) $ foldl (flip \p@(_,(_,b)) -> M.insertWith (<>) b [inplace p]) M.empty inplaceP
 
+    readerGroups = foldl (flip \p@((b,_),_) -> M.insertWith (<>) b [p]) M.empty inplaceP
+    writerGroups = foldl (flip \p@(_,(_,b)) -> M.insertWith (<>) b [p]) M.empty inplaceP
+
+    atMostOneReaderConstraints :: [Constraint op]
+    atMostOneReaderConstraints = [AtMostOneReader b ps | enableIU, (b, ps) <- M.toList readerGroups]
+
+    atMostOneWriterConstraints :: [Constraint op]
+    atMostOneWriterConstraints = [AtMostOneWriter b ps | enableIU, (b, ps) <- M.toList writerGroups]
+
     -- If inplace p, then pimax b1 >= pi c2
     inplaceClusterC = foldMap (\p@((b1,_),(c2,_)) -> (pimax b1 .-. pi c2) .<=. timesN (inplace p)) inplaceP
 
@@ -298,7 +309,7 @@ makeILPWith enc obj (FusionILP graph constraints bounds) =
     inPlaceDirectionConstraints :: [Constraint op]
     inPlaceDirectionConstraints = [InPlaceDirection p | enableIU, p <- S.toList inplaceP]
 
-    inplaceConstraints = singleReadC <> singleWriteC <> finalClusterC
+    inplaceConstraints = finalClusterC
 
     -- 0 <= pimax_b
     pimaxB = foldMap (\b -> lowerUpper 0 (PiMax b) (n+5)) buffN

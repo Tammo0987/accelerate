@@ -4,7 +4,7 @@ module Data.Array.Accelerate.Trafo.Partitioning.ILP.ConstraintLanguage where
 import Control.Monad.State (State, evalState)
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Graph (InplacePath, Var, fused, inplace, manifest, pi, pimax, readDir, writeDir)
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Labels (Comp, GVal, Node)
-import Data.Array.Accelerate.Trafo.Partitioning.ILP.Solver (Bounds, Constants, LinearConstraint, allB, between, impliesB, int, isEqualRangeN, notB, timesN, var, (.-.), (.<.), (.<=.), (.==.))
+import Data.Array.Accelerate.Trafo.Partitioning.ILP.Solver (Bounds, Constants, LinearConstraint, allB, between, impliesB, int, isEqualRangeN, notB, timesN, var, (.-.), (.<.), (.<=.), (.==.), packB)
 import Data.Map (Map)
 import Prelude hiding (pi)
 
@@ -21,6 +21,8 @@ data Constraint op
   | InPlaceDirection InplacePath
   | InPlaceCluster InplacePath
   | AcrossClusterSame InplacePath
+  | AtMostOneReader (Node GVal) [InplacePath]
+  | AtMostOneWriter (Node GVal) [InplacePath]
 
 -- | An environment for lowering, containing the bounds of the variables and the
 -- constants for the problem.
@@ -49,6 +51,8 @@ lower _ constraint = case constraint of
   AcrossClusterSame p@((_, c1), (c2, _))
     | c1 == c2 -> pure (mempty, mempty)
     | otherwise -> pure (isEqualRangeN (pi c1) (pi c2) (inplace p), mempty)
+  AtMostOneReader _ ps -> pure (packB 1 (map inplace ps), mempty)
+  AtMostOneWriter _ ps -> pure (packB 1 (map inplace ps), mempty)
 
 -- | Lower a batch of 'Constraint's under one shared name supply.
 lowerAll :: LowerEnv op -> [Constraint op] -> (LinearConstraint op, Bounds op)
