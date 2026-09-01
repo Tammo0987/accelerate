@@ -169,7 +169,9 @@ makeILPWith enc obj (FusionILP graph constraints bounds) =
       <> numberOfClustersC <> readC <> fusionOrderC <> finalize graph <> fst lowered
 
     -- x_ij <= pi_j - pi_i <= n*x_ij for all fusible edges
-    fusibleAcyclicC = foldMap (\e@(i,j) -> between (fused e) (pi j .-. pi i) (timesN $ fused e)) fusibleE'
+    fusibleAcyclicC = case enc of
+        Legacy -> foldMap (\e@(i,j) -> between (fused e) (pi j .-. pi i) (timesN $ fused e)) fusibleE'
+        Modern -> mempty
 
     -- pi_i < pi_j for all strict edges  NEW!
     strictAcyclicC = case enc of
@@ -181,13 +183,14 @@ makeILPWith enc obj (FusionILP graph constraints bounds) =
         Legacy -> foldMap (\e -> fused e .==. int 1) infusibleE'
         Modern -> mempty
 
-    strictAcyclicP = map (uncurry ClusterBefore)    $ S.toList strictE
-    infusibleP     = map (uncurry DifferentCluster) $ S.toList infusibleE'
-    manifestP      = map (uncurry NotManifestIfAllFused) . M.toList $ foldl (flip \(i,b,j) -> M.insertWith (<>) b [(i,j)]) M.empty dataflowE
+    strictAcyclicP  = map (uncurry ClusterBefore)    $ S.toList strictE
+    infusibleP      = map (uncurry DifferentCluster) $ S.toList infusibleE'
+    manifestP       = map (uncurry NotManifestIfAllFused) . M.toList $ foldl (flip \(i,b,j) -> M.insertWith (<>) b [(i,j)]) M.empty dataflowE
+    fusibleAcyclicP = map (uncurry FusibleOrder) $ S.toList fusibleE'
 
     modernP = case enc of
         Legacy -> []
-        Modern -> strictAcyclicP <> infusibleP <> manifestP
+        Modern -> strictAcyclicP <> infusibleP <> manifestP <> fusibleAcyclicP
 
     lowered = lowerAll (LowerEnv M.empty (Constants n m)) modernP
 
