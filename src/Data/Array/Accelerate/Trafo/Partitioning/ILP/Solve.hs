@@ -207,6 +207,7 @@ makeILPWith enc obj (FusionILP graph constraints bounds) =
         <> acrossClusterConstraints
         <> atMostOneReaderConstraints
         <> atMostOneWriterConstraints
+        <> readAliveThroughWritersConstraints
 
     sharedConstraints :: [Constraint op]
     sharedConstraints = [Linear readC] <> [Linear inplaceConstraints | enableIU]
@@ -218,7 +219,7 @@ makeILPWith enc obj (FusionILP graph constraints bounds) =
         <> manifestC
         <> numberOfClustersC
         <> fusionOrderC
-        <> (if enableIU then onManifestC <> inplaceOrderC <> inplaceClusterC <> acrossClusterC <> singleReadC <> singleWriteC else mempty)
+        <> (if enableIU then onManifestC <> inplaceOrderC <> inplaceClusterC <> acrossClusterC <> singleReadC <> singleWriteC <> finalClusterC else mempty)
 
     lowered :: (LinearConstraint op, Bounds op)
     lowered = case enc of
@@ -298,6 +299,9 @@ makeILPWith enc obj (FusionILP graph constraints bounds) =
     -- Group inplace paths by read edge:
     readM = foldl (flip \(r,w) -> M.insertWith (<>) r [w]) M.empty inplaceP
 
+    readAliveThroughWritersConstraints :: [Constraint op]
+    readAliveThroughWritersConstraints = [ReadAliveThroughWriters r (M.findWithDefault [] r readM) | enableIU, r <- S.toList readE]
+
     -- TODO: Maybe add a constraint that c2 is the first writer to b2?
     -- This would make sense because the graph doesn't acctually enforce there is only one writer per buffer.
     -- For most cases there shouldn't be more than 2 writers, one of which is a let-binding, so no issues arise without this constraint.
@@ -309,7 +313,8 @@ makeILPWith enc obj (FusionILP graph constraints bounds) =
     inPlaceDirectionConstraints :: [Constraint op]
     inPlaceDirectionConstraints = [InPlaceDirection p | enableIU, p <- S.toList inplaceP]
 
-    inplaceConstraints = finalClusterC
+    -- TODO remove this later in the migration.
+    inplaceConstraints = mempty
 
     -- 0 <= pimax_b
     pimaxB = foldMap (\b -> lowerUpper 0 (PiMax b) (n+5)) buffN
