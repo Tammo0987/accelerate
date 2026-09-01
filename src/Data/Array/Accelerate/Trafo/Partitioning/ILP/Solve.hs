@@ -201,6 +201,7 @@ makeILPWith enc obj (FusionILP graph constraints bounds) =
         <> fusibleAcyclicConstraints
         <> fusionDirectionConstraints
         <> numberOfClustersConstraints
+        <> onManifestConstraints
 
     sharedConstraints :: [Constraint op]
     sharedConstraints = [Linear readC] <> [Linear inplaceConstraints | enableIU]
@@ -212,6 +213,7 @@ makeILPWith enc obj (FusionILP graph constraints bounds) =
         <> manifestC
         <> numberOfClustersC
         <> fusionOrderC
+        <> (if enableIU then onManifestC else mempty)
 
     lowered :: (LinearConstraint op, Bounds op)
     lowered = case enc of
@@ -258,6 +260,9 @@ makeILPWith enc obj (FusionILP graph constraints bounds) =
     -- If inplace p, then manifest b1 and manifest b2
     onManifestC = foldMap (\p@((b1,_),(_,b2)) -> (inplace p `impliesB` manifest b1) <> (inplace p `impliesB` manifest b2)) inplaceP
 
+    onManifestConstraints :: [Constraint op]
+    onManifestConstraints = [OnManifestIfInPlace p | enableIU, p <- S.toList inplaceP]
+
     -- Forall b, at most one inplace p
     singleReadC  = foldMap (packB 1) $ foldl (flip \p@((b,_),_) -> M.insertWith (<>) b [inplace p]) M.empty inplaceP
     singleWriteC = foldMap (packB 1) $ foldl (flip \p@(_,(_,b)) -> M.insertWith (<>) b [inplace p]) M.empty inplaceP
@@ -281,7 +286,7 @@ makeILPWith enc obj (FusionILP graph constraints bounds) =
     -- If inplace p, then d_br == d_wb
     inplaceOrderC = foldMap (\p@(r,w) -> isEqualRangeN (readDir r) (writeDir w) (inplace p)) inplaceP
 
-    inplaceConstraints = acrossClusterC <> onManifestC <> singleReadC <> singleWriteC <> inplaceClusterC <> finalClusterC <> inplaceOrderC
+    inplaceConstraints = acrossClusterC <> singleReadC <> singleWriteC <> inplaceClusterC <> finalClusterC <> inplaceOrderC
 
 
     -- 0 <= pimax_b
