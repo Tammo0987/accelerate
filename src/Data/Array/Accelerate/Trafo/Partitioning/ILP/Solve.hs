@@ -49,14 +49,17 @@ data Objective
 -- that reward putting non-siblings in the same cluster) this is fine: We will interpret 'cluster 3'
 -- with parents `Nothing` as a different cluster than 'cluster 3' with parents `Just 5`.
 makeILP :: forall op. MakesILP op => Objective -> FusionILP op -> ILP op
-makeILP obj (FusionILP graph constraints bounds) =
+makeILP = makeILPWithPresolve id
+
+makeILPWithPresolve :: forall op. MakesILP op => ([Constraint op] -> [Constraint op]) -> Objective -> FusionILP op -> ILP op
+makeILPWithPresolve presolve obj (FusionILP graph constraints bounds) =
   ILP minMax objFun (graphConstraints <> constraints) (graphBounds <> bounds) (Constants n m)
   where
     graphConstraints = finalize graph <> loweredConstraints
     graphBounds      = fusionBounds <> inPlaceBounds
 
     lowered :: (LinearConstraint op, Bounds op, Expression op)
-    lowered = lowerAll (LowerEnv M.empty (Constants n m)) (fusionConstraints <> inPlaceConstraints)
+    lowered = lowerAll (LowerEnv M.empty (Constants n m)) $ presolve $ fusionConstraints <> inPlaceConstraints
 
     (loweredConstraints, loweredBounds, loweredCost) = lowered
 
