@@ -58,7 +58,7 @@ makeILPWithPresolve presolve obj (FusionILP graph constraints bounds) =
     graphBounds      = fusionBounds <> inPlaceBounds
 
     lowered :: (LinearConstraint op, Bounds op, Expression op)
-    lowered = lowerAll (LowerEnv (Constants n m)) $ presolve $ fusionConstraints <> inPlaceConstraints
+    lowered = lowerAll (LowerEnv n) $ presolve $ fusionConstraints <> inPlaceConstraints
 
     (loweredConstraints, loweredBounds, loweredCost) = lowered
 
@@ -127,7 +127,7 @@ makeILPWithPresolve presolve obj (FusionILP graph constraints bounds) =
     -- note, it's only quadratic in the number of consumers of a specific array.
     -- We also check for the 'order': horizontal fusion only happens when the two fused accesses are in the same order.
     horizontalReadCostConstraints :: [Constraint op]
-    horizontalReadCostConstraints = [HorizontalReadCost computation consumers
+    horizontalReadCostConstraints = [HorizontalReadCost consumers
         | computation <- S.toList compN
         , let consumers = S.toList . S.map (\(_,b,c) -> (b,c)) $ S.filter (\(c,_,_) -> c == computation) fusibleE]
 
@@ -218,11 +218,11 @@ makeILPWithPresolve presolve obj (FusionILP graph constraints bounds) =
 
     -- Forall b, at most one inplace p
     atMostOneReaderConstraints :: [Constraint op]
-    atMostOneReaderConstraints = [AtMostOneReader b ps | (b, ps) <- M.toList readerGroups]
+    atMostOneReaderConstraints = [AtMostOneReader ps | ps <- M.elems readerGroups]
 
     -- Forall b, at most one inplace p
     atMostOneWriterConstraints :: [Constraint op]
-    atMostOneWriterConstraints = [AtMostOneWriter b ps | (b, ps) <- M.toList writerGroups]
+    atMostOneWriterConstraints = [AtMostOneWriter ps | ps <- M.elems writerGroups]
 
     -- Group inplace paths by read edge:
     readM = foldl (flip \(r,w) -> M.insertWith (<>) r [w]) M.empty inplaceP
