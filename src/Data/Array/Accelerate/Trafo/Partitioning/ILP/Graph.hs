@@ -41,6 +41,7 @@ import Data.Array.Accelerate.Representation.Shape
 import Data.Array.Accelerate.Representation.Type
 import Data.Array.Accelerate.Trafo.Operation.LiveVars
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Labels
+import Data.Array.Accelerate.Trafo.Partitioning.ILP.ConstraintLanguage (Constraint)
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Solver
 import Data.Array.Accelerate.Type
 
@@ -65,15 +66,6 @@ import Unsafe.Coerce (unsafeCoerce)
 --------------------------------------------------------------------------------
 -- Fusion Graph
 --------------------------------------------------------------------------------
-
-type ReadEdge      = (Node GVal, Node Comp)
-type WriteEdge     = (Node Comp, Node GVal)
-type StrictEdge    = (Node Comp, Node Comp)
-type DataflowEdge  = (Node Comp, Node GVal, Node Comp)
-type FusibleEdge   = DataflowEdge
-type InfusibleEdge = DataflowEdge
-type InplacePath   = (ReadEdge, WriteEdge)
-
 
 -- For backwards compatitibility:
 pattern (:->) :: Node Comp -> Node Comp -> DataflowEdge
@@ -113,21 +105,23 @@ pattern w :-> r <- (w,_,r)
 -- @
 --
 data FusionGraph = FusionGraph   -- TODO: Use hashmaps and hashsets in production.
-  { _compNodes     :: Set (Node Comp)         -- ^ Computation nodes.
-  , _valueNodes    :: Set (Node GVal)         -- ^ Value nodes.
-  , _strictEdges   :: Set StrictEdge          -- ^ Edges that enforce strict ordering.
-  , _dataflowEdges :: Set DataflowEdge        -- ^ Edges that represent data-flow.
-  , _inplacePaths  :: Map InplacePath Number  -- ^ Summary paths between buffers for in-place updates + their weight.
+  { _compNodes       :: Set (Node Comp)         -- ^ Computation nodes.
+  , _valueNodes      :: Set (Node GVal)         -- ^ Value nodes.
+  , _strictEdges     :: Set StrictEdge          -- ^ Edges that enforce strict ordering.
+  , _dataflowEdges   :: Set DataflowEdge        -- ^ Edges that represent data-flow.
+  , _inplacePaths    :: Map InplacePath Number  -- ^ Summary paths between buffers for in-place updates + their weight.
+  , _manifestValues  :: Set (Node GVal)         -- ^ Values forced manifest.
+  , _noInplaceValues :: Set (Node GVal)         -- ^ Values that must stay live past every cluster.
   }
 
 instance Semigroup FusionGraph where
   (<>) :: FusionGraph -> FusionGraph -> FusionGraph
-  (<>) (FusionGraph c1 v1 s1 d1 i1) (FusionGraph c2 v2 s2 d2 i2)
-    = FusionGraph (c1 <> c2) (v1 <> v2) (s1 <> s2) (d1 <> d2) (i1 <> i2)
+  (<>) (FusionGraph c1 v1 s1 d1 i1 m1 p1) (FusionGraph c2 v2 s2 d2 i2 m2 p2)
+    = FusionGraph (c1 <> c2) (v1 <> v2) (s1 <> s2) (d1 <> d2) (i1 <> i2) (m1 <> m2) (p1 <> p2)
 
 instance Monoid FusionGraph where
   mempty :: FusionGraph
-  mempty = FusionGraph mempty mempty mempty mempty mempty
+  mempty = FusionGraph mempty mempty mempty mempty mempty mempty mempty
 
 -- | Class for types that contain a fusion graph.
 --
@@ -151,6 +145,12 @@ class HasFusionGraph g where
   inplacePaths :: Lens' g (Map InplacePath Number)
   inplacePaths = fusionGraph.inplacePaths
 
+  manifestValues :: Lens' g (Set (Node GVal))
+  manifestValues = fusionGraph.manifestValues
+
+  noInplaceValues :: Lens' g (Set (Node GVal))
+  noInplaceValues = fusionGraph.noInplaceValues
+
 -- | Base instance of 'HasFusionGraph' for 'FusionGraph'.
 --
 -- This instance cannot make use of lenses defined in 'HasFusionGraph' because
@@ -173,6 +173,12 @@ instance HasFusionGraph FusionGraph where
 
   inplacePaths :: Lens' FusionGraph (Map InplacePath Number)
   inplacePaths f s = f (_inplacePaths s) <&> \ps -> s{_inplacePaths = ps}
+
+  manifestValues :: Lens' FusionGraph (Set (Node GVal))
+  manifestValues f s = f (_manifestValues s) <&> \ns -> s{_manifestValues = ns}
+
+  noInplaceValues :: Lens' FusionGraph (Set (Node GVal))
+  noInplaceValues f s = f (_noInplaceValues s) <&> \ns -> s{_noInplaceValues = ns}
 
 insertComputation :: (HasCallStack, HasFusionGraph g) => Node Comp -> g -> g
 insertComputation c = computationNodes %~ S.insert c
@@ -268,7 +274,7 @@ writeEdgesOf b = to (\g -> S.filter (\(_,b') -> b' == b) (g^.writeEdges))
 -- If not, we can always merge the blocks together later.
 data FusionILP op = FusionILP
   { _graph       :: FusionGraph
-  , _constraints :: LinearConstraint op
+  , _constraints :: [Constraint op]
   , _bounds      :: Bounds op
   }
 
@@ -292,7 +298,7 @@ class HasFusionILP s op | s -> op where
 graph :: Lens' (FusionILP op) FusionGraph
 graph f s = f (_graph s) <&> \g -> s{_graph = g}
 
-constraints :: Lens' (FusionILP op) (LinearConstraint op)
+constraints :: Lens' (FusionILP op) [Constraint op]
 constraints f s = f (_constraints s) <&> \c -> s{_constraints = c}
 
 bounds :: Lens' (FusionILP op) (Bounds op)
@@ -375,8 +381,8 @@ allInfusible prods buff cons ilp = foldr' (\prod -> infusible prod buff cons) il
 (|->) = ($)
 (|=>) = ($)
 
-noInplace :: HasCallStack => Node GVal -> FusionILP op -> FusionILP op
-noInplace node ilp = ilp{ _constraints = _constraints ilp <> pimax node :>= Constant (Number nComps) }
+noInplace :: (HasCallStack, HasFusionGraph g) => Node GVal -> g -> g
+noInplace node = noInplaceValues %~ S.insert node
 
 --------------------------------------------------------------------------------
 -- Backend specific definitions
@@ -454,7 +460,7 @@ class ( ShrinkArg (BackendClusterArg op), Eq (BackendVar op)
     -> State (BackendGraphState op env) ()
 
   -- | This function lets the backend define additional constraints on the ILP.
-  finalize :: FusionGraph -> LinearConstraint op
+  finalize :: FusionGraph -> [Constraint op]
 
 -- | Attach backend-specific information to labelled arguments.
 labelLabelledArgs :: MakesILP op => Solution op -> Node Comp -> LabelledArgs env args -> LabelledArgsOp op env args
@@ -557,6 +563,11 @@ dirToInt :: Direction -> Int
 dirToInt LeftToRight = -2
 dirToInt RightToLeft = -1
 
+inFoldSize :: Node Comp -> Expression op
+inFoldSize = var . InFoldSize
+
+outFoldSize :: Node Comp -> Expression op
+outFoldSize = var . OutFoldSize
 
 --------------------------------------------------------------------------------
 -- Symbol table
@@ -946,9 +957,8 @@ mkFullGraphF acc = finalizeInplacePaths (s^.fusionILP, s^.symbols, s^.allocators
   where (_, s) = runState (mkFusionGraphF acc) initialFusionGraphState
 
 -- | Make the supplied value nodes manifest.
-makeManifest :: (MakesILP op, HasFusionILP g op) => Nodes GVal -> g -> g
-makeManifest bs = fusionILP.constraints <>~ foldMap (\b -> manifest b .==. int 0) bs
-
+makeManifest :: HasFusionILP g op => Nodes GVal -> g -> g
+makeManifest bs = fusionILP.manifestValues <>~ bs
 
 --------------------------------------------------------------------------------
 -- FusionGraph construction

@@ -5,8 +5,7 @@
 module Data.Array.Accelerate.Trafo.Partitioning.ILP.Solve where
 
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Graph hiding (graph, constraints, bounds)
-import Data.Array.Accelerate.Trafo.Partitioning.ILP.Labels
-    (Node, parent, Nodes, Comp, GVal)
+import Data.Array.Accelerate.Trafo.Partitioning.ILP.Labels (Node, parent, Nodes, Comp, GVal, DataflowEdge, StrictEdge, ReadEdge, InplacePath, WriteEdge)
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Solver hiding (finalize)
 
 import Data.List (groupBy, sortOn)
@@ -23,7 +22,8 @@ import Data.Function ( on )
 import Lens.Micro ((^.),  _1 )
 import Lens.Micro.Extras ( view )
 import Data.Maybe (fromJust,  mapMaybe )
-import Data.Array.Accelerate.Trafo.Partitioning.ILP.ConstraintLanguage (Constraint(..), LowerEnv(..), lowerAll)
+import Data.Array.Accelerate.Trafo.Partitioning.ILP.ConstraintLanguage (Constraint(..))
+import Data.Array.Accelerate.Trafo.Partitioning.ILP.Lower (LowerEnv(..), lowerAll)
 
 data Objective
   -- Old fusion only objectives:
@@ -48,17 +48,13 @@ data Objective
 -- that reward putting non-siblings in the same cluster) this is fine: We will interpret 'cluster 3'
 -- with parents `Nothing` as a different cluster than 'cluster 3' with parents `Just 5`.
 makeILP :: forall op. MakesILP op => Objective -> FusionILP op -> ILP op
-makeILP = makeILPWithPresolve id
-
-makeILPWithPresolve :: forall op. MakesILP op => ([Constraint op] -> [Constraint op]) -> Objective -> FusionILP op -> ILP op
-makeILPWithPresolve presolve obj (FusionILP graph constraints bounds) =
-  ILP minMax objFun (graphConstraints <> constraints) (graphBounds <> bounds) (Constants n m)
+makeILP obj (FusionILP graph constraints bounds) =
+  ILP minMax objFun loweredConstraints (graphBounds <> bounds) (Constants n m)
   where
-    graphConstraints = finalize graph <> loweredConstraints
     graphBounds      = fusionBounds <> inPlaceBounds
 
     lowered :: (LinearConstraint op, Bounds op, Expression op)
-    lowered = lowerAll (LowerEnv n) $ presolve $ fusionConstraints <> inPlaceConstraints
+    lowered = lowerAll (LowerEnv n) $ finalize graph <> fusionConstraints <> inPlaceConstraints <> constraints
 
     (loweredConstraints, loweredBounds, loweredCost) = lowered
 
@@ -69,6 +65,8 @@ makeILPWithPresolve presolve obj (FusionILP graph constraints bounds) =
         <> fusionDirectionConstraints
         <> numberOfClustersConstraints
         <> horizontalReadCostConstraints
+        <> manifestValueConstraints
+        <> noInPlaceConstraints
 
     fusionBounds = piB <> fusedB <> manifestB <> loweredBounds
 
@@ -169,6 +167,12 @@ makeILPWithPresolve presolve obj (FusionILP graph constraints bounds) =
         NumClusters -> map WithinClusterCount $ S.toList compN
         Everything  -> map WithinClusterCount $ S.toList compN
         _ -> []
+
+    -- b is manifest, for every program result
+    manifestValueConstraints = map Manifest $ S.toList $ graph^.manifestValues
+
+    -- b stays live past every cluster
+    noInPlaceConstraints = map NoInPlace $ S.toList $ graph^.noInplaceValues
 
     --  0 <= pi_i <= n
     piB = foldMap (\i -> lowerUpper 0 (Pi i) n) compN

@@ -103,7 +103,7 @@ type InplaceM = M.Map (Node GVal) (Node GVal)
 
 topSort :: Bool -> FusionGraph -> Nodes Comp -> ReadDirM -> [ClusterL]
 topSort _ _ (S.toList -> [l]) _ = [ExecL [l]]  -- If the cluster is empty.
-topSort singletons (FusionGraph _ _ strictEdges dataflowEdges _) cluster readDirM =
+topSort singletons (FusionGraph _ _ strictEdges dataflowEdges _ _ _) cluster readDirM =
   if singletons then concatMap (map (ExecL . pure)) topsorteds else map ExecL topsorteds
   where
     buildGraph =

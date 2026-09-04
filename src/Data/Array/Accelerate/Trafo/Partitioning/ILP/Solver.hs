@@ -181,6 +181,10 @@ times f = (Number f .*.)
 timesN :: Expression op -> Expression op
 timesN = times ((+10) . (*2) . nComps)
 
+-- | Total number of computations.
+nCompsE :: Expression op
+nCompsE = Constant $ Number nComps
+
 -- | Use a 'Var' in an 'Expression'.
 var :: Var op -> Expression op
 var = (Number (const 1) :*)
