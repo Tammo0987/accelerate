@@ -1,13 +1,3 @@
-{-# LANGUAGE GADTs #-}
-{-# LANGUAGE AllowAmbiguousTypes #-}
-{-# LANGUAGE DataKinds #-}
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TypeFamilyDependencies #-}
-{-# LANGUAGE StandaloneDeriving #-}
-{-# LANGUAGE UndecidableInstances #-}
 module Data.Array.Accelerate.Trafo.Partitioning.ILP.Solver where
 
 import qualified Data.Map as M

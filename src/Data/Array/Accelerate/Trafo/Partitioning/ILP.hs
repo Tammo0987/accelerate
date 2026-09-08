@@ -1,4 +1,3 @@
-{-# LANGUAGE MonoLocalBinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 module Data.Array.Accelerate.Trafo.Partitioning.ILP where

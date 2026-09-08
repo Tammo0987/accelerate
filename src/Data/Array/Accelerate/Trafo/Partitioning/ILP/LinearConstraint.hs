@@ -1,7 +1,5 @@
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE GADTs #-}
-{-# LANGUAGE InstanceSigs #-}
+{-# LANGUAGE GADTs             #-}
+{-# LANGUAGE InstanceSigs      #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Data.Array.Accelerate.Trafo.Partitioning.ILP.LinearConstraint

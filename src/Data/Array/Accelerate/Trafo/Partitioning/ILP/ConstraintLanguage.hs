@@ -1,5 +1,3 @@
-{-# LANGUAGE KindSignatures #-}
-
 -- | A domain-specific language for the fusion ILP's constraints.
 module Data.Array.Accelerate.Trafo.Partitioning.ILP.ConstraintLanguage (Constraint (..)) where
 
