@@ -9,7 +9,6 @@ import Data.Array.Accelerate.Trafo.Partitioning.ILP.Graph hiding (graph, constra
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Labels (Node, parent, Nodes, Comp, GVal, DataflowEdge, StrictEdge, ReadEdge, InplacePath, WriteEdge)
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.LinearConstraint
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Solver hiding (finalize)
-import Data.Array.Accelerate.Trafo.Partitioning.ILP.Var
 
 import Data.List (groupBy, sortOn, foldl')
 import Prelude hiding (sum, pi, read )
@@ -358,4 +357,4 @@ splitExecs (xs, xM) symbolM = (f xs, M.map f xM)
     -- Tests say that this happens, and that it's correct anyway, but I'm unsure why.
     -- The reason I doubt is because if multiple non-exec, non-lhs nodes are here, the current reconstruction code
     -- (I think) ignores all but the last one.
-    afterexecs ls = let xs = map NonExec (S.toList $ S.filter isAfterExec ls) in if length xs > 1 then xs {-error "dunno what this means"-} else xs
+    afterexecs ls = let xs' = map NonExec (S.toList $ S.filter isAfterExec ls) in if length xs' > 1 then xs' {-error "dunno what this means"-} else xs'

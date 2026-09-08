@@ -111,7 +111,7 @@ ppSolution solution = "solution: " ++ foldMap ppVar (toList solution)
 ppList :: Show a => [a] -> String
 ppList [] = "[]"
 ppList [x] = "[" ++ show x ++ "]"
-ppList (x:xs) = "[ " ++ show x ++ foldMap (\x -> "\n, " ++ show x) xs ++ "\n]"
+ppList (x:xs) = "[ " ++ show x ++ foldMap (\x' -> "\n, " ++ show x') xs ++ "\n]"
 
 ppScopedClusters :: (Show k, Show v) => ([v], Map k [v]) -> String
 ppScopedClusters (top, sub) = "top =\n" ++ ppList top ++ foldMapWithKey (\k v -> "\n" ++ show k ++ " =\n" ++ ppList v) sub

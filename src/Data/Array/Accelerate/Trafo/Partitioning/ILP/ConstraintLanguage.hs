@@ -4,7 +4,6 @@
 module Data.Array.Accelerate.Trafo.Partitioning.ILP.ConstraintLanguage (Constraint (..)) where
 
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Labels (Comp, GVal, InplacePath, Node, ReadEdge, WriteEdge)
-import Data.Kind (Type)
 import Prelude hiding (pi)
 
 -- | A property of the fusion problem, to be lowered into linear constraints.
