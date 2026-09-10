@@ -513,7 +513,9 @@ manifest = var . IsManifest
 
 -- | Safe constructor for 'Fused' variables.
 fused :: (Node Comp, Node Comp) -> Expression
-fused = var . uncurry Fused
+fused (w, c)
+    | w ^.parent /= c^.parent = int 1 -- different subgraphs, never fused.
+    | otherwise               = var $ Fused w c
 
 -- | Safe constructor for 'ReadDir' variables.
 readDir :: ReadEdge -> Expression
