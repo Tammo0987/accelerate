@@ -3,9 +3,9 @@ module Data.Array.Accelerate.Trafo.Partitioning.ILP.Lower (LowerEnv (..), Lower,
 import Control.Monad (replicateM)
 import Control.Monad.State (State, evalState)
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.ConstraintLanguage
-import Data.Array.Accelerate.Trafo.Partitioning.ILP.Graph (Var (Other), fused, inFoldSize, inplace, manifest, maxCluster, outFoldSize, pi, pimax, readDir, readDirs, writeDir, writeDirs)
+import Data.Array.Accelerate.Trafo.Partitioning.ILP.Graph (Var (Fused, IsManifest, Other, OutFoldSize, PiMax), fused, inFoldSize, inplace, manifest, maxCluster, outFoldSize, pi, pimax, readDir, readDirs, writeDir, writeDirs)
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Labels (Comp, GVal, Node, nodeId)
-import Data.Array.Accelerate.Trafo.Partitioning.ILP.LinearConstraint (Bounds, Expression, LinearConstraint, allB, allEqual, between, binary, impliesB, int, isEqualRangeN, lowerUpper, nCompsE, notB, packB, timesN, var, (.+.), (.-.), (.<.), (.<=.), (.==.), (.>.), (.>=.))
+import Data.Array.Accelerate.Trafo.Partitioning.ILP.LinearConstraint (Bounds (Lower), Expression, LinearConstraint, allB, allEqual, between, binary, equal, impliesB, int, isEqualRangeN, lowerUpper, notB, packB, timesN, var, (.+.), (.-.), (.<.), (.<=.), (.==.), (.>.))
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.NameGeneration (freshName)
 import Data.Foldable (fold)
 import Data.Monoid (Ap (..))
@@ -27,7 +27,7 @@ lowerAll env constraints = evalState (mconcat <$> mapM (lower env) constraints) 
 lower :: LowerEnv -> Constraint -> Lower
 lower env constraint = case constraint of
   ClusterBefore i j -> pure (pi i .<. pi j, mempty, mempty)
-  DifferentCluster i j -> pure (fused (i, j) .==. int 1, mempty, mempty)
+  DifferentCluster i j -> pure (mempty, equal 1 (Fused i j), mempty)
   NotManifestIfAllFused b pairs -> pure (allB (map fused pairs) (notB $ manifest b), mempty, mempty)
   FusibleOrder i j -> pure (between (fused (i, j)) (pi j .-. pi i) (timesN $ fused (i, j)), mempty, mempty)
   FusionDirection w b r -> pure (isEqualRangeN (writeDir (w, b)) (readDir (b, r)) (fused (w, r)), mempty, mempty)
@@ -43,10 +43,10 @@ lower env constraint = case constraint of
   ReadAliveThroughWriters r@(b1, c1) ws ->
     pure (pi c1 .+. int 1 .-. foldMap (\w -> int 1 .-. inplace (r, w)) ws .<=. pimax b1, mempty, mempty)
   HorizontalReadCost pairs -> lowerHorizontalReadCost env pairs
-  Manifest b -> pure (manifest b .==. int 0, mempty, mempty)
-  NoInPlace b -> pure (pimax b .>=. nCompsE, mempty, mempty)
+  Manifest b -> pure (mempty, equal 0 (IsManifest b), mempty)
+  NoInPlace b -> pure (mempty, Lower (lowerEnvNComps env) (PiMax b), mempty)
   SameFoldSize c -> pure (inFoldSize c .==. outFoldSize c, mempty, mempty)
-  NewFoldSize c -> pure (outFoldSize c .==. int (c ^. nodeId), mempty, mempty)
+  NewFoldSize c -> pure (mempty, equal (c ^. nodeId) (OutFoldSize c), mempty)
   SameFoldSizeIfFused w c -> pure (isEqualRangeN (inFoldSize c) (outFoldSize w) (fused (w, c)), mempty, mempty)
   SameDirection rs ws -> pure (allEqual (readDirs rs <> writeDirs ws), mempty, mempty)
   PinnedDirection c rs ws -> pure (allEqual ([int (c ^. nodeId)] <> readDirs rs <> writeDirs ws), mempty, mempty)
