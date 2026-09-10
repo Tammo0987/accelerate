@@ -32,10 +32,9 @@ solve x ilp = fmap (<> M.fromSet (const 0) (allVars ilp)) -- add zeroes to the I
 -- or all variables to be in a constraint.
 finalize :: Ord Var => ILP -> ILP
 finalize ilp@(ILP dir obj constr bnds n) =
-  ILP dir obj (constr <> extraconstr) (bnds <> extrabnds) n
+  ILP dir obj constr (bnds <> extrabnds) n
   where
-    extraconstr = foldMap (\v -> int (-5) .<=. var v) (allVars ilp)
-    extrabnds   = foldMap (Lower (-5))                (allVars ilp)
+    extrabnds = foldMap (Lower (-5)) (allVars ilp)
 
 data OptDir = Maximise | Minimise
   deriving (Show, Eq)
