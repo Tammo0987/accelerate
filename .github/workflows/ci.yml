@@ -42,18 +42,12 @@ jobs:
           - '9.6'
           - '9.4'
           - '9.2'
-          - '9.0'
-          - '8.10'
         mode:
           - 'debug'
           - 'release'
         exclude:
           - os: 'windows-latest'
             mode: 'debug'
-          - os: 'macOS-latest'  # GHC < 9.2 is broken on ARM64 macs
-            ghc: '8.10'
-          - os: 'macOS-latest'
-            ghc: '9.0'
 
     steps:
       - uses: actions/checkout@v3
