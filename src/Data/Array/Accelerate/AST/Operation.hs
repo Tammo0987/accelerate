@@ -1,15 +1,16 @@
-{-# LANGUAGE FlexibleInstances     #-}
-{-# LANGUAGE GADTs                 #-}
-{-# LANGUAGE InstanceSigs          #-}
-{-# LANGUAGE KindSignatures        #-}
-{-# LANGUAGE LambdaCase            #-}
-{-# LANGUAGE OverloadedStrings     #-}
-{-# LANGUAGE QuantifiedConstraints #-}
-{-# LANGUAGE RankNTypes            #-}
-{-# LANGUAGE ScopedTypeVariables   #-}
-{-# LANGUAGE StandaloneDeriving    #-}
-{-# LANGUAGE TemplateHaskell       #-}
-{-# LANGUAGE TypeOperators         #-}
+{-# LANGUAGE FlexibleInstances        #-}
+{-# LANGUAGE GADTs                    #-}
+{-# LANGUAGE InstanceSigs             #-}
+{-# LANGUAGE KindSignatures           #-}
+{-# LANGUAGE LambdaCase               #-}
+{-# LANGUAGE OverloadedStrings        #-}
+{-# LANGUAGE QuantifiedConstraints    #-}
+{-# LANGUAGE RankNTypes               #-}
+{-# LANGUAGE ScopedTypeVariables      #-}
+{-# LANGUAGE StandaloneDeriving       #-}
+{-# LANGUAGE StandaloneKindSignatures #-}
+{-# LANGUAGE TemplateHaskell          #-}
+{-# LANGUAGE TypeOperators            #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
 {-# OPTIONS_HADDOCK hide #-}
 -- |
@@ -400,11 +401,22 @@ data Modifier m where
 deriving instance Show (Modifier m)
 
 -- Empty data types, which are only used for the types of 'Arg'.
+type Var' :: Type -> Type
 data Var' e   where
+
+type Exp' :: Type -> Type
 data Exp' e   where
+
+type Fun' :: Type -> Type
 data Fun' t   where
+
+type In  :: Type -> Type -> Type
 data In  sh e where
+
+type Out :: Type -> Type -> Type
 data Out sh e where
+
+type Mut :: Type -> Type -> Type
 data Mut sh e where
 
 argVarType :: Arg env (Var' e) -> TypeR e

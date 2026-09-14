@@ -3,6 +3,7 @@
 {-# LANGUAGE GADTs                      #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE InstanceSigs               #-}
+{-# LANGUAGE KindSignatures             #-}
 {-# LANGUAGE LambdaCase                 #-}
 {-# LANGUAGE OverloadedStrings          #-}
 {-# LANGUAGE RankNTypes                 #-}
@@ -39,6 +40,7 @@ import Prelude hiding (exp)
 import qualified Data.Functor.Const as C
 import Data.Coerce
 import Control.Monad.State.Strict
+import Data.Kind (Type)
 import Data.Maybe (fromJust)
 import Data.List ( intercalate )
 import Debug.Trace
@@ -397,7 +399,7 @@ stripLHS (LeftHandSideWildcard _) le = le
 stripLHS (LeftHandSidePair l r) le = stripLHS l (stripLHS r le)
 
 
-createLHS :: BoundLHS s v _env _env'
+createLHS :: BoundLHS s v env1 env2
           -> Env env
           -> (forall env'. Env env' -> LeftHandSide s v env env' -> r)
           -> r
@@ -460,12 +462,12 @@ getLabelArrays (NotArr _) = internalError "getLabelArrays: Expected Arr but got 
 
 
 -- | Get the array dependencies of an 'ArgLabel'.
-getLabelArrDeps :: ArgLabel (m sh e) -> Nodes GVal
+getLabelArrDeps :: forall (m :: Type -> Type -> Type) sh e. ArgLabel (m sh e) -> Nodes GVal
 getLabelArrDeps = valsNodes . getLabelArrays
 
 
 -- | Get a single array dependency of an 'ArgLabel'.
-getLabelArrDep :: ArgLabel (m sh e) -> Node GVal
+getLabelArrDep :: forall (m :: Type -> Type -> Type) sh e. ArgLabel (m sh e) -> Node GVal
 getLabelArrDep = foldr1 const . getLabelArrDeps
 
 
@@ -476,12 +478,12 @@ getLabelShape (NotArr _) = internalError "getLabelShape: Expected Arr but got No
 
 
 -- | Get the shape dependencies of an 'ArgLabel'.
-getLabelShDeps :: ArgLabel (m sh e) -> Nodes GVal
+getLabelShDeps :: forall (m :: Type -> Type -> Type) sh e. ArgLabel (m sh e) -> Nodes GVal
 getLabelShDeps = valsNodes . getLabelShape
 
 
 -- | Check if two arguments have the same shape.
-sameShape :: ArgLabel (m1 sh1 e1) -> ArgLabel (m2 sh2 e2) -> Bool
+sameShape :: forall (m1 :: Type -> Type -> Type) (m2 :: Type -> Type -> Type) sh1 sh2 e1 e2. ArgLabel (m1 sh1 e1) -> ArgLabel (m2 sh2 e2) -> Bool
 sameShape (getLabelShape -> sh1) (getLabelShape -> sh2)
   | Just Refl <- matchGroundValsType sh1 sh2 = sh1 == sh2
   | otherwise = False

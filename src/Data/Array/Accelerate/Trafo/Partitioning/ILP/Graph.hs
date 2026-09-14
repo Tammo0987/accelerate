@@ -934,7 +934,7 @@ mkFusionGraph (Alet lhs u bnd body) = do
   c       <- freshComp  -- TODO: If there is an issue with reconstruction, maybe move this behind "bndRes <- mkFusionGraph bnd". The order in which labels are generate affects the order in which the clusters are interpreted. Previously let-bindings where always in a separate cluster from the bound computation, but now they are usually in the same cluster to prevent all buffers from being manifest. That said, topsort should already be taking care of this ordering issue.
   env     <- use environment
   bndRes  <- mkFusionGraph bnd
-  bndResW <- foldMapMTupR (use . allWriters . valNodes) bndRes
+  bndResW <- foldMapMTupR (\v -> use (allWriters (valNodes v))) bndRes
   c `bindsBuffers` valsNodes bndRes
   env'    <- zoom currEnvL (weakenEnv lhs bndRes u env)
   symbol c ?= SLet (bindLHS lhs env') (fromSingletonSet bndResW) u

@@ -174,7 +174,7 @@ class Sink' f where
 
 instance Sink Idx where
   {-# INLINEABLE weaken #-}
-  weaken = (>:>)
+  weaken w = (w >:>)
 
 instance Sink (Var s) where
   {-# INLINEABLE weaken #-}

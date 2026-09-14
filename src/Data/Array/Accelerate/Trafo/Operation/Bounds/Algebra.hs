@@ -1,3 +1,4 @@
+{-# LANGUAGE KindSignatures      #-}
 {-# LANGUAGE MonoLocalBinds      #-}
 {-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -26,6 +27,7 @@ import Data.Array.Accelerate.Representation.Shape hiding (union)
 import Data.Array.Accelerate.Type
 import Data.Array.Accelerate.Error
 
+import Data.Kind (Type)
 import Data.Typeable ( (:~:)(..) )
 
 -- x <= y becomes an edge from x to y with distance 0.
@@ -42,7 +44,7 @@ data Edge s t = Edge { distance :: Integer } deriving (Eq, Ord)
 -- Bounds (plural) refers to a tuple where each value is a bound.
 --
 -- t should be an IntegralType or a Buffer of an IntegralType
-data TermBound env t = TermBound
+data TermBound (env :: Type) (t :: Type) = TermBound
   -- An edge from a variable x with distance c means:
   -- x <= this + c
   { lower :: PartialEnv (InEdge Edge t) env
