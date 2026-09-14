@@ -1,4 +1,3 @@
-{-# LANGUAGE OverloadedStrings  #-}
 {-# LANGUAGE StandaloneDeriving #-}
 -- |
 -- Module      : Data.Array.Accelerate.Pretty.Graphviz.Type

@@ -1,8 +1,7 @@
-{-# LANGUAGE LambdaCase          #-}
-{-# LANGUAGE MonoLocalBinds      #-}
-{-# LANGUAGE MultiWayIf          #-}
-{-# LANGUAGE OverloadedStrings   #-}
-{-# LANGUAGE TypeOperators       #-}
+{-# LANGUAGE LambdaCase     #-}
+{-# LANGUAGE MonoLocalBinds #-}
+{-# LANGUAGE MultiWayIf     #-}
+{-# LANGUAGE TypeOperators  #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 {-# OPTIONS_HADDOCK hide #-}
 -- |

@@ -1,6 +1,5 @@
-{-# LANGUAGE GADTs             #-}
-{-# LANGUAGE InstanceSigs      #-}
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE GADTs        #-}
+{-# LANGUAGE InstanceSigs #-}
 
 module Data.Array.Accelerate.Trafo.Partitioning.ILP.LinearConstraint
   ( Constants (..), Number (..), Expression (..), IsNumber (..)

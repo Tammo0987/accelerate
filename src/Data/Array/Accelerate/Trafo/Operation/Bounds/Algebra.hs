@@ -1,6 +1,5 @@
 {-# LANGUAGE KindSignatures      #-}
 {-# LANGUAGE MonoLocalBinds      #-}
-{-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications    #-}
 {-# LANGUAGE TypeOperators       #-}

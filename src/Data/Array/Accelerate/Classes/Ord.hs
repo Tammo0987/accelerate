@@ -40,6 +40,7 @@ import Data.Array.Accelerate.Classes.Eq                             hiding ( (==
 import qualified Data.Array.Accelerate.Classes.Eq                   as A
 
 import Data.Char
+import Data.String                                                  ( IsString(fromString) )
 import Language.Haskell.TH.Extra                                    hiding ( Exp )
 import Prelude                                                      ( ($), (>>=), Ordering(..), Num(..), Maybe(..), String, show, error, unlines, return, concat, map, mapM )
 import Text.Printf

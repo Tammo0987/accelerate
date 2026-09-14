@@ -45,6 +45,7 @@ import Data.Array.Accelerate.Classes.ToFloating
 
 import Text.Printf
 import Data.Ratio                                                   ( Ratio )
+import Data.String                                                  ( IsString(fromString) )
 import Prelude                                                      ( ($), String, error, unlines )
 import qualified Data.Ratio                                         as P
 import qualified Prelude                                            as P

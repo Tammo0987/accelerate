@@ -2,7 +2,6 @@
 {-# LANGUAGE EmptyCase             #-}
 {-# LANGUAGE GADTs                 #-}
 {-# LANGUAGE LambdaCase            #-}
-{-# LANGUAGE OverloadedStrings     #-}
 {-# LANGUAGE ScopedTypeVariables   #-}
 {-# LANGUAGE TemplateHaskellQuotes #-}
 {-# OPTIONS_HADDOCK hide #-}

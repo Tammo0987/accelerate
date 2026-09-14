@@ -7,7 +7,6 @@
 {-# LANGUAGE GADTs                  #-}
 {-# LANGUAGE InstanceSigs           #-}
 {-# LANGUAGE LambdaCase             #-}
-{-# LANGUAGE OverloadedStrings      #-}
 {-# LANGUAGE PatternSynonyms        #-}
 {-# LANGUAGE RankNTypes             #-}
 {-# LANGUAGE ScopedTypeVariables    #-}

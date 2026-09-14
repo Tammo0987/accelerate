@@ -3,7 +3,6 @@
 {-# LANGUAGE InstanceSigs             #-}
 {-# LANGUAGE KindSignatures           #-}
 {-# LANGUAGE LambdaCase               #-}
-{-# LANGUAGE OverloadedStrings        #-}
 {-# LANGUAGE QuantifiedConstraints    #-}
 {-# LANGUAGE RankNTypes               #-}
 {-# LANGUAGE ScopedTypeVariables      #-}

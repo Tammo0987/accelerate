@@ -1,6 +1,5 @@
-{-# LANGUAGE CPP                 #-}
-{-# LANGUAGE MonoLocalBinds      #-}
-{-# LANGUAGE OverloadedStrings   #-}
+{-# LANGUAGE CPP            #-}
+{-# LANGUAGE MonoLocalBinds #-}
 -- |
 -- Module      : Data.Array.Accelerate.Pretty.Type
 -- Copyright   : [2008..2020] The Accelerate Team

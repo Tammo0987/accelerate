@@ -1,5 +1,4 @@
 {-# LANGUAGE GADTs                 #-}
-{-# LANGUAGE OverloadedStrings     #-}
 {-# LANGUAGE TemplateHaskellQuotes #-}
 {-# LANGUAGE TupleSections         #-}
 {-# OPTIONS_HADDOCK hide #-}

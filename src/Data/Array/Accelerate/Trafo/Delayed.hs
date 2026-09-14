@@ -1,7 +1,6 @@
 -- {-# LANGUAGE FlexibleInstances    #-}
 -- {-# LANGUAGE GADTs                #-}
 -- {-# LANGUAGE LambdaCase           #-}
--- {-# LANGUAGE OverloadedStrings    #-}
 -- {-# LANGUAGE RecordWildCards      #-}
 -- {-# LANGUAGE TemplateHaskell      #-}
 -- {-# LANGUAGE TypeFamilies         #-}

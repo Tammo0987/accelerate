@@ -1,5 +1,4 @@
-{-# LANGUAGE MonoLocalBinds    #-}
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE MonoLocalBinds #-}
 {-# OPTIONS_HADDOCK hide #-}
 -- |
 -- Module      : Data.Array.Accelerate.Analysis.Exp

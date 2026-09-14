@@ -5,7 +5,6 @@
 -- {-# LANGUAGE GADTs                #-}
 -- {-# LANGUAGE InstanceSigs         #-}
 -- {-# LANGUAGE LambdaCase           #-}
--- {-# LANGUAGE OverloadedStrings    #-}
 -- {-# LANGUAGE PatternGuards        #-}
 -- {-# LANGUAGE RankNTypes           #-}
 -- {-# LANGUAGE ScopedTypeVariables  #-}

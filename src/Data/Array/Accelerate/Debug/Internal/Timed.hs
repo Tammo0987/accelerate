@@ -1,5 +1,4 @@
-{-# LANGUAGE CPP               #-}
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE CPP #-}
 
 #ifdef ACCELERATE_DEBUG
 {-# LANGUAGE MagicHash #-}
