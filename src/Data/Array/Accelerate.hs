@@ -1,8 +1,5 @@
-{-# LANGUAGE CPP                 #-}
-{-# LANGUAGE ExplicitNamespaces  #-}
-{-# LANGUAGE PatternSynonyms     #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TypeApplications    #-}
+{-# LANGUAGE CPP             #-}
+{-# LANGUAGE PatternSynonyms #-}
 -- |
 -- Module      : Data.Array.Accelerate
 -- Description : The Accelerate standard prelude

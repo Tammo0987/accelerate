@@ -1,4 +1,3 @@
-{-# LANGUAGE LambdaCase #-}
 {-# OPTIONS_HADDOCK hide #-}
 module Data.Array.Accelerate.Trafo.Partitioning.ILP.Lower (LowerEnv (..), Lower, lowerAll, lower) where
 

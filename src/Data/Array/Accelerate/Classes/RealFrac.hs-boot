@@ -1,4 +1,3 @@
-{-# LANGUAGE FlexibleContexts  #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 -- |
 -- Module      : Data.Array.Accelerate.Classes.RealFrac

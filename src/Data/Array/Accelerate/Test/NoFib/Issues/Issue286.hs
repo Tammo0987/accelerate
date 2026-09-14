@@ -1,5 +1,3 @@
-{-# LANGUAGE BangPatterns    #-}
-{-# LANGUAGE RankNTypes      #-}
 {-# LANGUAGE TemplateHaskell #-}
 -- |
 -- Module      : Data.Array.Accelerate.Test.NoFib.Issues.Issue286

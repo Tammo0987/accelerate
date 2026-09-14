@@ -1,5 +1,3 @@
-{-# LANGUAGE RankNTypes          #-}
-{-# LANGUAGE ScopedTypeVariables #-}
 -- |
 -- Module      : Data.Array.Accelerate.Test.NoFib.Base
 -- Copyright   : [2009..2020] The Accelerate Team

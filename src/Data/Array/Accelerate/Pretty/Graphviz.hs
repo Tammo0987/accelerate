@@ -1,5 +1,3 @@
-{-# LANGUAGE ConstraintKinds          #-}
-{-# LANGUAGE StandaloneKindSignatures #-}
 -- |
 -- Module      : Data.Array.Accelerate.Pretty.Graphviz
 -- Copyright   : [2015..2020] The Accelerate Team

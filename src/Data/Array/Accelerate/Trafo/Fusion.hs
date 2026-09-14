@@ -1,16 +1,5 @@
--- {-# LANGUAGE CPP                  #-}
--- {-# LANGUAGE ConstraintKinds      #-}
--- {-# LANGUAGE FlexibleContexts     #-}
--- {-# LANGUAGE FlexibleInstances    #-}
--- {-# LANGUAGE GADTs                #-}
--- {-# LANGUAGE InstanceSigs         #-}
--- {-# LANGUAGE LambdaCase           #-}
--- {-# LANGUAGE PatternGuards        #-}
--- {-# LANGUAGE RankNTypes           #-}
--- {-# LANGUAGE ScopedTypeVariables  #-}
--- {-# LANGUAGE TypeApplications     #-}
--- {-# LANGUAGE TypeOperators        #-}
--- {-# LANGUAGE ViewPatterns         #-}
+-- {-# LANGUAGE CPP          #-}
+-- {-# LANGUAGE ViewPatterns #-}
 -- {-# OPTIONS_GHC -fno-warn-name-shadowing #-}
 -- {-# OPTIONS_HADDOCK hide #-}
 -- -- |

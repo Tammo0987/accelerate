@@ -1,4 +1,3 @@
-{-# LANGUAGE FlexibleContexts #-}
 -- |
 -- Module      : Data.Array.Accelerate.Trafo.NewNewFusion
 -- Copyright   : [2012..2020] The Accelerate Team

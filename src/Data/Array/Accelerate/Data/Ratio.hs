@@ -1,9 +1,6 @@
-{-# LANGUAGE FlexibleContexts      #-}
-{-# LANGUAGE FlexibleInstances     #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE PatternSynonyms       #-}
-{-# LANGUAGE RebindableSyntax      #-}
-{-# LANGUAGE UndecidableInstances  #-}
+{-# LANGUAGE PatternSynonyms      #-}
+{-# LANGUAGE RebindableSyntax     #-}
+{-# LANGUAGE UndecidableInstances #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 -- |
 -- Module      : Data.Array.Accelerate.Data.Ratio

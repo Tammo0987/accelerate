@@ -1,5 +1,4 @@
 {-# LANGUAGE MagicHash     #-}
-{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE UnboxedTuples #-}
 {-# OPTIONS_HADDOCK hide #-}
 -- |

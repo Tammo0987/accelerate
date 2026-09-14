@@ -1,5 +1,3 @@
-{-# LANGUAGE BangPatterns #-}
-{-# LANGUAGE LambdaCase   #-}
 -- |
 -- Module      : Data.Array.Accelerate.Array.Remote.Nursery
 -- Copyright   : [2008..2020] The Accelerate Team

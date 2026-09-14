@@ -1,6 +1,4 @@
-{-# LANGUAGE ScopedTypeVariables   #-}
 {-# LANGUAGE TemplateHaskellQuotes #-}
-{-# LANGUAGE TypeApplications      #-}
 -- |
 -- Module      : Data.Array.Accelerate.Debug.Trace
 -- Copyright   : [2008..2020] The Accelerate Team

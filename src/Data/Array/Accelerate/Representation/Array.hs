@@ -1,8 +1,3 @@
-{-# LANGUAGE BangPatterns          #-}
-{-# LANGUAGE EmptyCase             #-}
-{-# LANGUAGE GADTs                 #-}
-{-# LANGUAGE LambdaCase            #-}
-{-# LANGUAGE ScopedTypeVariables   #-}
 {-# LANGUAGE TemplateHaskellQuotes #-}
 {-# OPTIONS_HADDOCK hide #-}
 -- |

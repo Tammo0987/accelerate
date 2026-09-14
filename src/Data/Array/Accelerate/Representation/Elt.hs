@@ -1,5 +1,4 @@
 {-# LANGUAGE MagicHash             #-}
-{-# LANGUAGE MonoLocalBinds        #-}
 {-# LANGUAGE TemplateHaskellQuotes #-}
 {-# OPTIONS_HADDOCK hide #-}
 -- |

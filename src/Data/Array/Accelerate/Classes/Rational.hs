@@ -1,4 +1,3 @@
-{-# LANGUAGE FlexibleContexts #-}
 -- |
 -- Module      : Data.Array.Accelerate.Classes.Rational
 -- Copyright   : [2016..2020] The Accelerate Team

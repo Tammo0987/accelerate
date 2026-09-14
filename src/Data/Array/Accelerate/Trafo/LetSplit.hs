@@ -1,5 +1,3 @@
-{-# LANGUAGE LambdaCase     #-}
-{-# LANGUAGE MonoLocalBinds #-}
 {-# OPTIONS_HADDOCK hide #-}
 -- |
 -- Module      : Data.Array.Accelerate.Trafo.LetSplit

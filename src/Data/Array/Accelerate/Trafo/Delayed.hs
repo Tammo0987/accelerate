@@ -1,10 +1,6 @@
--- {-# LANGUAGE FlexibleInstances    #-}
--- {-# LANGUAGE GADTs                #-}
--- {-# LANGUAGE LambdaCase           #-}
--- {-# LANGUAGE RecordWildCards      #-}
--- {-# LANGUAGE TemplateHaskell      #-}
--- {-# LANGUAGE TypeFamilies         #-}
--- {-# LANGUAGE TypeSynonymInstances #-}
+-- {-# LANGUAGE RecordWildCards #-}
+-- {-# LANGUAGE TemplateHaskell #-}
+-- {-# LANGUAGE TypeFamilies    #-}
 -- {-# OPTIONS_HADDOCK hide #-}
 -- -- |
 -- -- Module      : Data.Array.Accelerate.Trafo.Delayed

@@ -1,6 +1,3 @@
-{-# LANGUAGE GADTs      #-}
-{-# LANGUAGE RankNTypes #-}
-
 -- |
 -- Module      : Data.Array.Accelerate.Pretty.Schedule
 -- Copyright   : [2008..2020] The Accelerate Team

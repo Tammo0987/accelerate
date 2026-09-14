@@ -1,6 +1,3 @@
-{-# LANGUAGE GADTs        #-}
-{-# LANGUAGE InstanceSigs #-}
-
 module Data.Array.Accelerate.Trafo.Partitioning.ILP.LinearConstraint
   ( Constants (..), Number (..), Expression (..), IsNumber (..)
   , LinearConstraint (..), Bounds (..), Var(..)

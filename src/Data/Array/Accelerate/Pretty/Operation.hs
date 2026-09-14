@@ -1,8 +1,3 @@
-{-# LANGUAGE LambdaCase          #-}
-{-# LANGUAGE MonoLocalBinds      #-}
-{-# LANGUAGE RankNTypes          #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-
 -- |
 -- Module      : Data.Array.Accelerate.Pretty.Operation
 -- Copyright   : [2008..2020] The Accelerate Team

@@ -1,14 +1,5 @@
-{-# LANGUAGE BlockArguments             #-}
-{-# LANGUAGE FlexibleInstances          #-}
-{-# LANGUAGE GADTs                      #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE InstanceSigs               #-}
-{-# LANGUAGE KindSignatures             #-}
-{-# LANGUAGE LambdaCase                 #-}
-{-# LANGUAGE RankNTypes                 #-}
-{-# LANGUAGE StandaloneDeriving         #-}
-{-# LANGUAGE TypeOperators              #-}
-{-# LANGUAGE ViewPatterns               #-}
+{-# LANGUAGE BlockArguments #-}
+{-# LANGUAGE ViewPatterns   #-}
 {- |
 Module      : Data.Array.Accelerate.Trafo.Partitioning.ILP.LabelsNew
 Description : Nodes representing nodes in the graph.

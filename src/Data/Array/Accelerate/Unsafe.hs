@@ -1,4 +1,3 @@
-{-# LANGUAGE FlexibleContexts #-}
 -- |
 -- Module      : Data.Array.Accelerate.Unsafe
 -- Copyright   : [2009..2020] The Accelerate Team

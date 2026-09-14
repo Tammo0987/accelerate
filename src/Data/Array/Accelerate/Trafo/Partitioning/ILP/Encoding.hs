@@ -1,6 +1,4 @@
-{-# LANGUAGE BlockArguments      #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TypeApplications    #-}
+{-# LANGUAGE BlockArguments #-}
 module Data.Array.Accelerate.Trafo.Partitioning.ILP.Encoding where
 
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Graph hiding (graph, constraints, bounds)

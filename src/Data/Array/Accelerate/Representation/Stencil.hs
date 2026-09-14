@@ -1,4 +1,3 @@
-{-# LANGUAGE GADTs                 #-}
 {-# LANGUAGE TemplateHaskellQuotes #-}
 {-# OPTIONS_HADDOCK hide #-}
 -- |

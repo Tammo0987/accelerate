@@ -1,4 +1,3 @@
-{-# LANGUAGE RankNTypes #-}
 -- |
 -- Module      : Data.Array.Accelerate.Test.NoFib.Misc
 -- Copyright   : [2025..] The Accelerate Team

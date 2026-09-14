@@ -1,7 +1,3 @@
-{-# LANGUAGE FlexibleContexts  #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE GADTs             #-}
-{-# LANGUAGE TypeOperators     #-}
 -- |
 -- Module      : Data.Array.Accelerate.Data.Fold
 -- Copyright   : [2016..2020] The Accelerate Team

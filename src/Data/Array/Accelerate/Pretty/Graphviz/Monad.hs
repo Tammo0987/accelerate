@@ -1,4 +1,4 @@
-{-# LANGUAGE RecordWildCards   #-}
+{-# LANGUAGE RecordWildCards #-}
 -- |
 -- Module      : Data.Array.Accelerate.Pretty.Graphviz.Monad
 -- Copyright   : [2015..2020] The Accelerate Team

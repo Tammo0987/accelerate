@@ -1,5 +1,4 @@
 {-# LANGUAGE DefaultSignatures #-}
-{-# LANGUAGE FlexibleContexts  #-}
 -- |
 -- Module      : Data.Array.Accelerate.Classes.RealFloat
 -- Copyright   : [2019..2020] The Accelerate Team

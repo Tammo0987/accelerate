@@ -1,5 +1,5 @@
-{-# LANGUAGE CPP                    #-}
-{-# LANGUAGE TemplateHaskellQuotes  #-}
+{-# LANGUAGE CPP                   #-}
+{-# LANGUAGE TemplateHaskellQuotes #-}
 -- |
 -- Module      : Data.Array.Accelerate.Pattern.TH
 -- Copyright   : [2018..2020] The Accelerate Team
