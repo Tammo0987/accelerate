@@ -30,9 +30,10 @@ module Data.Primitive.Vec (
 ) where
 
 import Control.Monad.ST
+import Data.Kind                                                    ( Type )
 import Data.Primitive.ByteArray
 import Data.Primitive.Types
-import Language.Haskell.TH.Extra
+import Language.Haskell.TH.Extra                                    qualified as TH
 import Prettyprinter
 import qualified Foreign.Storable as S
 import Foreign.Ptr
@@ -76,7 +77,7 @@ import GHC.Word
 -- One inefficiency of this approach is that the byte array does track its size,
 -- which redundant for our use case (derivable from type level information).
 --
-data Vec (n :: Nat) a = Vec ByteArray#
+data Vec (n :: Nat) (a :: Type) = Vec ByteArray#
 
 type role Vec nominal representational
 
@@ -285,12 +286,12 @@ packVec16 a b c d e f g h i j k l m n o p = runST $ do
 -- to do this without copying, but I don't think the definition of ByteArray# is
 -- exported (or it is deeply magical).
 --
-liftVec :: Vec n a -> CodeQ (Vec n a)
+liftVec :: Vec n a -> TH.CodeQ (Vec n a)
 liftVec (Vec ba#)
-  = unsafeCodeCoerce
+  = TH.unsafeCodeCoerce
     [| runST $ \s ->
          case newByteArray# $(liftInt# n#) s                                             of { (# s1, mba# #) ->
-         case copyAddrToByteArray# $(litE (StringPrimL bytes)) mba# 0# $(liftInt# n#) s1 of { s2             ->
+         case copyAddrToByteArray# $(TH.litE (TH.StringPrimL bytes)) mba# 0# $(liftInt# n#) s1 of { s2             ->
          case unsafeFreezeByteArray# mba# s2                                             of { (# s3, ba'# #) ->
            (# s3, Vec ba'# #)
         }}}
@@ -306,6 +307,6 @@ liftVec (Vec ba#)
 
       -- XXX: Typed TH does not support unlifted types
       --
-      liftInt# :: Int# -> ExpQ
-      liftInt# i# = litE (IntPrimL (toInteger (I# i#)))
+      liftInt# :: Int# -> TH.ExpQ
+      liftInt# i# = TH.litE (TH.IntPrimL (toInteger (I# i#)))
 
