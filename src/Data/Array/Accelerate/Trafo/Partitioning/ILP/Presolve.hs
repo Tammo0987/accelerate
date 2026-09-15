@@ -1,11 +1,15 @@
+{-# LANGUAGE MultiWayIf #-}
+
 module Data.Array.Accelerate.Trafo.Partitioning.ILP.Presolve (presolve, Problem (..), substitutionConstraints, emptySubstitution) where
 
 import Control.Monad (foldM)
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.ConstraintLanguage (Constraint (..))
+import Data.Array.Accelerate.Trafo.Partitioning.ILP.Labels (InplacePath, ReadEdge, WriteEdge, nodeId)
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.LinearConstraint (LinearConstraint, int, var, (.==.))
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Var (Var (..))
 import qualified Data.Map as M
 import Data.Maybe (mapMaybe)
+import Lens.Micro ((^.))
 
 data Value = Const Int | Alias Var deriving (Eq, Show)
 
@@ -64,11 +68,82 @@ instantiate s c = case c of
         | a < b -> drop' [(Fused i j, Const 1)]
         | otherwise -> Left (Violated c)
       _ -> keep
+  Manifest b -> drop' [(IsManifest b, Const 0)]
+  NewFoldSize co -> drop' [(OutFoldSize co, Const (co ^. nodeId))]
+  SameFoldSize co -> drop' [(InFoldSize co, Alias (OutFoldSize co))]
+  SameDirection rs ws -> drop' $ aliasAll $ dirVars rs ws
+  PinnedDirection co rs ws -> drop' [(v, Const (co ^. nodeId)) | v <- dirVars rs ws]
+  SameFoldSizeIfFused w co -> Fused w co .=>. (InFoldSize co, OutFoldSize w)
+  FusionDirection w b r -> Fused w r .=>. (WriteDir w b, ReadDir b r)
+  InPlaceDirection p@(r, w) -> inPlaceVar p .=>. (uncurry ReadDir r, uncurry WriteDir w)
+  AcrossClusterSame p@((_, c1), (c2, _)) -> inPlaceVar p .=>. (Pi c1, Pi c2)
+  NotManifestIfAllFused b pairs ->
+    let xs = map (uncurry Fused) pairs
+        vals = map resolve xs
+        open = [x | (x, Alias _) <- zip xs vals]
+     in if
+          | null pairs -> drop' []
+          | Const 1 `elem` vals -> drop' [(IsManifest b, Const 0)]
+          | all (== Const 0) vals -> drop' [(IsManifest b, Const 1)]
+          | otherwise -> case resolve (IsManifest b) of
+              Const 1 -> drop' [(x, Const 0) | x <- open]
+              Const 0 | [x] <- open -> drop' [(x, Const 1)]
+              Const 0 -> keep
+              Const _ -> Left (Violated c)
+              Alias _ -> keep
+  OnManifestIfInPlace p@((b1, _), (_, b2)) ->
+    case (resolve (inPlaceVar p), resolve (IsManifest b1), resolve (IsManifest b2)) of
+      (Const 1, _, _) -> drop' []
+      (Const 0, _, _) -> drop' [(IsManifest b1, Const 0), (IsManifest b2, Const 0)]
+      (_, Const 1, _) -> drop' [(inPlaceVar p, Const 1)]
+      (_, _, Const 1) -> drop' [(inPlaceVar p, Const 1)]
+      (_, Const 0, Const 0) -> drop' []
+      _ -> keep
+  AtMostOneReader ps -> atMostOne ps
+  AtMostOneWriter ps -> atMostOne ps
+  NegativeDirIfManifest (w, b) -> case (resolve (IsManifest b), resolve (WriteDir w b)) of
+    (_, Const d) | d < 0 -> drop' []
+    (_, Const _) -> Right (Just c, [(IsManifest b, Const 1)])
+    _ -> keep
+  InPlaceCluster p -> case resolve (inPlaceVar p) of
+    Const 1 -> drop' []
+    _ -> keep
   _ -> keep
   where
     keep = Right (Just c, [])
     drop' as = Right (Nothing, as)
     resolve v = lookupVar v s
+    -- \| @x@ => @a == b@. x beeing 0 means true here exceptionally.
+    x .=>. (a, b) = case resolve x of
+      Const 1 -> drop' []
+      Const 0 -> drop' [(a, Alias b)]
+      Const _ -> Left (Violated c)
+      Alias _ -> case (resolve a, resolve b) of
+        (va, vb) | va == vb -> drop' []
+        (Const _, Const _) -> drop' [(x, Const 1)]
+        _ -> keep
+    -- \| At most one of the paths is used in place.
+    atMostOne ps =
+      let xs = map inPlaceVar ps
+          vals = map resolve xs
+          chosen = [x | (x, Const 0) <- zip xs vals]
+          open = [x | (x, Alias _) <- zip xs vals]
+       in if
+            | length ps <= 1 -> drop' []
+            | [x] <- chosen -> drop' [(y, Const 1) | y <- xs, y /= x]
+            | not (null chosen) -> Left (Violated c)
+            | length open <= 1 -> drop' []
+            | otherwise -> keep
+
+dirVars :: [ReadEdge] -> [WriteEdge] -> [Var]
+dirVars rs ws = map (uncurry ReadDir) rs <> map (uncurry WriteDir) ws
+
+aliasAll :: [Var] -> [Assignment]
+aliasAll [] = []
+aliasAll (v : vs) = [(w, Alias v) | w <- vs]
+
+inPlaceVar :: InplacePath -> Var
+inPlaceVar ((b1, c1), (c2, b2)) = InPlace b1 c1 c2 b2
 
 -- | Applying constraints and assignments as long as there is progress.
 apply :: [Assignment] -> Problem -> Either Infeasible Problem
