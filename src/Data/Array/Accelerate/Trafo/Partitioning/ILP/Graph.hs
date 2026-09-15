@@ -38,7 +38,6 @@ import Data.Array.Accelerate.Trafo.Partitioning.ILP.Labels
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.ConstraintLanguage (Constraint)
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.LinearConstraint
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Solver
-import Data.Array.Accelerate.Trafo.Partitioning.ILP.Var
 import Data.Array.Accelerate.Type
 
 -- Data structures

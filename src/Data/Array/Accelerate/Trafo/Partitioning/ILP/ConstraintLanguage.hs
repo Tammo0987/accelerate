@@ -4,19 +4,18 @@
 module Data.Array.Accelerate.Trafo.Partitioning.ILP.ConstraintLanguage (Constraint (..)) where
 
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Labels (Comp, GVal, InplacePath, Node, ReadEdge, WriteEdge)
-import Data.Kind (Type)
 import Prelude hiding (pi)
 
 -- | A property of the fusion problem, to be lowered into linear constraints.
 data Constraint
   = -- | @pi i < pi j@: @i@ lands in a strictly earlier cluster than @j@.
     ClusterBefore (Node Comp) (Node Comp)
-  | -- | @i@ and @j@ land in different clusters.
-    DifferentCluster (Node Comp) (Node Comp)
+  | -- | Fused: @i@ and @j@ share a cluster. Unfused: @i@ comes strictly before @j@.
+    ClusterBeforeUnlessFused (Node Comp) (Node Comp)
+  | -- | @i@ and @j@ are not fused.
+    Unfused (Node Comp) (Node Comp)
   | -- | Iff every listed edge is fused, the buffer is not manifest.
     NotManifestIfAllFused (Node GVal) [(Node Comp, Node Comp)]
-  | -- | Fused: @i@ and @j@ share a cluster. Unfused: @i@ comes strictly before @j@.
-    FusibleOrder (Node Comp) (Node Comp)
   | -- | Fusing @w@ and @r@ implies that the write direction of @w@ is equal to the read direction of @r@.
     FusionDirection (Node Comp) (Node GVal) (Node Comp)
   | -- | Bounds @l@'s cluster index to be at most @maxCluster@.

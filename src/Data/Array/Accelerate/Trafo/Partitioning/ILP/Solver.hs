@@ -6,13 +6,11 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeFamilyDependencies #-}
-{-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE UndecidableInstances #-}
 module Data.Array.Accelerate.Trafo.Partitioning.ILP.Solver where
 
 import qualified Data.Map as M
 import qualified Data.Set as S
-import Data.Array.Accelerate.Trafo.Partitioning.ILP.Var (Var)
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.LinearConstraint
 
 
