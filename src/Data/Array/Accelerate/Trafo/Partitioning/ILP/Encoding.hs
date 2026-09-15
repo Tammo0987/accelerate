@@ -6,7 +6,7 @@ import Data.Array.Accelerate.Trafo.Partitioning.ILP.Labels (Node, parent, Nodes,
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.LinearConstraint
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Solver hiding (finalize)
 
-import Data.List (groupBy, sortOn, foldl')
+import Data.List (groupBy, sortOn)
 import Prelude hiding (sum, pi, read )
 
 import qualified Data.Map as M
@@ -22,6 +22,8 @@ import Lens.Micro.Extras ( view )
 import Data.Maybe (fromJust,  mapMaybe )
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.ConstraintLanguage (Constraint(..))
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Lower (LowerEnv(..), lowerAll)
+import Data.Array.Accelerate.Trafo.Partitioning.ILP.Presolve (presolve, Problem(Problem), substitutionConstraints, emptySubstitution)
+import Data.Either (fromRight)
 
 data Objective
   -- Old fusion only objectives:
@@ -46,13 +48,21 @@ data Objective
 -- that reward putting non-siblings in the same cluster) this is fine: We will interpret 'cluster 3'
 -- with parents `Nothing` as a different cluster than 'cluster 3' with parents `Just 5`.
 makeILP :: forall op. MakesILP op => Objective -> FusionILP op -> ILP
-makeILP obj (FusionILP graph constraints bounds) =
-  ILP minMax objFun loweredConstraints (graphBounds <> bounds) (Constants n m)
+makeILP = makeILPWithPresolve True
+
+makeILPWithPresolve :: forall op. MakesILP op => Bool -> Objective -> FusionILP op -> ILP
+makeILPWithPresolve usePresolve obj (FusionILP graph constraints bounds) =
+  ILP minMax objFun (loweredConstraints <> substitutionConstraints subst) (graphBounds <> bounds) (Constants n m)
   where
-    graphBounds = fusionBounds <> inPlaceBounds
+    allConstraints = finalize @op graph <> fusionConstraints <> inPlaceConstraints <> constraints
+
+    presolved
+      | usePresolve = presolve allConstraints
+      | otherwise = Right $ Problem allConstraints emptySubstitution
+    Problem remaining subst = fromRight (error "presolve: ILP is infeasible") presolved
 
     lowered :: (LinearConstraint, Bounds, Expression)
-    lowered = lowerAll (LowerEnv n) $ finalize @op graph <> fusionConstraints <> inPlaceConstraints <> constraints
+    lowered = lowerAll (LowerEnv n) remaining
 
     (loweredConstraints, loweredBounds, loweredCost) = lowered
 
@@ -66,8 +76,6 @@ makeILP obj (FusionILP graph constraints bounds) =
         <> manifestValueConstraints
         <> noInPlaceConstraints
 
-    fusionBounds = piB <> fusedB <> manifestB <> loweredBounds
-
     inPlaceConstraints = if enableIU
         then onManifestConstraints
             <> inPlaceDirectionConstraints
@@ -77,6 +85,10 @@ makeILP obj (FusionILP graph constraints bounds) =
             <> atMostOneWriterConstraints
             <> readAliveThroughWritersConstraints
         else mempty
+
+    graphBounds = fusionBounds <> inPlaceBounds
+
+    fusionBounds = piB <> fusedB <> manifestB <> loweredBounds
 
     inPlaceBounds = if enableIU then pimaxB <> inplaceB else mempty
 
@@ -149,13 +161,13 @@ makeILP obj (FusionILP graph constraints bounds) =
     strictAcyclicConstraints   = map (uncurry ClusterBefore)    $ S.toList strictE
 
     -- x_ij == 1 for all infusible edges
-    infusibleConstraints       = map (uncurry DifferentCluster) $ S.toList infusibleE'
+    infusibleConstraints       = map (uncurry Unfused) $ S.toList infusibleE'
 
     -- forall b, iff all (w,b,r) are fused, then b is not manifest.
     manifestConstraints        = map (uncurry NotManifestIfAllFused) . M.toList $ foldl (flip \(i,b,j) -> M.insertWith (<>) b [(i,j)]) M.empty dataflowE
 
     -- x_ij <= pi_j - pi_i <= n*x_ij for all fusible edges
-    fusibleAcyclicConstraints  = map (uncurry FusibleOrder) $ S.toList fusibleE'
+    fusibleAcyclicConstraints  = map (uncurry ClusterBeforeUnlessFused) $ S.toList fusibleE'
 
     -- if (w,b,r) is fused, then d_wb == d_br
     fusionDirectionConstraints = map (\(w,b,r) -> FusionDirection w b r) $ S.toList fusibleE

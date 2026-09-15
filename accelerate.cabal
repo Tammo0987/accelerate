@@ -466,6 +466,7 @@ library
         -- Data.Array.Accelerate.Trafo.Partitioning.ILP.HiGHS
         Data.Array.Accelerate.Trafo.Partitioning.ILP.MIP
         Data.Array.Accelerate.Trafo.Partitioning.ILP.NameGeneration
+        Data.Array.Accelerate.Trafo.Partitioning.ILP.Presolve
         Data.Array.Accelerate.Trafo.Partitioning.ILP.Solver
         Data.Array.Accelerate.Trafo.Partitioning.ILP.Var
         Data.Array.Accelerate.Trafo.Partitioning.Stream
