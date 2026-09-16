@@ -724,13 +724,13 @@ instance NFData' op => NFData (OperationAcc op env a) where
   rnf (Unit var)                    = rnfVar rnfScalarType var
   rnf (Acond cond true false)       = rnfVar rnfScalarType cond `seq` rnf true `seq` rnf false
   rnf (Awhile us cond step initial) = rnfTupR rnfUniqueness us `seq` rnf cond `seq` rnf step `seq` rnfGroundVars initial
-  rnf (Aassert _ cond)              = rnfOpenExp cond
+  rnf (Aassert msg cond)            = rnf msg `seq` rnfOpenExp cond
   rnf (Aassume cond)                = rnfOpenExp cond
-  rnf (Atrace _ t)                  = rnfTupR rnf t
+  rnf (Atrace msg t)                = rnf msg `seq` rnf' t
   rnf (Fence set a)                 = IdxSet.rnfIdxSet set `seq` rnf a
 
-instance NFData (ArrayDescriptor env a) where
-  rnf (ArrayDescriptor shr sh buffers) = rnfShapeR shr `seq` rnfGroundVars sh `seq` rnfGroundVars buffers
+instance NFData' (ArrayDescriptor env) where
+  rnf' (ArrayDescriptor shr sh buffers) = rnfShapeR shr `seq` rnfGroundVars sh `seq` rnfGroundVars buffers
 
 instance NFData' op => NFData (OperationAfun op env a) where
   rnf (Abody a) = rnf a
@@ -740,9 +740,8 @@ instance NFData' arg => NFData' (PreArgs arg) where
   rnf' ArgsNil = ()
   rnf' (a :>: args) = rnf' a `seq` rnf' args
 
--- Orphan, but because we need NFData' this is a safe place to write it
-instance (NFData' s) => NFData (TupR s a) where
-  rnf = rnfTupR rnf'
+instance (NFData' s) => NFData' (TupR s) where
+  rnf' = rnfTupR rnf'
 
 
 data GroundRWithUniqueness t where

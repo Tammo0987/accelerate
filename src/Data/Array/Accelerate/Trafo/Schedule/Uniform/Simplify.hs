@@ -692,10 +692,7 @@ downgradeAwhileFun signalIdx (BuildLam lhsInput (BuildLam lhsBool (BuildLam lhsO
         $ weaken' kOutput f
       LeftHandSideWildcard _ ->
         internalError "Infinite awhile loop: condition of the loop never returns"
-      -- TODO WALL: REDUNDANT PATTERN MATCH
-      --LeftHandSideWildcard (TupRsingle tp) -> pairImpossible tp
-      LeftHandSideSingle{} ->
-        error "TODO WALL: NON-EXHAUSTIVE PATTERN MATCH"
+      LeftHandSideSingle tp -> pairImpossible tp
   where
     lhsSnd :: BLeftHandSide ((), b) e1 e2 -> BLeftHandSide b e1 e2
     lhsSnd (LeftHandSidePair LeftHandSideWildcard{} l) = l

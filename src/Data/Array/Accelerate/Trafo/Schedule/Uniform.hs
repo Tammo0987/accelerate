@@ -1125,8 +1125,8 @@ rnfEffect (Exec md kernel args)   = rnf' md `seq` rnf' kernel `seq` rnfSArgs arg
 rnfEffect (SignalAwait signals)   = rnf signals
 rnfEffect (SignalResolve signals) = rnf signals
 rnfEffect (RefWrite ref value)    = rnfBaseVar ref `seq` rnfBaseVar value
-rnfEffect (Aassert _ cond)        = rnfOpenExp cond
-rnfEffect Atrace{}                = error "TODO WALL: NON-EXHAUSTIVE PATTERN MATCH"
+rnfEffect (Aassert msg cond)      = rnf msg `seq` rnfOpenExp cond
+rnfEffect (Atrace msg desc)       = rnf msg `seq` rnf' desc
 
 rnfBaseVar :: BaseVar env t -> ()
 rnfBaseVar = rnfVar rnfBaseR

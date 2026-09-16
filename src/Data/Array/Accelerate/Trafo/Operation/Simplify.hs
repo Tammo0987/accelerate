@@ -512,13 +512,13 @@ invalidate indices infoEnv@(InfoEnv env1) =
     dropCopyOf :: env' :> env -> Info env' t -> Info env' t
     dropCopyOf _ (InfoBuffer unitScalar _ c)
       = InfoBuffer unitScalar Nothing c
-    dropCopyOf _ _ = error "TODO WALL: NON-EXHAUSTIVE PATTERN MATCH"
+    dropCopyOf _ _ = internalError "Expected Buffer"
 
     -- Forgets that this buffer is copied to buffers in indices'
     dropCopyTo :: env' :> env -> Info env' t -> Info env' t
     dropCopyTo k (InfoBuffer unitScalar copyOf copiedTo')
       = InfoBuffer unitScalar copyOf $ filter (\idx -> not $ k >:> idx `IdxSet.member` indices) copiedTo'
-    dropCopyTo _ _ = error "TODO WALL: NON-EXHAUSTIVE PATTERN MATCH"
+    dropCopyTo _ _ = internalError "Expected Buffer"
 
 outputArrays :: Args env args -> IdxSet env
 outputArrays = IdxSet.fromList . mapMaybe f . argsVars
