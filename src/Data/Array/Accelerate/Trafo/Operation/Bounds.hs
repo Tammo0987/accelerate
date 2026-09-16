@@ -272,8 +272,7 @@ boundsOptimizeExp env@(BoundsEnv _ _ zero _) expr = detectConst env $ case expr 
         ( TupRsingle $ boundVar zero ix', expr )
 
     Index (Var (GroundRscalar tp) _) -> bufferImpossible tp
-    Index v@(Var (GroundRbuffer _) ix)
-      | _ix' <- accIdx env ix ->
+    Index v@(Var (GroundRbuffer _) ix) ->
         -- This value has the same bounds as the buffer.
         ( TupRsingle $ castTermBound $ boundOfAcc env ix
         , ArrayInstr (Index v) $ travE arg
