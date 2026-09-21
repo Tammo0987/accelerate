@@ -7,8 +7,12 @@ import Data.Array.Accelerate.Trafo.Partitioning.ILP.ConstraintLanguage (Constrai
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Labels (InplacePath, ReadEdge, WriteEdge, nodeId)
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.LinearConstraint (LinearConstraint, int, var, (.==.))
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Var (Var (..))
-import qualified Data.Map as M
+import Data.Graph.Inductive.Graph qualified as Graph
+import Data.Graph.Inductive.PatriciaTree (Gr)
+import Data.Graph.Inductive.Query.DFS qualified as DFS
+import Data.Map qualified as M
 import Data.Maybe (mapMaybe)
+import Data.Set qualified as S
 import Lens.Micro ((^.))
 
 data Value = Const Int | Alias Var deriving (Eq, Show)
@@ -20,7 +24,7 @@ data Problem = Problem
     substitution :: Substitution
   }
 
-data Infeasible = Conflict Var Value Value | Violated Constraint
+data Infeasible = Conflict Var Value Value | Violated Constraint | CyclicClusterOrder [Var]
 
 newtype Substitution = Substitution (M.Map Var Value) deriving (Show)
 
@@ -165,7 +169,79 @@ size (Substitution m) = M.size m
 
 -- | Presolve a set of constraints, returning either an infeasibility or a simplified problem.
 presolve :: [Constraint] -> Either Infeasible Problem
-presolve cs = apply [] (Problem cs emptySubstitution)
+presolve cs = do
+  initial <- apply [] (Problem cs emptySubstitution)
+  runPasses defaultPasses initial
+
+runPasses :: [Pass] -> Pass
+runPasses passes problem = foldM (flip ($)) problem passes
+
+defaultPasses :: [Pass]
+defaultPasses = [orderReachability]
+
+type Pass = Problem -> Either Infeasible Problem
+
+type VertexMap = M.Map Var Graph.Node
+
+data OrderGraph = OrderGraph
+  { orderGraph :: Gr Var (),
+    orderVertices :: VertexMap
+  }
+
+strictOrderEdges :: Problem -> [(Var, Var, Constraint)]
+strictOrderEdges Problem {constraints = cs, substitution = s} =
+  mapMaybe edge cs
+  where
+    edge c@(ClusterBefore i j) =
+      case (lookupVar (Pi i) s, lookupVar (Pi j) s) of
+        (Alias from, Alias to) -> Just (from, to, c)
+        _ -> Nothing
+    edge _ = Nothing
+
+buildOrderGraph :: [(Var, Var, Constraint)] -> OrderGraph
+buildOrderGraph edges =
+  OrderGraph
+    { orderGraph = Graph.mkGraph labeledNodes labeledEdges,
+      orderVertices = vertexMap
+    }
+  where
+    variables = S.toList $ S.fromList [v | (from, to, _) <- edges, v <- [from, to]]
+
+    vertexMap = M.fromList $ zip variables [0 ..]
+
+    labeledNodes = [(vertex, variable) | (variable, vertex) <- M.toList vertexMap]
+
+    labeledEdges = [(vertexMap M.! from, vertexMap M.! to, ()) | (from, to, _) <- edges]
+
+canReach :: OrderGraph -> Var -> Var -> Bool
+canReach (OrderGraph g vMap) from to =
+  case (M.lookup from vMap, M.lookup to vMap) of
+    (Just fromVertex, Just toVertex) -> toVertex `elem` DFS.reachable fromVertex g
+    _ -> False
+
+orderReachability :: Pass
+orderReachability p@Problem {constraints = cs, substitution = s} = do
+  checkAcyclic graph
+  (remaining, assignments) <- foldM inspect ([], []) cs
+  apply assignments $ p {constraints = reverse remaining}
+  where
+    graph = buildOrderGraph $ strictOrderEdges p
+
+    inspect (remaining, assignments) c@(ClusterBeforeUnlessFused i j) =
+      case (lookupVar (Pi i) s, lookupVar (Pi j) s) of
+        (Alias from, Alias to)
+          -- A strict path from i to j exists, they can't be fused.
+          | canReach graph from to -> Right (remaining, (Fused i j, Const 1) : assignments)
+          -- The graph proves pi_j < pi_i, which constradicts the constraint (pi_i <= pi_j).
+          | canReach graph to from -> Left (Violated c)
+        _ -> Right (c : remaining, assignments)
+    inspect (remaining, assignments) c = Right (c : remaining, assignments)
+
+checkAcyclic :: OrderGraph -> Either Infeasible ()
+checkAcyclic OrderGraph {orderGraph = g} =
+  case filter ((> 1) . length) (DFS.scc g) of
+    [] -> Right ()
+    component : _ -> Left $ CyclicClusterOrder $ mapMaybe (Graph.lab g) component
 
 -- | Convert a substitution to a set of linear constraints.
 -- This could be optimized later by actually removing variables from the constraints instead of just adding equality constraints.

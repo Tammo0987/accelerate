@@ -348,6 +348,7 @@ library
         , directory                     >= 1.0
         , double-conversion             >= 2.0
         , exceptions                    >= 0.6
+        , fgl
         , filepath                      >= 1.0
         , formatting                    >= 7.0
         , ghc-prim
