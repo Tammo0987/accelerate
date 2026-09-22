@@ -22,7 +22,15 @@ import Lens.Micro.Extras ( view )
 import Data.Maybe (fromJust,  mapMaybe )
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.ConstraintLanguage (Constraint(..))
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Lower (LowerEnv(..), lowerAll)
-import Data.Array.Accelerate.Trafo.Partitioning.ILP.Presolve (presolve, Problem(Problem), substitutionConstraints, emptySubstitution)
+import Data.Array.Accelerate.Trafo.Partitioning.ILP.Presolve
+  ( Problem (Problem),
+    emptySubstitution,
+    presolve,
+    substituteBounds,
+    substituteExpression,
+    substituteLinearConstraint,
+    substitutionConstraints
+  )
 import Data.Either (fromRight)
 
 data Objective
@@ -46,6 +54,7 @@ data Objective
 data ILPStages = ILPStages
   { initialConstraints :: [Constraint]
   , lowerProblem :: Problem -> ILP
+  , lowerProblemWithSubstitution :: Problem -> ILP
   }
 
 -- Makes the ILP. Note that this function 'appears' to ignore the Node levels completely!
@@ -59,7 +68,7 @@ makeILPWithPresolve :: forall op . MakesILP op => Bool -> Objective -> FusionILP
 makeILPWithPresolve usePresolve obj input =
   finish problem
   where
-    ILPStages allConstraints finish = makeILPStages obj input
+    ILPStages allConstraints finish _ = makeILPStages obj input
 
     problem
       | usePresolve = fromRight (error "presolve: ILP is infeasible") $ presolve allConstraints
@@ -67,7 +76,7 @@ makeILPWithPresolve usePresolve obj input =
 
 makeILPStages :: forall op. MakesILP op => Objective -> FusionILP op -> ILPStages
 makeILPStages obj (FusionILP graph constraints bounds) =
-  ILPStages allConstraints finish
+  ILPStages allConstraints (finish False) (finish True)
   where
     allConstraints =
      finalize @op graph
@@ -75,7 +84,7 @@ makeILPStages obj (FusionILP graph constraints bounds) =
        <> inPlaceConstraints
        <> constraints
 
-    finish (Problem remaining subst) =
+    finish replaceVariables (Problem remaining subst) =
       let (loweredConstraints, loweredBounds, loweredCost) = lowerAll (LowerEnv n) remaining
 
           graphBounds = fusionBounds <> inPlaceBounds
@@ -83,14 +92,28 @@ makeILPStages obj (FusionILP graph constraints bounds) =
           fusionBounds = piB <> fusedB <> manifestB <> loweredBounds
 
           inPlaceBounds
-           | enableIU = pimaxB <> inplaceB
-           | otherwise = mempty
-      in ILP
-        minMax
-        (objective loweredCost)
-        (loweredConstraints <> substitutionConstraints subst)
-        (graphBounds <> bounds)
-        (Constants n m)
+            | enableIU = pimaxB <> inplaceB
+            | otherwise = mempty
+
+          objective' = objective loweredCost
+          constraints' = loweredConstraints <> substitutionConstraints subst
+          bounds' = graphBounds <> bounds
+      in
+        if replaceVariables
+          then
+            ILP
+              minMax
+              (substituteExpression subst objective')
+              (substituteLinearConstraint subst loweredConstraints)
+              (substituteBounds subst bounds')
+              (Constants n m)
+          else
+            ILP
+              minMax
+              objective'
+              constraints'
+              bounds'
+              (Constants n m)
 
     fusionConstraints = strictAcyclicConstraints
         <> infusibleConstraints

@@ -1,11 +1,27 @@
 {-# LANGUAGE MultiWayIf #-}
 
-module Data.Array.Accelerate.Trafo.Partitioning.ILP.Presolve (presolve, Problem (..), substitutionConstraints, emptySubstitution) where
+module Data.Array.Accelerate.Trafo.Partitioning.ILP.Presolve
+  ( presolve,
+    Problem (..),
+    substitutionConstraints,
+    substituteExpression,
+    substituteLinearConstraint,
+    substituteBounds,
+    emptySubstitution
+  )
+where
 
 import Control.Monad (foldM)
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.ConstraintLanguage (Constraint (..))
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Labels (InplacePath, ReadEdge, WriteEdge, nodeId)
-import Data.Array.Accelerate.Trafo.Partitioning.ILP.LinearConstraint (LinearConstraint, int, var, (.==.))
+import Data.Array.Accelerate.Trafo.Partitioning.ILP.LinearConstraint
+  ( Bounds (..),
+    Expression (..),
+    LinearConstraint (..),
+    int,
+    var,
+    (.==.)
+  )
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Var (Var (..))
 import Data.Graph.Inductive.Graph qualified as Graph
 import Data.Graph.Inductive.PatriciaTree (Gr)
@@ -250,3 +266,37 @@ substitutionConstraints (Substitution m) = foldMap row $ M.toList m
   where
     row (v, Const c) = var v .==. int c
     row (v, Alias v') = var v .==. var v'
+
+-- | Replace variables in a linear expression with their resolved values.
+substituteExpression :: Substitution -> Expression -> Expression
+substituteExpression s expression = case expression of
+  Constant n -> Constant n
+  a :+ b -> substituteExpression s a :+ substituteExpression s b
+  coefficient :* v -> case lookupVar v s of
+    Const value -> Constant $ coefficient * fromIntegral value
+    Alias representative -> coefficient :* representative
+
+-- | Replace variables throughout a set of linear constraints.
+substituteLinearConstraint :: Substitution -> LinearConstraint -> LinearConstraint
+substituteLinearConstraint s constraint = case constraint of
+  a :>= b -> substituteExpression s a :>= substituteExpression s b
+  a :<= b -> substituteExpression s a :<= substituteExpression s b
+  a :== b -> substituteExpression s a :== substituteExpression s b
+  a :&& b -> substituteLinearConstraint s a :&& substituteLinearConstraint s b
+  TrueConstraint -> TrueConstraint
+
+-- | Transfer bounds to representative variables and remove bounds for constants.
+substituteBounds :: Substitution -> Bounds -> Bounds
+substituteBounds s bounds = case bounds of
+  Binary v -> replaceBound v (`elem` [0, 1]) Binary
+  LowerUpper lower v upper -> replaceBound v (\value -> lower <= value && value <= upper) (\representative -> LowerUpper lower representative upper)
+  Lower lower v -> replaceBound v (lower <=) (Lower lower)
+  Upper v upper -> replaceBound v (<= upper) (`Upper` upper)
+  a :<> b -> substituteBounds s a <> substituteBounds s b
+  NoBounds -> NoBounds
+  where
+    replaceBound v valid rebuild = case lookupVar v s of
+      Alias representative -> rebuild representative
+      Const value
+        | valid value -> NoBounds
+        | otherwise -> error $ "presolve substitution violates bound for " <> show v <> ": " <> show value
