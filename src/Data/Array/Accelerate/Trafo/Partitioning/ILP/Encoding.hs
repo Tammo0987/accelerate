@@ -43,6 +43,11 @@ data Objective
   | MemoryUsage'         -- ^ Version of `MemoryUsage` that prioritizes fusion when two solutions would otherwise have the same costs.
   deriving (Show, Bounded, Enum, Eq, Ord)
 
+data ILPStages = ILPStages
+  { initialConstraints :: [Constraint]
+  , lowerProblem :: Problem -> ILP
+  }
+
 -- Makes the ILP. Note that this function 'appears' to ignore the Node levels completely!
 -- We could add some assertions, but if all the input is well-formed (no labels, constraints, etc
 -- that reward putting non-siblings in the same cluster) this is fine: We will interpret 'cluster 3'
@@ -50,21 +55,42 @@ data Objective
 makeILP :: forall op. MakesILP op => Objective -> FusionILP op -> ILP
 makeILP = makeILPWithPresolve True
 
-makeILPWithPresolve :: forall op. MakesILP op => Bool -> Objective -> FusionILP op -> ILP
-makeILPWithPresolve usePresolve obj (FusionILP graph constraints bounds) =
-  ILP minMax objFun (loweredConstraints <> substitutionConstraints subst) (graphBounds <> bounds) (Constants n m)
+makeILPWithPresolve :: forall op . MakesILP op => Bool -> Objective -> FusionILP op -> ILP
+makeILPWithPresolve usePresolve obj input =
+  finish problem
   where
-    allConstraints = finalize @op graph <> fusionConstraints <> inPlaceConstraints <> constraints
+    ILPStages allConstraints finish = makeILPStages obj input
 
-    presolved
-      | usePresolve = presolve allConstraints
-      | otherwise = Right $ Problem allConstraints emptySubstitution
-    Problem remaining subst = fromRight (error "presolve: ILP is infeasible") presolved
+    problem
+      | usePresolve = fromRight (error "presolve: ILP is infeasible") $ presolve allConstraints
+      | otherwise = Problem allConstraints emptySubstitution
 
-    lowered :: (LinearConstraint, Bounds, Expression)
-    lowered = lowerAll (LowerEnv n) remaining
+makeILPStages :: forall op. MakesILP op => Objective -> FusionILP op -> ILPStages
+makeILPStages obj (FusionILP graph constraints bounds) =
+  ILPStages allConstraints finish
+  where
+    allConstraints =
+     finalize @op graph
+       <> fusionConstraints
+       <> inPlaceConstraints
+       <> constraints
 
-    (loweredConstraints, loweredBounds, loweredCost) = lowered
+    finish (Problem remaining subst) =
+      let (loweredConstraints, loweredBounds, loweredCost) = lowerAll (LowerEnv n) remaining
+
+          graphBounds = fusionBounds <> inPlaceBounds
+
+          fusionBounds = piB <> fusedB <> manifestB <> loweredBounds
+
+          inPlaceBounds
+           | enableIU = pimaxB <> inplaceB
+           | otherwise = mempty
+      in ILP
+        minMax
+        (objective loweredCost)
+        (loweredConstraints <> substitutionConstraints subst)
+        (graphBounds <> bounds)
+        (Constants n m)
 
     fusionConstraints = strictAcyclicConstraints
         <> infusibleConstraints
@@ -85,12 +111,6 @@ makeILPWithPresolve usePresolve obj (FusionILP graph constraints bounds) =
             <> atMostOneWriterConstraints
             <> readAliveThroughWritersConstraints
         else mempty
-
-    graphBounds = fusionBounds <> inPlaceBounds
-
-    fusionBounds = piB <> fusedB <> manifestB <> loweredBounds
-
-    inPlaceBounds = if enableIU then pimaxB <> inplaceB else mempty
 
     ----------------------------------------------------------------------------
     -- Utils:
@@ -139,14 +159,14 @@ makeILPWithPresolve usePresolve obj (FusionILP graph constraints bounds) =
         | computation <- S.toList compN
         , let consumers = S.toList . S.map (\(_,b,c) -> (b,c)) $ S.filter (\(c,_,_) -> c == computation) fusibleE]
 
-    numberOfReads = loweredCost .+. numberOfUnfusedEdges
+    numberOfReads loweredCost = loweredCost .+. numberOfUnfusedEdges
 
     -- objective function that maximises the number of fused away arrays, and thus minimises the number of array writes
     -- using .-. instead of notB to factor the constants out of the cost function; if we use (1 - manifest l) as elsewhere Gurobi thinks the 1 is a variable name
     numberOfManifestArrays = foldl' (\e b -> e .-. manifest b) (int 0) buffN
 
     -- objective function that minimises the total number of array reads + writes
-    numberOfArrayReadsWrites = numberOfReads .+. numberOfManifestArrays
+    numberOfArrayReadsWrites loweredCost = numberOfReads loweredCost .+. numberOfManifestArrays
 
     -- objective function that minimises the number of clusters only works if the constraint below it is used!
     -- NOTE: this does not work remotely as well as you'd hope, because the ILP outputs clusters that get split afterwards.
@@ -267,20 +287,30 @@ makeILPWithPresolve usePresolve obj (FusionILP graph constraints bounds) =
     --
     -- In the future, maybe we want this to be backend-dependent (add to MakesILP).
     -- Also future: add @IVO's IPU reward here.
-    (enableIU, minMax, objFun) = case obj of
-      NumClusters         -> (False, Minimise, numberOfClusters)
-      ArrayReads          -> (False, Minimise, numberOfReads)
-      ArrayReadsWrites    -> (False, Minimise, numberOfArrayReadsWrites)
-      IntermediateArrays  -> (False, Minimise, numberOfManifestArrays)
-      FusedEdges          -> (False, Minimise, numberOfUnfusedEdges)
-      Everything          -> (False, Minimise, numberOfClusters .+. numberOfArrayReadsWrites) -- arrayreadswrites already indictly includes everything else
-      ArrayReads'         -> (True,  Minimise, (int m .*. numberOfReads)            .+. numberOfNonInplaceUpdates)
-      ArrayReadsWrites'   -> (True,  Minimise, (int m .*. numberOfArrayReadsWrites) .+. numberOfNonInplaceUpdates)
-      IntermediateArrays' -> (True,  Minimise, (int m .*. numberOfManifestArrays)   .+. numberOfNonInplaceUpdates)
-      FusedEdges'         -> (True,  Minimise, (int m .*. numberOfUnfusedEdges)     .+. numberOfNonInplaceUpdates)
-      MemoryUsage         -> (True,  Minimise, numberOfManifestArrays .+. numberOfNonInplaceUpdates)
-      MemoryUsage'        -> (True,  Minimise, (int (m+1) .*. numberOfManifestArrays) .+. (int m .*. numberOfNonInplaceUpdates))  -- We want to prioritise solutions that use fusion, so the weight of fusion is increased by a small factor.
+    enableIU = case obj of
+      ArrayReads' -> True
+      ArrayReadsWrites' -> True
+      IntermediateArrays' -> True
+      FusedEdges' -> True
+      MemoryUsage -> True
+      MemoryUsage' -> True
+      _ -> False
 
+    minMax = Minimise
+
+    objective cost = case obj of
+      NumClusters -> numberOfClusters
+      ArrayReads -> numberOfReads cost
+      ArrayReadsWrites -> numberOfArrayReadsWrites cost
+      IntermediateArrays -> numberOfManifestArrays
+      FusedEdges -> numberOfUnfusedEdges
+      Everything -> numberOfClusters .+. numberOfArrayReadsWrites cost
+      ArrayReads' -> (int m .*. numberOfReads cost) .+. numberOfNonInplaceUpdates
+      ArrayReadsWrites' -> (int m .*. numberOfArrayReadsWrites cost) .+. numberOfNonInplaceUpdates
+      IntermediateArrays' -> (int m .*. numberOfManifestArrays) .+. numberOfNonInplaceUpdates
+      FusedEdges' -> (int m .*. numberOfUnfusedEdges) .+. numberOfNonInplaceUpdates
+      MemoryUsage -> numberOfManifestArrays .+. numberOfNonInplaceUpdates
+      MemoryUsage' -> (int (m + 1) .*. numberOfManifestArrays) .+. (int m .*. numberOfNonInplaceUpdates)
 
 -- | Extract the read directions from the ILP solution.
 interpretReadDirs :: Solution -> M.Map ReadEdge Int
