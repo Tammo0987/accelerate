@@ -2,12 +2,17 @@
 
 module Data.Array.Accelerate.Trafo.Partitioning.ILP.Presolve
   ( presolve,
+    ResolvedValue (..),
     Problem (..),
+    resolveVar,
+    knownValue,
     substitutionConstraints,
     substituteExpression,
     substituteLinearConstraint,
     substituteBounds,
-    emptySubstitution
+    emptySubstitution,
+    assume,
+    assumeAll,
   )
 where
 
@@ -20,7 +25,7 @@ import Data.Array.Accelerate.Trafo.Partitioning.ILP.LinearConstraint
     LinearConstraint (..),
     int,
     var,
-    (.==.)
+    (.==.),
   )
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Var (Var (..))
 import Data.Graph.Inductive.Graph qualified as Graph
@@ -44,6 +49,11 @@ data Infeasible = Conflict Var Value Value | Violated Constraint | CyclicCluster
 
 newtype Substitution = Substitution (M.Map Var Value) deriving (Show)
 
+data ResolvedValue
+  = Known Int
+  | Representative Var
+  deriving (Eq, Show)
+
 emptySubstitution :: Substitution
 emptySubstitution = Substitution M.empty
 
@@ -53,6 +63,17 @@ lookupVar v s@(Substitution m) = case M.lookup v m of
   Nothing -> Alias v
   Just (Alias v') -> lookupVar v' s
   Just c -> c
+
+resolveVar :: Problem -> Var -> ResolvedValue
+resolveVar Problem {substitution = s} variable =
+  case lookupVar variable s of
+    Const c -> Known c
+    Alias representative -> Representative representative
+
+knownValue :: Problem -> Var -> Maybe Int
+knownValue problem variable = case resolveVar problem variable of
+  Known c -> Just c
+  Representative _ -> Nothing
 
 -- | Record an assignment to the substitution. Fails if it contradicts an existing assignment.
 assign :: Assignment -> Substitution -> Either Infeasible Substitution
@@ -187,10 +208,27 @@ size (Substitution m) = M.size m
 presolve :: [Constraint] -> Either Infeasible Problem
 presolve cs = do
   initial <- apply [] (Problem cs emptySubstitution)
-  runPasses defaultPasses initial
+  runPassesToFixpoint defaultPasses initial
+
+assume :: Var -> Int -> Problem -> Either Infeasible Problem
+assume v value = assumeAll [(v, value)]
+
+assumeAll :: [(Var, Int)] -> Problem -> Either Infeasible Problem
+assumeAll assignments problem = do
+  assumed <- apply [(variable, Const value) | (variable, value) <- assignments] problem
+  runPassesToFixpoint defaultPasses assumed
 
 runPasses :: [Pass] -> Pass
 runPasses passes problem = foldM (flip ($)) problem passes
+
+runPassesToFixpoint :: [Pass] -> Pass
+runPassesToFixpoint passes problem = do
+  next <- runPasses passes problem
+  if progress next == progress problem
+    then Right next
+    else runPassesToFixpoint passes next
+  where
+    progress current = (size $ substitution current, length $ constraints current)
 
 defaultPasses :: [Pass]
 defaultPasses = [orderReachability]
@@ -250,6 +288,11 @@ orderReachability p@Problem {constraints = cs, substitution = s} = do
           | canReach graph from to -> Right (remaining, (Fused i j, Const 1) : assignments)
           -- The graph proves pi_j < pi_i, which constradicts the constraint (pi_i <= pi_j).
           | canReach graph to from -> Left (Violated c)
+        _ -> Right (c : remaining, assignments)
+    inspect (remaining, assignments) c@(AcrossClusterSame path@((_, c1), (c2, _))) =
+      case (lookupVar (Pi c1) s, lookupVar (Pi c2) s) of
+        (Alias from, Alias to)
+          | from /= to, canReach graph from to || canReach graph to from -> Right (remaining, (inPlaceVar path, Const 1) : assignments)
         _ -> Right (c : remaining, assignments)
     inspect (remaining, assignments) c = Right (c : remaining, assignments)
 
