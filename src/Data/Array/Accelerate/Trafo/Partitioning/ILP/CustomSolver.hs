@@ -2,6 +2,7 @@ module Data.Array.Accelerate.Trafo.Partitioning.ILP.CustomSolver
   ( FeasibleSolution (..),
     CompletionError (..),
     solveFeasible,
+    solveOptimal,
   )
 where
 
@@ -9,9 +10,9 @@ import Data.Array.Accelerate.Trafo.Partitioning.ILP.Branching (greedyFusionLeaf)
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.ConstraintLanguage
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Labels (InplacePath)
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.LinearConstraint (Constants (..), Expression (..), Number (..))
-import Data.Array.Accelerate.Trafo.Partitioning.ILP.Presolve (Problem (..), ResolvedValue (..), assumeAll, knownValue, resolveVar)
+import Data.Array.Accelerate.Trafo.Partitioning.ILP.Presolve (Problem (..), ResolvedValue (..), assume, assumeAll, knownValue, resolveVar)
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Solver (ILP (..), Solution)
-import Data.Array.Accelerate.Trafo.Partitioning.ILP.Var (Var (InFoldSize, InPlace, Other, OutFoldSize, Pi, PiMax, ReadDir, WriteDir))
+import Data.Array.Accelerate.Trafo.Partitioning.ILP.Var (Var (..))
 import Data.Map qualified as M
 import Data.Maybe (catMaybes)
 import Data.Set qualified as S
@@ -24,6 +25,7 @@ data FeasibleSolution = FeasibleSolution
 data CompletionError
   = NoGreedyFusionPath
   | CannotDisableInPlace
+  | NoFeasibleSolution
   | CyclicClusterPositions
   | InvalidFixedClusterOrder
   | CannotAssignClusterPositions
@@ -213,11 +215,91 @@ constantExpression constants expression =
 solveFeasible :: (Problem -> ILP) -> S.Set Var -> Problem -> Either CompletionError FeasibleSolution
 solveFeasible lowerProblem originalVariables initialProblem = do
   withoutInPlace <- chooseFusionWithoutInPlace originalVariables initialProblem
-  withClusters <- assignClusterPositions originalVariables withoutInPlace
-  let ILP _ _ _ _ constants = lowerProblem withClusters
-  withPiMax <- assignPiMax constants originalVariables withClusters
+  completeSolution lowerProblem originalVariables withoutInPlace
+
+completeSolution :: (Problem -> ILP) -> S.Set Var -> Problem -> Either CompletionError FeasibleSolution
+completeSolution lowerProblem originalVariables problem = do
+  withClusters <- assignClusterPositions originalVariables problem
+  completeClusteredSolution lowerProblem originalVariables withClusters
+
+completeClusteredSolution :: (Problem -> ILP) -> S.Set Var -> Problem -> Either CompletionError FeasibleSolution
+completeClusteredSolution lowerProblem originalVariables problem = do
+  let ILP _ _ _ _ constants = lowerProblem problem
+  withPiMax <- assignPiMax constants originalVariables problem
   withDirections <- assignDirections originalVariables withPiMax
   completed <- assignFoldSizes originalVariables withDirections
   completedSolution <- extractSolution originalVariables completed
-  cost <- evaluateCost lowerProblem completed
-  Right $ FeasibleSolution completedSolution cost
+  solutionCost <- evaluateCost lowerProblem completed
+  Right $ FeasibleSolution completedSolution solutionCost
+
+cheaperSolution :: Maybe FeasibleSolution -> Maybe FeasibleSolution -> Maybe FeasibleSolution
+cheaperSolution Nothing right = right
+cheaperSolution left Nothing = left
+cheaperSolution left@(Just leftSolution) right@(Just rightSolution)
+  | cost leftSolution <= cost rightSolution = left
+  | otherwise = right
+
+bestOf :: [Problem] -> (Problem -> Either CompletionError (Maybe FeasibleSolution)) -> Either CompletionError (Maybe FeasibleSolution)
+bestOf [] _ =
+  Right Nothing
+bestOf (problem : problems) search = do
+  first <- search problem
+  rest <- bestOf problems search
+  Right $ cheaperSolution first rest
+
+fusionCandidates :: Problem -> [Var]
+fusionCandidates problem =
+  S.toList . S.fromList $ [representative | ClusterBeforeUnlessFused from to <- constraints problem, Representative representative <- [resolveVar problem (Fused from to)]]
+
+nextDecision :: Problem -> Maybe Var
+nextDecision problem = case fusionCandidates problem of
+  candidate : _ -> Just candidate
+  [] -> Nothing
+
+branchChildren :: Var -> Problem -> [Problem]
+branchChildren variable problem =
+  [child | value <- [0, 1], Right child <- [assume variable value problem]]
+
+inPlaceDecisions :: S.Set Var -> Problem -> [Var]
+inPlaceDecisions originalVariables problem =
+  S.toList . S.fromList $ [representative | variable@InPlace {} <- S.toList originalVariables, Representative representative <- [resolveVar problem variable]]
+
+solveOptimal :: (Problem -> ILP) -> S.Set Var -> Problem -> Either CompletionError FeasibleSolution
+solveOptimal lowerProblem originalVariables initialProblem = do
+  result <- searchFusion initialProblem
+  case result of
+    Nothing -> Left NoFeasibleSolution
+    Just feasibleSolution -> Right feasibleSolution
+  where
+    searchFusion :: Problem -> Either CompletionError (Maybe FeasibleSolution)
+    searchFusion problem =
+      case nextDecision problem of
+        Just fusionDecision ->
+          bestOf
+            (branchChildren fusionDecision problem)
+            searchFusion
+        Nothing -> do
+          withClusters <- assignClusterPositions originalVariables problem
+          searchInPlace withClusters
+
+    searchInPlace :: Problem -> Either CompletionError (Maybe FeasibleSolution)
+    searchInPlace problem =
+      case inPlaceDecisions originalVariables problem of
+        inPlaceDecision : _ ->
+          bestOf
+            (branchChildren inPlaceDecision problem)
+            searchInPlace
+        [] ->
+          completeLeaf problem
+
+    completeLeaf :: Problem -> Either CompletionError (Maybe FeasibleSolution)
+    completeLeaf problem =
+      case completeClusteredSolution lowerProblem originalVariables problem of
+        Right feasibleSolution ->
+          Right $ Just feasibleSolution
+        Left PiMaxExceedsBound ->
+          Right Nothing
+        Left CannotAssignPiMax ->
+          Right Nothing
+        Left completionError ->
+          Left completionError
