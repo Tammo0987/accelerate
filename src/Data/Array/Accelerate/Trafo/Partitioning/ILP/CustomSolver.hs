@@ -1,7 +1,7 @@
 module Data.Array.Accelerate.Trafo.Partitioning.ILP.CustomSolver
   ( FeasibleSolution (..),
     CompletionError (..),
-    solveFeasible
+    solveFeasible,
   )
 where
 
@@ -123,10 +123,12 @@ assignPiMax constants originalVariables problem = do
   where
     assignment buffer = do
       readerBounds <- traverse readerBound [(readEdge, writers) | ReadAliveThroughWriters readEdge@(buffer', _) writers <- constraints problem, buffer' == buffer]
+      inPlaceUpperBounds <- traverse inPlaceUpperBound [path | InPlaceCluster path@((buffer', _), _) <- constraints problem, buffer' == buffer]
       let noInPlace = any isNoInPlace (constraints problem)
           lowerBound = maximum (0 : readerBounds <> [nComps constants | noInPlace])
+          upperBound = minimum (nComps constants + 5 : inPlaceUpperBounds)
 
-      if lowerBound <= nComps constants + 5
+      if lowerBound <= upperBound
         then Right (PiMax buffer, lowerBound)
         else Left PiMaxExceedsBound
       where
@@ -139,6 +141,12 @@ assignPiMax constants originalVariables problem = do
       inplaceValues <- traverse (\writer -> requireValue problem (inPlaceVariable (readEdge, writer))) writers
 
       Right $ readerPosition + 1 - sum [1 - value | value <- inplaceValues]
+
+    inPlaceUpperBound path@(_, (writer, _)) = do
+      inPlace <- requireValue problem (inPlaceVariable path)
+      if inPlace == 0
+        then requireValue problem (Pi writer)
+        else Right $ nComps constants + 5
 
 assignDirections :: S.Set Var -> Problem -> Either CompletionError Problem
 assignDirections originalVariables problem = do
