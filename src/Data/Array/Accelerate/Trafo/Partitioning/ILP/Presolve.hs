@@ -223,7 +223,7 @@ runPasses passes problem = foldM (flip ($)) problem passes
 
 runPassesToFixpoint :: [Pass] -> Pass
 runPassesToFixpoint passes problem = do
-  next <- runPasses passes problem
+  next <- runPasses passes problem >>= apply []
   if progress next == progress problem
     then Right next
     else runPassesToFixpoint passes next
@@ -277,7 +277,8 @@ orderReachability :: Pass
 orderReachability p@Problem {constraints = cs, substitution = s} = do
   checkAcyclic graph
   (remaining, assignments) <- foldM inspect ([], []) cs
-  apply assignments $ p {constraints = reverse remaining}
+  s' <- assignAll s assignments
+  Right $ p {constraints = reverse remaining, substitution = s'}
   where
     graph = buildOrderGraph $ strictOrderEdges p
 
