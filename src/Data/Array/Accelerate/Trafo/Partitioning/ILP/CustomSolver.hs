@@ -13,8 +13,10 @@ import Data.Array.Accelerate.Trafo.Partitioning.ILP.LinearConstraint (Constants 
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Presolve (Problem (..), ResolvedValue (..), assume, assumeAll, knownValue, resolveVar)
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Solver (ILP (..), Solution)
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Var (Var (..))
+import Data.List (minimumBy)
 import Data.Map qualified as M
 import Data.Maybe (catMaybes)
+import Data.Ord (Down (..), comparing)
 import Data.Set qualified as S
 
 data FeasibleSolution = FeasibleSolution
@@ -252,9 +254,7 @@ fusionCandidates problem =
   S.toList . S.fromList $ [representative | ClusterBeforeUnlessFused from to <- constraints problem, Representative representative <- [resolveVar problem (Fused from to)]]
 
 nextDecision :: Problem -> Maybe Var
-nextDecision problem = case fusionCandidates problem of
-  candidate : _ -> Just candidate
-  [] -> Nothing
+nextDecision = chooseByOccurrence
 
 branchChildren :: Var -> Problem -> [Problem]
 branchChildren variable problem =
@@ -263,6 +263,31 @@ branchChildren variable problem =
 inPlaceDecisions :: S.Set Var -> Problem -> [Var]
 inPlaceDecisions originalVariables problem =
   S.toList . S.fromList $ [representative | variable@InPlace {} <- S.toList originalVariables, Representative representative <- [resolveVar problem variable]]
+
+fusionVariables :: Constraint -> S.Set Var
+fusionVariables constraint = case constraint of
+  ClusterBeforeUnlessFused from to -> S.singleton $ Fused from to
+  NotManifestIfAllFused _ pairs -> S.fromList [Fused from to | (from, to) <- pairs]
+  FusionDirection writer _ reader -> S.singleton $ Fused writer reader
+  SameFoldSizeIfFused writer consumer -> S.singleton $ Fused writer consumer
+  Unfused from to -> S.singleton $ Fused from to
+  _ -> S.empty
+
+fusionOccurrenceCounts :: Problem -> M.Map Var Int
+fusionOccurrenceCounts problem =
+  M.fromListWith (+) [(representative, 1) | constraint <- constraints problem, variable <- S.toList $ fusionVariables constraint, Representative representative <- [resolveVar problem variable]]
+
+chooseByOccurrence :: Problem -> Maybe Var
+chooseByOccurrence problem =
+  case fusionCandidates problem of
+    [] -> Nothing
+    candidates ->
+      Just $
+        minimumBy
+          (comparing $ \candidate -> (Down $ M.findWithDefault 0 candidate counts, candidate))
+          candidates
+  where
+    counts = fusionOccurrenceCounts problem
 
 solveOptimal :: (Problem -> ILP) -> S.Set Var -> Problem -> Either CompletionError FeasibleSolution
 solveOptimal lowerProblem originalVariables initialProblem = do
