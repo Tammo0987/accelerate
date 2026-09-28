@@ -234,21 +234,6 @@ completeClusteredSolution lowerProblem originalVariables problem = do
   solutionCost <- evaluateCost lowerProblem completed
   Right $ FeasibleSolution completedSolution solutionCost
 
-cheaperSolution :: Maybe FeasibleSolution -> Maybe FeasibleSolution -> Maybe FeasibleSolution
-cheaperSolution Nothing right = right
-cheaperSolution left Nothing = left
-cheaperSolution left@(Just leftSolution) right@(Just rightSolution)
-  | cost leftSolution <= cost rightSolution = left
-  | otherwise = right
-
-bestOf :: [Problem] -> (Problem -> Either CompletionError (Maybe FeasibleSolution)) -> Either CompletionError (Maybe FeasibleSolution)
-bestOf [] _ =
-  Right Nothing
-bestOf (problem : problems) search = do
-  first <- search problem
-  rest <- bestOf problems search
-  Right $ cheaperSolution first rest
-
 fusionCandidates :: Problem -> [Var]
 fusionCandidates problem =
   S.toList . S.fromList $ [representative | ClusterBeforeUnlessFused from to <- constraints problem, Representative representative <- [resolveVar problem (Fused from to)]]
@@ -289,42 +274,96 @@ chooseByOccurrence problem =
   where
     counts = fusionOccurrenceCounts problem
 
+betterSolution :: FeasibleSolution -> FeasibleSolution -> FeasibleSolution
+betterSolution left right
+  | cost right < cost left = right
+  | otherwise = left
+
+isObjectiveBinary :: Var -> Bool
+isObjectiveBinary InPlace {} = True
+isObjectiveBinary IsManifest {} = True
+isObjectiveBinary _ = False
+
+objectiveLowerBound :: (Problem -> ILP) -> Problem -> Maybe Int
+objectiveLowerBound lowerProblem problem = do
+  (expressionBound, unresolvedCosts) <- expressionLowerBound objective
+  pure $ expressionBound + atMostOnePenalty unresolvedCosts
+  where
+    ILP _ objective _ _ constants = lowerProblem problem
+
+    expressionLowerBound expression = case expression of
+      Constant (Number value) -> Just (value constants, M.empty)
+      left :+ right -> do
+        (leftBound, leftUnresolved) <- expressionLowerBound left
+        (rightBound, rightUnresolved) <- expressionLowerBound right
+        Just (leftBound + rightBound, M.unionWith (+) leftUnresolved rightUnresolved)
+      Number coefficient :* variable ->
+        let coefficientValue = coefficient constants
+         in case knownValue problem variable of
+              Just value -> Just (coefficientValue * value, M.empty)
+              Nothing
+                | isObjectiveBinary variable -> Just (min 0 coefficientValue, M.singleton variable coefficientValue)
+                | otherwise -> Nothing
+
+    atMostOnePenalty unresolvedCosts =
+      maximum (0 : map groupPenalty atMostOneGroups)
+      where
+        atMostOneGroups =
+          [paths | AtMostOneReader paths <- constraints problem]
+            <> [paths | AtMostOneWriter paths <- constraints problem]
+
+        groupPenalty paths =
+          let representatives =
+                S.toList . S.fromList $
+                  [ representative
+                  | path <- paths,
+                    Representative representative <- [resolveVar problem (inPlaceVariable path)]
+                  ]
+              costs = [max 0 $ M.findWithDefault 0 representative unresolvedCosts | representative <- representatives]
+           in sum costs - maximum (0 : costs)
+
 solveOptimal :: (Problem -> ILP) -> S.Set Var -> Problem -> Either CompletionError FeasibleSolution
 solveOptimal lowerProblem originalVariables initialProblem = do
-  result <- searchFusion initialProblem
-  case result of
-    Nothing -> Left NoFeasibleSolution
-    Just feasibleSolution -> Right feasibleSolution
+  initialCandidate <- solveFeasible lowerProblem originalVariables initialProblem
+  searchFusion initialCandidate initialProblem
   where
-    searchFusion :: Problem -> Either CompletionError (Maybe FeasibleSolution)
-    searchFusion problem =
-      case nextDecision problem of
-        Just fusionDecision ->
-          bestOf
-            (branchChildren fusionDecision problem)
-            searchFusion
-        Nothing -> do
-          withClusters <- assignClusterPositions originalVariables problem
-          searchInPlace withClusters
+    searchFusion :: FeasibleSolution -> Problem -> Either CompletionError FeasibleSolution
+    searchFusion incumbent problem
+      | shouldPrune incumbent problem = Right incumbent
+      | otherwise =
+          case nextDecision problem of
+            Just fusionDecision ->
+              searchChildren incumbent (branchChildren fusionDecision problem) searchFusion
+            Nothing -> do
+              withClusters <- assignClusterPositions originalVariables problem
+              searchInPlace incumbent withClusters
 
-    searchInPlace :: Problem -> Either CompletionError (Maybe FeasibleSolution)
-    searchInPlace problem =
-      case inPlaceDecisions originalVariables problem of
-        inPlaceDecision : _ ->
-          bestOf
-            (branchChildren inPlaceDecision problem)
-            searchInPlace
-        [] ->
-          completeLeaf problem
+    searchInPlace :: FeasibleSolution -> Problem -> Either CompletionError FeasibleSolution
+    searchInPlace incumbent problem
+      | shouldPrune incumbent problem = Right incumbent
+      | otherwise =
+          case inPlaceDecisions originalVariables problem of
+            inPlaceDecision : _ ->
+              searchChildren incumbent (branchChildren inPlaceDecision problem) searchInPlace
+            [] ->
+              completeLeaf incumbent problem
 
-    completeLeaf :: Problem -> Either CompletionError (Maybe FeasibleSolution)
-    completeLeaf problem =
+    shouldPrune :: FeasibleSolution -> Problem -> Bool
+    shouldPrune incumbent problem =
+      case objectiveLowerBound lowerProblem problem of
+        Just lowerBound -> lowerBound >= cost incumbent
+        Nothing -> False
+
+    searchChildren :: FeasibleSolution -> [Problem] -> (FeasibleSolution -> Problem -> Either CompletionError FeasibleSolution) -> Either CompletionError FeasibleSolution
+    searchChildren incumbent [] _ = Right incumbent
+    searchChildren incumbent (child : children) search = do
+      improvedIncumbent <- search incumbent child
+      searchChildren improvedIncumbent children search
+
+    completeLeaf :: FeasibleSolution -> Problem -> Either CompletionError FeasibleSolution
+    completeLeaf incumbent problem =
       case completeClusteredSolution lowerProblem originalVariables problem of
-        Right feasibleSolution ->
-          Right $ Just feasibleSolution
-        Left PiMaxExceedsBound ->
-          Right Nothing
-        Left CannotAssignPiMax ->
-          Right Nothing
-        Left completionError ->
-          Left completionError
+        Right candidate -> Right $ betterSolution incumbent candidate
+        Left PiMaxExceedsBound -> Right incumbent
+        Left CannotAssignPiMax -> Right incumbent
+        Left completionError -> Left completionError
