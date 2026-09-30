@@ -32,7 +32,7 @@ import Data.Graph.Inductive.Graph qualified as Graph
 import Data.Graph.Inductive.PatriciaTree (Gr)
 import Data.Graph.Inductive.Query.DFS qualified as DFS
 import Data.Map qualified as M
-import Data.Maybe (mapMaybe)
+import Data.Maybe (catMaybes, mapMaybe)
 import Data.Set qualified as S
 import Lens.Micro ((^.))
 
@@ -231,7 +231,7 @@ runPassesToFixpoint passes problem = do
     progress current = (size $ substitution current, length $ constraints current)
 
 defaultPasses :: [Pass]
-defaultPasses = [noInPlace, orderReachability]
+defaultPasses = [noInPlace, piMaxOrder, orderReachability]
 
 type Pass = Problem -> Either Infeasible Problem
 
@@ -312,6 +312,38 @@ noInPlace problem@Problem {constraints = cs, substitution = s} = do
     forbiddenBuffers = S.fromList [buffer | NoInPlace buffer <- cs]
 
     assignments = [(inPlaceVar path, Const 1) | InPlaceCluster path@((buffer, _), _) <- cs, buffer `S.member` forbiddenBuffers]
+
+-- | A selected in-place path bounds the buffer lifetime by the writer.
+-- Readers without a selected path must therefore precede that writer.
+piMaxOrder :: Pass
+piMaxOrder problem@Problem {constraints = cs, substitution = s} = do
+  impliedOrders <- concat <$> traverse ordersForPath selectedPaths
+  Right $ problem {constraints = impliedOrders <> cs}
+  where
+    graph = buildOrderGraph $ strictOrderEdges problem
+
+    selectedPaths = [path | InPlaceCluster path <- cs, lookupVar (inPlaceVar path) s == Const 0]
+
+    ordersForPath path@((buffer, _), (writer, _)) = do
+      let readers = [(readEdge, writers) | ReadAliveThroughWriters readEdge@(buffer', _) writers <- cs, buffer == buffer']
+      catMaybes <$> traverse (orderForReader path writer) readers
+
+    orderForReader path writer (readEdge@(_, reader), writers)
+      | all (isNotInPlace readEdge) writers =
+          case (lookupVar (Pi reader) s, lookupVar (Pi writer) s) of
+            (Const readerPosition, Const writerPosition)
+              | readerPosition < writerPosition -> Right Nothing
+              | otherwise -> Left $ Violated $ InPlaceCluster path
+            (Alias readerVariable, Alias writerVariable)
+              | readerVariable == writerVariable -> Left $ Violated $ InPlaceCluster path
+              | canReach graph writerVariable readerVariable -> Left $ Violated $ InPlaceCluster path
+              | canReach graph readerVariable writerVariable -> Right Nothing
+              | otherwise -> Right $ Just $ ClusterBefore reader writer
+            _ -> Right Nothing
+      | otherwise = Right Nothing
+
+    isNotInPlace readEdge writerEdge =
+      lookupVar (inPlaceVar (readEdge, writerEdge)) s == Const 1
 
 -- | Convert a substitution to a set of linear constraints.
 -- This could be optimized later by actually removing variables from the constraints instead of just adding equality constraints.
