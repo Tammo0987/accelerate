@@ -231,7 +231,7 @@ runPassesToFixpoint passes problem = do
     progress current = (size $ substitution current, length $ constraints current)
 
 defaultPasses :: [Pass]
-defaultPasses = [noInPlace, piMaxOrder, orderReachability]
+defaultPasses = [noInPlace, piMaxOrder, orderComponents, orderReachability]
 
 type Pass = Problem -> Either Infeasible Problem
 
@@ -242,36 +242,86 @@ data OrderGraph = OrderGraph
     orderVertices :: VertexMap
   }
 
-strictOrderEdges :: Problem -> [(Var, Var, Constraint)]
+strictOrderEdges :: Problem -> [(Var, Var)]
 strictOrderEdges Problem {constraints = cs, substitution = s} =
   mapMaybe edge cs
   where
-    edge c@(ClusterBefore i j) =
+    edge (ClusterBefore i j) =
       case (lookupVar (Pi i) s, lookupVar (Pi j) s) of
-        (Alias from, Alias to) -> Just (from, to, c)
+        (Alias from, Alias to) -> Just (from, to)
         _ -> Nothing
     edge _ = Nothing
 
-buildOrderGraph :: [(Var, Var, Constraint)] -> OrderGraph
+data OrderRelation = OrderRelation
+  { relationFrom :: Var,
+    relationTo :: Var,
+    relationStrict :: Bool
+  }
+
+orderRelations :: Problem -> [OrderRelation]
+orderRelations Problem {constraints = cs, substitution = s} =
+  mapMaybe relation cs
+  where
+    relation constraint = case constraint of
+      ClusterBefore from to -> resolvedRelation True (Pi from) (Pi to)
+      ClusterBeforeUnlessFused from to -> resolvedRelation False (Pi from) (Pi to)
+      _ -> Nothing
+
+    resolvedRelation strict from to =
+      case (lookupVar from s, lookupVar to s) of
+        (Alias fromVar, Alias toVar) -> Just $ OrderRelation fromVar toVar strict
+        _ -> Nothing
+
+buildOrderGraph :: [(Var, Var)] -> OrderGraph
 buildOrderGraph edges =
   OrderGraph
     { orderGraph = Graph.mkGraph labeledNodes labeledEdges,
       orderVertices = vertexMap
     }
   where
-    variables = S.toList $ S.fromList [v | (from, to, _) <- edges, v <- [from, to]]
+    variables = S.toList $ S.fromList [v | (from, to) <- edges, v <- [from, to]]
 
     vertexMap = M.fromList $ zip variables [0 ..]
 
     labeledNodes = [(vertex, variable) | (variable, vertex) <- M.toList vertexMap]
 
-    labeledEdges = [(vertexMap M.! from, vertexMap M.! to, ()) | (from, to, _) <- edges]
+    labeledEdges = [(vertexMap M.! from, vertexMap M.! to, ()) | (from, to) <- edges]
 
 canReach :: OrderGraph -> Var -> Var -> Bool
 canReach (OrderGraph g vMap) from to =
   case (M.lookup from vMap, M.lookup to vMap) of
     (Just fromVertex, Just toVertex) -> toVertex `elem` DFS.reachable fromVertex g
     _ -> False
+
+orderComponents :: Pass
+orderComponents problem@Problem {substitution = s} = do
+  assignments <- concat <$> traverse inspectComponent components
+  updatedSubstitution <- assignAll s assignments
+  Right $ problem {substitution = updatedSubstitution}
+  where
+    relations = orderRelations problem
+
+    graph = buildOrderGraph [(relationFrom r, relationTo r) | r <- relations]
+
+    components =
+      [ mapMaybe (Graph.lab $ orderGraph graph) component
+      | component <- DFS.scc $ orderGraph graph,
+        length component > 1
+      ]
+
+    inspectComponent component
+      | any (strictInside componentSet) relations = Left $ CyclicClusterOrder component
+      | otherwise = Right $ aliasComponent component
+      where
+        componentSet = S.fromList component
+
+    strictInside component relation =
+      relationStrict relation
+        && relationFrom relation `S.member` component
+        && relationTo relation `S.member` component
+
+    aliasComponent [] = []
+    aliasComponent (representative : variables) = [(v, Alias representative) | v <- variables]
 
 orderReachability :: Pass
 orderReachability p@Problem {constraints = cs, substitution = s} = do
