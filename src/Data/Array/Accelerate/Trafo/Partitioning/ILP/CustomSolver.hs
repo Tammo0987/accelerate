@@ -9,7 +9,7 @@ where
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Branching (greedyFusionLeaf)
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.ConstraintLanguage
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Labels (InplacePath)
-import Data.Array.Accelerate.Trafo.Partitioning.ILP.LinearConstraint (Constants (..), Expression (..), Number (..))
+import Data.Array.Accelerate.Trafo.Partitioning.ILP.LinearConstraint (Bounds (..), Constants (..), Expression (..), Number (..))
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Presolve (Problem (..), ResolvedValue (..), assume, assumeAll, knownValue, resolveVar)
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Solver (ILP (..), Solution)
 import Data.Array.Accelerate.Trafo.Partitioning.ILP.Var (Var (..))
@@ -311,6 +311,7 @@ betterSolution left right
   | otherwise = left
 
 isObjectiveBinary :: Var -> Bool
+isObjectiveBinary Fused {} = True
 isObjectiveBinary InPlace {} = True
 isObjectiveBinary IsManifest {} = True
 isObjectiveBinary _ = False
@@ -353,10 +354,23 @@ objectiveLowerBound lowerProblem problem = do
               costs = [max 0 $ M.findWithDefault 0 representative unresolvedCosts | representative <- representatives]
            in sum costs - maximum (0 : costs)
 
+fixedBoundAssignments :: Bounds -> [(Var, Int)]
+fixedBoundAssignments bounds =
+  case bounds of
+    LowerUpper lower variable upper
+      | lower == upper -> [(variable, lower)]
+    left :<> right -> fixedBoundAssignments left <> fixedBoundAssignments right
+    _ -> []
+
 solveOptimal :: (Problem -> ILP) -> S.Set Var -> Problem -> Either CompletionError FeasibleSolution
 solveOptimal lowerProblem originalVariables initialProblem = do
-  initialCandidate <- solveFeasible lowerProblem originalVariables initialProblem
-  search initialCandidate initialProblem
+  let ILP _ _ _ bounds _ = lowerProblem initialProblem
+  boundedProblem <-
+    case assumeAll (fixedBoundAssignments bounds) initialProblem of
+      Left _ -> Left NoFeasibleSolution
+      Right problem -> Right problem
+  initialCandidate <- solveFeasible lowerProblem originalVariables boundedProblem
+  search initialCandidate boundedProblem
   where
     search :: FeasibleSolution -> Problem -> Either CompletionError FeasibleSolution
     search incumbent problem
