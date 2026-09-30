@@ -231,7 +231,7 @@ runPassesToFixpoint passes problem = do
     progress current = (size $ substitution current, length $ constraints current)
 
 defaultPasses :: [Pass]
-defaultPasses = [orderReachability]
+defaultPasses = [noInPlace, orderReachability]
 
 type Pass = Problem -> Either Infeasible Problem
 
@@ -302,6 +302,16 @@ checkAcyclic OrderGraph {orderGraph = g} =
   case filter ((> 1) . length) (DFS.scc g) of
     [] -> Right ()
     component : _ -> Left $ CyclicClusterOrder $ mapMaybe (Graph.lab g) component
+
+-- | A buffer marked 'NoInPlace' can't be the input of a selected reuse path.
+noInPlace :: Pass
+noInPlace problem@Problem {constraints = cs, substitution = s} = do
+  updatedSubstitution <- assignAll s assignments
+  Right $ problem {substitution = updatedSubstitution}
+  where
+    forbiddenBuffers = S.fromList [buffer | NoInPlace buffer <- cs]
+
+    assignments = [(inPlaceVar path, Const 1) | InPlaceCluster path@((buffer, _), _) <- cs, buffer `S.member` forbiddenBuffers]
 
 -- | Convert a substitution to a set of linear constraints.
 -- This could be optimized later by actually removing variables from the constraints instead of just adding equality constraints.
