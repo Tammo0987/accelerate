@@ -240,9 +240,9 @@ fusionCandidates problem =
 
 nextDecision :: S.Set Var -> Problem -> Maybe Var
 nextDecision originalVariables problem =
-  case inPlaceDecisions originalVariables problem of
-    inPlaceDecision : _ -> Just inPlaceDecision
-    [] -> chooseByOccurrence problem
+  case chooseInPlaceByOccurrence originalVariables problem of
+    Just inPlaceDecision -> Just inPlaceDecision
+    Nothing -> choosFusionByOccurrence problem
 
 branchChildren :: Var -> Problem -> [Problem]
 branchChildren variable problem =
@@ -261,21 +261,49 @@ fusionVariables constraint = case constraint of
   Unfused from to -> S.singleton $ Fused from to
   _ -> S.empty
 
-fusionOccurrenceCounts :: Problem -> M.Map Var Int
-fusionOccurrenceCounts problem =
-  M.fromListWith (+) [(representative, 1) | constraint <- constraints problem, variable <- S.toList $ fusionVariables constraint, Representative representative <- [resolveVar problem variable]]
+inPlaceVariables :: Constraint -> S.Set Var
+inPlaceVariables constraint = case constraint of
+  OnManifestIfInPlace path -> S.singleton $ inPlaceVariable path
+  InPlaceDirection path -> S.singleton $ inPlaceVariable path
+  InPlaceCluster path -> S.singleton $ inPlaceVariable path
+  AcrossClusterSame path -> S.singleton $ inPlaceVariable path
+  AtMostOneReader paths -> S.fromList $ map inPlaceVariable paths
+  AtMostOneWriter paths -> S.fromList $ map inPlaceVariable paths
+  ReadAliveThroughWriters readEdge writers -> S.fromList $ map (inPlaceVariable . (readEdge,)) writers
+  _ -> S.empty
 
-chooseByOccurrence :: Problem -> Maybe Var
-chooseByOccurrence problem =
-  case fusionCandidates problem of
+occurrenceCounts :: (Constraint -> S.Set Var) -> Problem -> M.Map Var Int
+occurrenceCounts variableExtractor problem =
+  M.fromListWith
+    (+)
+    [ (representative, 1)
+    | constraint <- constraints problem,
+      variable <- S.toList $ variableExtractor constraint,
+      Representative representative <- [resolveVar problem variable]
+    ]
+
+fusionOccurrenceCounts :: Problem -> M.Map Var Int
+fusionOccurrenceCounts = occurrenceCounts fusionVariables
+
+inPlaceOccurrenceCounts :: Problem -> M.Map Var Int
+inPlaceOccurrenceCounts = occurrenceCounts inPlaceVariables
+
+chooseMostFrequent :: M.Map Var Int -> [Var] -> Maybe Var
+chooseMostFrequent counts candidates =
+  case candidates of
     [] -> Nothing
-    candidates ->
+    _ ->
       Just $
         minimumBy
           (comparing $ \candidate -> (Down $ M.findWithDefault 0 candidate counts, candidate))
           candidates
-  where
-    counts = fusionOccurrenceCounts problem
+
+choosFusionByOccurrence :: Problem -> Maybe Var
+choosFusionByOccurrence problem = chooseMostFrequent (fusionOccurrenceCounts problem) (fusionCandidates problem)
+
+chooseInPlaceByOccurrence :: S.Set Var -> Problem -> Maybe Var
+chooseInPlaceByOccurrence originalVariables problem =
+  chooseMostFrequent (inPlaceOccurrenceCounts problem) (inPlaceDecisions originalVariables problem)
 
 betterSolution :: FeasibleSolution -> FeasibleSolution -> FeasibleSolution
 betterSolution left right
@@ -334,7 +362,7 @@ solveOptimal lowerProblem originalVariables initialProblem = do
     search incumbent problem
       | shouldPrune incumbent problem = Right incumbent
       | otherwise =
-        case nextDecision originalVariables problem of
+          case nextDecision originalVariables problem of
             Just decision -> searchChildren incumbent (branchChildren decision problem)
             Nothing -> completeLeaf incumbent problem
 
