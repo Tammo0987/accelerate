@@ -238,8 +238,11 @@ fusionCandidates :: Problem -> [Var]
 fusionCandidates problem =
   S.toList . S.fromList $ [representative | ClusterBeforeUnlessFused from to <- constraints problem, Representative representative <- [resolveVar problem (Fused from to)]]
 
-nextDecision :: Problem -> Maybe Var
-nextDecision = chooseByOccurrence
+nextDecision :: S.Set Var -> Problem -> Maybe Var
+nextDecision originalVariables problem =
+  case inPlaceDecisions originalVariables problem of
+    inPlaceDecision : _ -> Just inPlaceDecision
+    [] -> chooseByOccurrence problem
 
 branchChildren :: Var -> Problem -> [Problem]
 branchChildren variable problem =
@@ -325,28 +328,15 @@ objectiveLowerBound lowerProblem problem = do
 solveOptimal :: (Problem -> ILP) -> S.Set Var -> Problem -> Either CompletionError FeasibleSolution
 solveOptimal lowerProblem originalVariables initialProblem = do
   initialCandidate <- solveFeasible lowerProblem originalVariables initialProblem
-  searchFusion initialCandidate initialProblem
+  search initialCandidate initialProblem
   where
-    searchFusion :: FeasibleSolution -> Problem -> Either CompletionError FeasibleSolution
-    searchFusion incumbent problem
+    search :: FeasibleSolution -> Problem -> Either CompletionError FeasibleSolution
+    search incumbent problem
       | shouldPrune incumbent problem = Right incumbent
       | otherwise =
-          case nextDecision problem of
-            Just fusionDecision ->
-              searchChildren incumbent (branchChildren fusionDecision problem) searchFusion
-            Nothing -> do
-              withClusters <- assignClusterPositions originalVariables problem
-              searchInPlace incumbent withClusters
-
-    searchInPlace :: FeasibleSolution -> Problem -> Either CompletionError FeasibleSolution
-    searchInPlace incumbent problem
-      | shouldPrune incumbent problem = Right incumbent
-      | otherwise =
-          case inPlaceDecisions originalVariables problem of
-            inPlaceDecision : _ ->
-              searchChildren incumbent (branchChildren inPlaceDecision problem) searchInPlace
-            [] ->
-              completeLeaf incumbent problem
+        case nextDecision originalVariables problem of
+            Just decision -> searchChildren incumbent (branchChildren decision problem)
+            Nothing -> completeLeaf incumbent problem
 
     shouldPrune :: FeasibleSolution -> Problem -> Bool
     shouldPrune incumbent problem =
@@ -354,16 +344,19 @@ solveOptimal lowerProblem originalVariables initialProblem = do
         Just lowerBound -> lowerBound >= cost incumbent
         Nothing -> False
 
-    searchChildren :: FeasibleSolution -> [Problem] -> (FeasibleSolution -> Problem -> Either CompletionError FeasibleSolution) -> Either CompletionError FeasibleSolution
-    searchChildren incumbent [] _ = Right incumbent
-    searchChildren incumbent (child : children) search = do
+    searchChildren :: FeasibleSolution -> [Problem] -> Either CompletionError FeasibleSolution
+    searchChildren incumbent [] = Right incumbent
+    searchChildren incumbent (child : children) = do
       improvedIncumbent <- search incumbent child
-      searchChildren improvedIncumbent children search
+      searchChildren improvedIncumbent children
 
     completeLeaf :: FeasibleSolution -> Problem -> Either CompletionError FeasibleSolution
     completeLeaf incumbent problem =
-      case completeClusteredSolution lowerProblem originalVariables problem of
+      case completeSolution lowerProblem originalVariables problem of
         Right candidate -> Right $ betterSolution incumbent candidate
         Left PiMaxExceedsBound -> Right incumbent
         Left CannotAssignPiMax -> Right incumbent
+        Left CyclicClusterPositions -> Right incumbent
+        Left InvalidFixedClusterOrder -> Right incumbent
+        Left CannotAssignClusterPositions -> Right incumbent
         Left completionError -> Left completionError
