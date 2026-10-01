@@ -143,6 +143,7 @@ instantiate s c = case c of
   AtMostOneReader ps -> atMostOne ps
   AtMostOneWriter ps -> atMostOne ps
   NegativeDirIfManifest (w, b) -> case (resolve (IsManifest b), resolve (WriteDir w b)) of
+    (Const 1, _) -> drop' []
     (_, Const d) | d < 0 -> drop' []
     (_, Const _) -> Right (Just c, [(IsManifest b, Const 1)])
     _ -> keep
